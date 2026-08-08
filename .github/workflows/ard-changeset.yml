@@ -84,10 +84,6 @@ jobs:
         env:
           TABLE_IDS: ${{ inputs.table_ids }}
           PRODUCT_IDS: ${{ inputs.product_ids }}
-          PRODUCT_ID: ${{ inputs.product_id }}
-          VERSION: ${{ inputs.version }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          HEAD_SHA: ${{ inputs.head_sha }}
         run: |
           if [[ "$MODE" == create ]]; then
             IFS=',' read -ra tables <<< "$TABLE_IDS"
@@ -97,8 +93,18 @@ jobs:
             for product_id in "${products[@]}"; do args+=(--product-id "$product_id"); done
             "${args[@]}"
           else
-            uv run ard changeset ready "$CHANGESET_ID" "$PRODUCT_ID" \
-              --version "$VERSION" --pr-number "$PR_NUMBER" --head-sha "$HEAD_SHA" \
+            ready_product_id="${{ inputs.product_id }}"
+            ready_version="${{ inputs.version }}"
+            ready_pr_number="${{ inputs.pr_number }}"
+            ready_head_sha="${{ inputs.head_sha }}"
+            if [[ -z "$ready_product_id" || -z "$ready_version" || \
+                  -z "$ready_pr_number" || -z "$ready_head_sha" ]]; then
+              echo "CHANGESET_READY_INPUTS_INCOMPLETE" >&2
+              exit 2
+            fi
+            uv run ard changeset ready "$CHANGESET_ID" "$ready_product_id" \
+              --version "$ready_version" --pr-number "$ready_pr_number" \
+              --head-sha "$ready_head_sha" \
               --registry registry
           fi
           cp "registry/changesets/${CHANGESET_ID}.json" /tmp/ard-changeset.json
@@ -176,7 +182,7 @@ jobs:
           tables="$(jq -r '.table_ids[] | "- `" + . + "`"' /tmp/ard-changeset.json)"
           products="$(jq -r '.required_product_ids[] | "- `" + . + "`"' /tmp/ard-changeset.json)"
           gh pr comment "$INITIATING_PR" --body "$(printf \
-            'Changeset `%s` created in PR #%s.\n\nTables:\n%s\n\nRequired products:\n%s\n' \
+            'Changeset %s created in PR #%s.\n\nTables:\n%s\n\nRequired products:\n%s\n' \
             "$CHANGESET_ID" "$COORDINATION_PR" "$tables" "$products")"
       - name: Reconcile ard changeset statuses
         run: |
