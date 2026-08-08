@@ -60,6 +60,8 @@ Repository 또는 `ard-llm` Environment Variables:
 
 shared table 변경이 아닌 PR에도 `ard/changeset=success`가 게시됩니다. shared 변경은 모든 필수 제품이 같은 changeset에 준비되기 전까지 pending입니다.
 
+코드·workflow·문서만 바꾸는 PR은 `ARD repository change gate`가 전체 테스트, Ruff와 actionlint를 실행한 뒤 같은 두 status를 게시합니다. `products/` 또는 `registry/` 변경을 코드 변경과 한 PR에 섞으면 `MIXED_CODE_AND_ARD_DATA_NOT_ALLOWED`로 차단합니다.
+
 ## 5. 승인 환경
 
 `Settings → Environments`에서 `production-linkage` 환경도 생성합니다.

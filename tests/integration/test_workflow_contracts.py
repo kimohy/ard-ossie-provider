@@ -102,3 +102,20 @@ def test_release_uses_numeric_id_tags_and_protected_linkage_dispatch() -> None:
     assert "CHANGESET_HEAD_SHA_MISMATCH" in text
     assert "CHANGESET_MERGE_NOT_REACHABLE" in text
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-release.yml")
+
+
+def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
+    workflow = load_workflow("ard-repository-change.yml")
+    text = (WORKFLOWS / "ard-repository-change.yml").read_text(encoding="utf-8")
+
+    assert workflow["on"]["pull_request"]["types"] == [
+        "opened",
+        "synchronize",
+        "reopened",
+    ]
+    assert "MIXED_CODE_AND_ARD_DATA_NOT_ALLOWED" in text
+    assert "ard/quality-gate" in text
+    assert "ard/changeset" in text
+    assert "uv run pytest -q" in text
+    assert "actionlint@v1.7.7" in text
+    assert_actions_are_sha_pinned(WORKFLOWS / "ard-repository-change.yml")
