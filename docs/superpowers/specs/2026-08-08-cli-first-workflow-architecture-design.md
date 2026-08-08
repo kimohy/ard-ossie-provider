@@ -159,6 +159,7 @@ ard workflow issue-authorize
 ard workflow issue-intake
 ard workflow detect-product
 ard workflow source-check
+ard workflow ensure-product-pr
 ard workflow process
 ard workflow changeset
 ard workflow repository-check
@@ -224,6 +225,7 @@ unredacted secret response.
 | Parse Issue form, validate/download attachments, create branch and Draft PR | `ard workflow issue-intake` |
 | Detect exactly one changed product | `ard workflow detect-product` |
 | Validate untrusted source without secrets or write credentials | `ard workflow source-check` |
+| Create or reuse the Draft PR for a validated direct branch | `ard workflow ensure-product-pr` |
 | Parse, model, validate, promote, commit, and publish statuses | `ard workflow process` |
 | Create/update shared-table coordination and tracking PRs | `ard workflow changeset` |
 | Reject mixed code/ARD changes and run repository verification | `ard workflow repository-check` |
@@ -310,9 +312,16 @@ Lifecycle idempotency keys are:
 - GitHub comment: command-owned marker plus Issue/PR number; and
 - status: repository, commit SHA, and status context.
 
-The CLI treats an existing equivalent branch, commit, PR, comment, status, tag,
-Release asset, or dispatch record as a successful no-op. An object with the same
+The CLI treats an existing equivalent branch, commit, PR, comment, status, tag, or
+Release asset as a successful no-op. An object with the same
 stable identity but different immutable content is a conflict, not an overwrite.
+
+GitHub repository dispatch is at-least-once: GitHub does not expose a durable
+queryable dispatch record. The payload's product ID, numeric version, tag, and
+merged commit form the downstream idempotency key. The sender publishes a
+best-effort success status after dispatch; if dispatch succeeds but status writing
+fails, a retry may deliver the same payload again and the downstream consumer must
+deduplicate that key.
 
 GitHub Actions concurrency groups remain in YAML because scheduling is a platform
 concern. The CLI still uses optimistic checks against branch tips, Registry base
