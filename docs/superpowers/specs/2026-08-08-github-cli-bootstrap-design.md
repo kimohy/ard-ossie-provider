@@ -2,6 +2,11 @@
 
 ## 1. Status and scope
 
+This is a subordinate specification of the
+[CLI-first workflow architecture](./2026-08-08-cli-first-workflow-architecture-design.md).
+Its commands live under the shared `ard github` command group and use the common
+ports, adapters, result envelope, redaction, and exit-code contracts defined there.
+
 This design adds a cross-platform, maintainer-operated bootstrap command for
 `kimohy/ard-ossie-provider`. It configures the GitHub repository without requiring
 the web settings UI and without introducing a long-lived bootstrap token into
