@@ -1,32 +1,119 @@
 # ARD Ossie Provider
 
-Git-managed compiler for converting AI Ready Data documents into structured artifacts and Apache Ossie semantic models.
+AI Ready Data(ARD) 문서를 GitHub에서 공개적으로 관리하고 Apache Ossie 0.1.1 모델로 변환하는 오픈소스 컴파일러입니다.
 
-## Inputs
-
-- Data product information: HTML
-- Data semantic documents: DOCX or PDF
-- Data dictionary documents: XLSX
-
-## Generated artifacts
+입력은 데이터 제품 HTML, 시멘틱 DOCX/PDF, 데이터 딕셔너리 XLSX의 세 종류입니다. Docling과 셀 보존 Excel 어댑터로 파싱한 뒤 다음 결과를 결정적으로 생성합니다.
 
 - `data-product.md`
 - `data-semantic.md`
 - `data-dictionary.json`
 - `ossie-model.json`
+- `source-manifest.json`
+- 중복·버전·영향도·완전성·LLM 제안 감사 보고서
 
-## Architecture
+## 핵심 원칙
 
-The project uses Docling-centered parsing, format-specific adapters, a canonical intermediate representation, stable product/table identifiers, many-to-many product–table mappings, and a deterministic Ossie 0.1.1 compiler.
+- 제품, 테이블, 컬럼은 접두어가 붙은 UUIDv7 불변 ID를 사용합니다.
+- 제품과 테이블 버전은 서로 독립적인 단순 숫자 `v1`부터 `v999`까지입니다.
+- 현재 상태만 파일로 보관하고 과거 상태는 Git commit, tag, GitHub Release로 탐색합니다.
+- LLM은 근거가 있는 시멘틱 설명·동의어·ANSI SQL metric만 제안할 수 있습니다. 물리 이름, 타입, PK/FK, 불변 ID는 결정적 코드가 관리하며 FK 관계는 Excel에서 결정적으로 생성합니다.
+- Issue, 첨부파일, 생성물과 보고서는 모두 public 저장소에 공개됩니다.
+- 승인 전 Issue와 fork PR에는 LLM Secret이나 쓰기 권한을 전달하지 않습니다.
 
-LLM-assisted extraction is accessed through a configurable OpenAI-compatible API. LLM output is schema-constrained and validated locally; final IDs and Ossie documents are produced by deterministic code.
+## 저장 구조
 
-See the [architecture design](docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md) for the approved system design.
+```text
+products/<product-key>/
+  product.yaml
+  intake-manifest.json
+  sources/
+    product-info/product.html
+    semantic/semantic.docx|pdf
+    dictionary/dictionary.xlsx
+  generated/
+    data-product.md
+    data-semantic.md
+    data-dictionary.json
+    ossie-model.json
+    source-manifest.json
+  quality/
+    quality-report.json
+    duplicate-report.json
+    version-report.json
+    impact-report.json
+    llm-suggestions.json
 
-## Project status
+registry/
+  products/<product-id>.json
+  tables/<table-id>.json
+  mappings/<product-id>.json
+  changesets/<changeset-id>.json
+  indexes/
+```
 
-Architecture approved. Implementation has not started.
+제품 폴더에 `v1`, `v2` 사본을 중복 저장하지 않습니다. 태그는 `product/<product-id>/vN`, `table/<table-id>/vN` 형식입니다.
 
-## License
+## 처리 경로
 
-Apache License 2.0.
+### GitHub Issue
+
+1. `AI Ready Data submission` Issue Form에 한 제품과 세 문서를 첨부합니다.
+2. write 이상 권한의 관리자가 `ard:approved` 라벨을 적용합니다.
+3. 첨부 호스트·리다이렉트·크기·MIME·확장자·파일 구조를 검증합니다.
+4. `ard/issue-<number>-<product-key>` 브랜치와 Draft PR을 생성합니다.
+5. 같은 PR에 Docling/LLM 변환 결과, 레지스트리 변경, 품질 보고서를 커밋합니다.
+6. `ard/quality-gate`와 `ard/changeset` 상태를 통과해야 main에 병합할 수 있습니다.
+
+### 직접 브랜치 커밋
+
+`products/*/sources/**`를 신뢰된 non-main 브랜치에 커밋하면 동일한 처리기가 실행됩니다. 한 변경에는 정확히 한 제품만 허용됩니다. Fork PR은 Secret·writeback 없이 로컬 소스/스키마 검사만 실행합니다.
+
+직접 커밋의 `product.yaml`에도 `product_id`가 필수입니다. 새 ID는 Issue 수집 경로가 생성하며, 이미 등록된 ID를 갱신하려면 `operation: update`, 현재 `base_version`, 정확히 `+1`인 새 버전을 함께 제출합니다.
+
+DOCX/PDF/XLSX는 Git LFS 객체로 관리합니다. 브랜치 처리 checkout과 Issue 수집 push도 LFS 객체를 명시적으로 내려받고 올립니다.
+
+## 로컬 실행
+
+Python 3.12와 `uv`가 필요합니다.
+
+```bash
+uv sync --frozen
+uv run ard process products/sales-order --registry registry
+uv run ard impact table <table-id> --registry registry
+uv run ard history sales-order
+uv run ard diff sales-order@v1..v2
+```
+
+OpenAI-compatible API를 사용할 때만 다음 환경 변수를 설정합니다.
+
+```bash
+read -s ARD_LLM_API_KEY
+export ARD_LLM_API_KEY
+export ARD_LLM_BASE_URL='https://api.openai.com/v1'
+export ARD_LLM_MODEL='your-model'
+export ARD_LLM_API_STYLE='chat_completions'
+```
+
+API 키는 파일에 저장하거나 로그로 출력하지 마세요.
+
+## 중복과 버전 규칙
+
+제품 생성 시 기존 ID, product key, alias, 동일 canonical hash는 차단됩니다. 의미적으로 유사한 후보는 자동 병합하지 않고 경고만 생성합니다. 업데이트 시 제품 ID와 product key는 바꿀 수 없고 retired ID는 다시 활성화할 수 없습니다.
+
+테이블은 정규화한 `(source system, catalog, schema, table)` locator가 같으면 전역 ID를 재사용합니다. 같은 locator에 다른 ID를 지정하면 차단하고, locator가 다른데 스키마만 같으면 clone 가능성 경고만 생성합니다. 컬럼 ID는 같은 테이블 안에서 이름/alias로 재사용하며 제거된 컬럼은 retired 처리합니다.
+
+새 엔터티는 반드시 `v1`입니다. 내용이 바뀌면 현재 버전에서 정확히 `+1`, 내용이 같으면 같은 버전을 유지해야 합니다. stale base, 건너뛴 버전, 충돌, `v999` 이후 변경은 차단합니다.
+
+두 제품 이상이 참조하는 테이블을 변경하려면 changeset이 필요합니다. 중앙 `ard/changeset-<id>` 브랜치가 제품별 준비 상태를 직렬화하며 모든 필수 제품 PR이 준비되기 전까지 `ard/changeset`은 pending입니다.
+
+Metric과 relationship도 각각 `met_*`, `rel_*` 불변 ID를 Registry의 제품 레코드에 보존합니다. Metric은 읽기 전용 ANSI SQL만 허용하고 알려지지 않은 `table.column` 참조와 변경 SQL을 차단합니다. relationship은 Excel의 `fk_table`/`fk_column`을 현재 제품 테이블에 해석하지 못하면 hard error입니다. 제품 폐기(retire)는 tombstone 전환 파이프라인이 구현되기 전까지 Issue와 `product.yaml`에서 허용하지 않습니다.
+
+## 문서
+
+- [GitHub Actions 설정](docs/github-actions-setup.md)
+- [상세 아키텍처](docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md)
+- [구현 계획](docs/superpowers/plans/2026-08-08-ard-github-pipeline.md)
+
+## 라이선스
+
+Apache License 2.0

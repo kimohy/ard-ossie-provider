@@ -1,0 +1,11 @@
+[
+  {
+    "link_id": "lnk_0198f6ce-c3d5-7fc8-9401-22fa7b330ec2",
+    "product_id": "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631",
+    "required": true,
+    "semantic_dataset": "orders",
+    "table_id": "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c",
+    "table_version": 1,
+    "usage": "SOURCE"
+  }
+]

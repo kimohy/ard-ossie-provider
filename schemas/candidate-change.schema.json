@@ -1,0 +1,452 @@
+{
+  "$defs": {
+    "ColumnRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "column_id": {
+          "pattern": "^col_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Column Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/EntityStatus",
+          "default": "active"
+        }
+      },
+      "required": [
+        "column_id",
+        "name"
+      ],
+      "title": "ColumnRecord",
+      "type": "object"
+    },
+    "EntityStatus": {
+      "enum": [
+        "active",
+        "retired"
+      ],
+      "title": "EntityStatus",
+      "type": "string"
+    },
+    "MetricRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "metric_id": {
+          "pattern": "^met_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Metric Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/EntityStatus",
+          "default": "active"
+        }
+      },
+      "required": [
+        "metric_id",
+        "name"
+      ],
+      "title": "MetricRecord",
+      "type": "object"
+    },
+    "Operation": {
+      "enum": [
+        "create",
+        "update",
+        "retire"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "ProductRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "canonical_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Hash"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/MetricRecord"
+          },
+          "title": "Metrics",
+          "type": "array"
+        },
+        "product_id": {
+          "pattern": "^prd_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Product Id",
+          "type": "string"
+        },
+        "product_key": {
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "title": "Product Key",
+          "type": "string"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/RelationshipRecord"
+          },
+          "title": "Relationships",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/EntityStatus",
+          "default": "active"
+        },
+        "version": {
+          "maximum": 999,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "product_id",
+        "product_key",
+        "version"
+      ],
+      "title": "ProductRecord",
+      "type": "object"
+    },
+    "ProductTableRef": {
+      "additionalProperties": false,
+      "properties": {
+        "link_id": {
+          "pattern": "^lnk_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Link Id",
+          "type": "string"
+        },
+        "product_id": {
+          "pattern": "^prd_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Product Id",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "semantic_dataset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Dataset"
+        },
+        "table_id": {
+          "pattern": "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Table Id",
+          "type": "string"
+        },
+        "table_version": {
+          "maximum": 999,
+          "minimum": 1,
+          "title": "Table Version",
+          "type": "integer"
+        },
+        "usage": {
+          "enum": [
+            "SOURCE",
+            "OUTPUT",
+            "REFERENCE"
+          ],
+          "title": "Usage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "link_id",
+        "product_id",
+        "table_id",
+        "table_version",
+        "usage"
+      ],
+      "title": "ProductTableRef",
+      "type": "object"
+    },
+    "RelationshipRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "relationship_id": {
+          "pattern": "^rel_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Relationship Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/EntityStatus",
+          "default": "active"
+        }
+      },
+      "required": [
+        "relationship_id",
+        "name"
+      ],
+      "title": "RelationshipRecord",
+      "type": "object"
+    },
+    "TableLocator": {
+      "additionalProperties": false,
+      "properties": {
+        "catalog": {
+          "title": "Catalog",
+          "type": "string"
+        },
+        "schema_name": {
+          "title": "Schema Name",
+          "type": "string"
+        },
+        "source_system_id": {
+          "title": "Source System Id",
+          "type": "string"
+        },
+        "table_name": {
+          "title": "Table Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_system_id",
+        "catalog",
+        "schema_name",
+        "table_name"
+      ],
+      "title": "TableLocator",
+      "type": "object"
+    },
+    "TableRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "canonical_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Hash"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/ColumnRecord"
+          },
+          "title": "Columns",
+          "type": "array"
+        },
+        "locator": {
+          "$ref": "#/$defs/TableLocator"
+        },
+        "schema_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Hash"
+        },
+        "status": {
+          "$ref": "#/$defs/EntityStatus",
+          "default": "active"
+        },
+        "table_id": {
+          "pattern": "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Table Id",
+          "type": "string"
+        },
+        "version": {
+          "maximum": 999,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "table_id",
+        "locator",
+        "version"
+      ],
+      "title": "TableRecord",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "base_product_version": {
+      "anyOf": [
+        {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Base Product Version"
+    },
+    "base_table_versions": {
+      "patternProperties": {
+        "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$": {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "Base Table Versions",
+      "type": "object"
+    },
+    "changeset_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Changeset Id"
+    },
+    "mappings": {
+      "items": {
+        "$ref": "#/$defs/ProductTableRef"
+      },
+      "title": "Mappings",
+      "type": "array"
+    },
+    "operation": {
+      "$ref": "#/$defs/Operation"
+    },
+    "product": {
+      "$ref": "#/$defs/ProductRecord"
+    },
+    "proposed_product_version": {
+      "anyOf": [
+        {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposed Product Version"
+    },
+    "proposed_table_versions": {
+      "patternProperties": {
+        "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$": {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "Proposed Table Versions",
+      "type": "object"
+    },
+    "source_hashes": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Source Hashes",
+      "type": "object"
+    },
+    "tables": {
+      "items": {
+        "$ref": "#/$defs/TableRecord"
+      },
+      "title": "Tables",
+      "type": "array"
+    }
+  },
+  "required": [
+    "operation",
+    "product"
+  ],
+  "title": "CandidateChange",
+  "type": "object"
+}

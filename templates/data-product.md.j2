@@ -1,0 +1,23 @@
+# {{ product.display_name }}
+
+- Product ID: `{{ product.product_id }}`
+- Product key: `{{ product.product_key }}`
+- Version: `v{{ product.version }}`
+
+## Description
+
+{{ product.description or "" }}
+{% if product.product_document_markdown %}
+
+## Parsed source
+
+{{ product.product_document_markdown }}
+{% endif %}
+
+## Datasets
+
+| Dataset | Table ID | Table version | Source |
+|---|---|---:|---|
+{% for table in tables -%}
+| {{ table.dataset_name }} | `{{ table.table_id }}` | v{{ table.table_version }} | `{{ table.source }}` |
+{% endfor %}

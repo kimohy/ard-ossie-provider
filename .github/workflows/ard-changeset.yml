@@ -1,0 +1,195 @@
+name: ARD shared-table changeset coordinator
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Create a changeset or mark one product ready
+        required: true
+        type: choice
+        options: [create, ready]
+      changeset_id:
+        required: true
+        type: string
+      table_ids:
+        description: Comma-separated table IDs for create mode
+        required: false
+        type: string
+      product_ids:
+        description: Comma-separated product IDs for create mode
+        required: false
+        type: string
+      product_id:
+        required: false
+        type: string
+      version:
+        required: false
+        type: string
+      pr_number:
+        required: false
+        type: string
+      head_sha:
+        required: false
+        type: string
+      initiating_pr:
+        required: false
+        type: string
+
+concurrency:
+  group: ard-registry-write
+  cancel-in-progress: false
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MODE: ${{ inputs.mode }}
+      CHANGESET_ID: ${{ inputs.changeset_id }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Install locked project
+        run: |
+          python -m pip install uv==0.11.33
+          uv sync --frozen
+      - name: Checkout serialized coordination branch
+        id: branch
+        run: |
+          branch="ard/changeset-${CHANGESET_ID}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            git fetch origin "$branch:refs/remotes/origin/$branch"
+            git switch --create "$branch" "origin/$branch"
+            git rebase "origin/${DEFAULT_BRANCH}"
+          else
+            if [[ "$MODE" == ready ]]; then
+              echo "CHANGESET_BRANCH_NOT_FOUND: $branch" >&2
+              exit 2
+            fi
+            git switch --create "$branch" "origin/${DEFAULT_BRANCH}"
+          fi
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+      - name: Create or update changeset state
+        env:
+          TABLE_IDS: ${{ inputs.table_ids }}
+          PRODUCT_IDS: ${{ inputs.product_ids }}
+          PRODUCT_ID: ${{ inputs.product_id }}
+          VERSION: ${{ inputs.version }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          if [[ "$MODE" == create ]]; then
+            IFS=',' read -ra tables <<< "$TABLE_IDS"
+            IFS=',' read -ra products <<< "$PRODUCT_IDS"
+            args=(uv run ard changeset create --registry registry --changeset-id "$CHANGESET_ID")
+            for table_id in "${tables[@]}"; do args+=(--table-id "$table_id"); done
+            for product_id in "${products[@]}"; do args+=(--product-id "$product_id"); done
+            "${args[@]}"
+          else
+            uv run ard changeset ready "$CHANGESET_ID" "$PRODUCT_ID" \
+              --version "$VERSION" --pr-number "$PR_NUMBER" --head-sha "$HEAD_SHA" \
+              --registry registry
+          fi
+          cp "registry/changesets/${CHANGESET_ID}.json" /tmp/ard-changeset.json
+      - name: Commit central changeset state
+        env:
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- "registry/changesets/${CHANGESET_ID}.json"
+          if ! git diff --cached --quiet; then
+            git commit -m "data(changeset): update ${CHANGESET_ID}"
+          fi
+          git push origin "HEAD:${BRANCH}"
+      - name: Find or create coordination PR
+        id: coordination_pr
+        env:
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$number" ]]; then
+            url="$(gh pr create --draft --head "$BRANCH" \
+              --title "data(changeset): ${CHANGESET_ID}" \
+              --body "Central readiness state for shared-table changeset \`${CHANGESET_ID}\`.")"
+            number="$(gh pr view "$url" --json number --jq .number)"
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+      - name: Publish coordination PR checks
+        env:
+          COORDINATION_PR: ${{ steps.coordination_pr.outputs.number }}
+        run: |
+          sha="$(gh pr view "$COORDINATION_PR" --json headRefOid --jq .headRefOid)"
+          for context in ard/quality-gate ard/changeset; do
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" \
+              -f state=success -f context="$context" \
+              -f description="Validated central changeset state"
+          done
+      - name: Create one Draft tracking PR per required product
+        if: inputs.mode == 'create'
+        run: |
+          while IFS= read -r product_id; do
+            product_key="$(jq -r --arg id "$product_id" \
+              'select(.product_id == $id) | .product_key' registry/products/*.json | head -1)"
+            if [[ -z "$product_key" ]]; then
+              echo "CHANGESET_PRODUCT_NOT_FOUND: $product_id" >&2
+              exit 2
+            fi
+            branch="ard/${CHANGESET_ID}-${product_key}"
+            existing="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+            if [[ -n "$existing" ]]; then continue; fi
+            git switch --detach "origin/${DEFAULT_BRANCH}"
+            git switch --create "$branch"
+            mkdir -p "products/${product_key}/changesets"
+            jq -n --arg changeset_id "$CHANGESET_ID" --arg product_id "$product_id" \
+              '{changeset_id: $changeset_id, product_id: $product_id, status: "required"}' \
+              > "products/${product_key}/changesets/${CHANGESET_ID}.json"
+            git add -- "products/${product_key}/changesets/${CHANGESET_ID}.json"
+            git commit -m "data(${product_key}): track ${CHANGESET_ID}"
+            git push --set-upstream origin "$branch"
+            pr_url="$(gh pr create --draft --head "$branch" \
+              --title "data(${product_key}): apply ${CHANGESET_ID}" \
+              --body "Required product update for shared-table changeset \`${CHANGESET_ID}\`.")"
+            pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
+            sha="$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" \
+              -f state=pending -f context='ard/changeset' \
+              -f description="Waiting for ${CHANGESET_ID}"
+          done < <(jq -r '.required_product_ids[]' /tmp/ard-changeset.json)
+      - name: Publish impact summary on initiating PR
+        if: inputs.mode == 'create' && inputs.initiating_pr != ''
+        env:
+          INITIATING_PR: ${{ inputs.initiating_pr }}
+          COORDINATION_PR: ${{ steps.coordination_pr.outputs.number }}
+        run: |
+          tables="$(jq -r '.table_ids[] | "- `" + . + "`"' /tmp/ard-changeset.json)"
+          products="$(jq -r '.required_product_ids[] | "- `" + . + "`"' /tmp/ard-changeset.json)"
+          gh pr comment "$INITIATING_PR" --body "$(printf \
+            'Changeset `%s` created in PR #%s.\n\nTables:\n%s\n\nRequired products:\n%s\n' \
+            "$CHANGESET_ID" "$COORDINATION_PR" "$tables" "$products")"
+      - name: Reconcile ard changeset statuses
+        run: |
+          required="$(jq '.required_product_ids | length' /tmp/ard-changeset.json)"
+          ready="$(jq '.ready_products | length' /tmp/ard-changeset.json)"
+          state=pending
+          description="Changeset ${CHANGESET_ID}: ${ready}/${required} products ready"
+          if [[ "$required" -eq "$ready" ]]; then
+            state=success
+            description="Changeset ${CHANGESET_ID} is ready"
+          fi
+          while IFS= read -r pr_number; do
+            sha="$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" \
+              -f state="$state" -f context='ard/changeset' -f description="$description"
+          done < <(jq -r '.ready_products[].pr_number' /tmp/ard-changeset.json)

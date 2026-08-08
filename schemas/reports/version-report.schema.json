@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "VersionOutcome": {
+      "enum": [
+        "ALLOW",
+        "BLOCK"
+      ],
+      "title": "VersionOutcome",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "base_version": {
+      "anyOf": [
+        {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Base Version"
+    },
+    "changed": {
+      "title": "Changed",
+      "type": "boolean"
+    },
+    "code": {
+      "title": "Code",
+      "type": "string"
+    },
+    "current_version": {
+      "anyOf": [
+        {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Current Version"
+    },
+    "expected_version": {
+      "anyOf": [
+        {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Expected Version"
+    },
+    "outcome": {
+      "$ref": "#/$defs/VersionOutcome"
+    },
+    "proposed_version": {
+      "anyOf": [
+        {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Proposed Version"
+    }
+  },
+  "required": [
+    "outcome",
+    "code",
+    "current_version",
+    "base_version",
+    "proposed_version",
+    "expected_version",
+    "changed"
+  ],
+  "title": "VersionDecision",
+  "type": "object"
+}

@@ -1,0 +1,196 @@
+name: ARD numeric release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - products/**
+      - registry/**
+
+concurrency:
+  group: ard-release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      products: ${{ steps.changed.outputs.products }}
+      tables: ${{ steps.changed.outputs.tables }}
+    steps:
+      - name: Checkout merged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+      - name: Detect released products and changed tables
+        id: changed
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          mapfile -t products < <(
+            git diff --name-only "$BEFORE" HEAD -- 'products/*/generated/**' |
+              awk -F/ 'NF >= 3 {print $2}' | sort -u
+          )
+          mapfile -t changed_changesets < <(
+            git diff --name-only "$BEFORE" HEAD -- 'registry/changesets/*.json' |
+              sed -E 's#registry/changesets/(.*)\.json#\1#' | sort -u
+          )
+          expanded_products=()
+          for product_key in "${products[@]}"; do
+            changeset_id="$(awk '$1 == "changeset_id:" {print $2}' \
+              "products/${product_key}/product.yaml" | tr -d "'\"")"
+            if [[ -z "$changeset_id" || "$changeset_id" == null ]]; then
+              expanded_products+=("$product_key")
+            else
+              changed_changesets+=("$changeset_id")
+            fi
+          done
+          while IFS= read -r changeset_id; do
+            path="registry/changesets/${changeset_id}.json"
+            [[ -f "$path" ]] || continue
+            required="$(jq '.required_product_ids | length' "$path")"
+            ready="$(jq '.ready_products | length' "$path")"
+            [[ "$required" -eq "$ready" ]] || continue
+            versions_current=true
+            while IFS=$'\t' read -r product_id version; do
+              current="$(jq -r --arg id "$product_id" \
+                'select(.product_id == $id) | .version' registry/products/*.json | head -1)"
+              if [[ "$current" != "$version" ]]; then
+                versions_current=false
+                break
+              fi
+            done < <(jq -r '.ready_products | to_entries[] | [.key, .value.version] | @tsv' "$path")
+            [[ "$versions_current" == true ]] || continue
+            while IFS= read -r product_id; do
+              product_key="$(jq -r --arg id "$product_id" \
+                'select(.product_id == $id) | .product_key' registry/products/*.json | head -1)"
+              [[ -z "$product_key" ]] || expanded_products+=("$product_key")
+            done < <(jq -r '.required_product_ids[]' "$path")
+          done < <(printf '%s\n' "${changed_changesets[@]}" | sort -u)
+          mapfile -t tables < <(
+            git diff --name-only "$BEFORE" HEAD -- 'registry/tables/*.json' |
+              sed -E 's#registry/tables/(.*)\.json#\1#' | sort -u
+          )
+          printf '%s\n' "${expanded_products[@]}" | sort -u |
+            jq -Rsc 'split("\n") | map(select(length > 0))' \
+            | sed 's/^/products=/' >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${tables[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))' \
+            | sed 's/^/tables=/' >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: detect
+    if: needs.detect.outputs.products != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        product_key: ${{ fromJSON(needs.detect.outputs.products) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCT_KEY: ${{ matrix.product_key }}
+      CHANGED_TABLES: ${{ needs.detect.outputs.tables }}
+    steps:
+      - name: Checkout merged commit and tags
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Build validated public release bundle
+        run: |
+          python -m pip install uv==0.11.33
+          uv sync --frozen
+          uv run ard release build "$PRODUCT_KEY" --registry registry --output dist
+      - name: Verify every changeset PR is merged into this release commit
+        run: |
+          changeset_id="$(jq -r '.changeset_id // empty' dist/release-plan.json)"
+          [[ -n "$changeset_id" ]] || exit 0
+          path="registry/changesets/${changeset_id}.json"
+          while IFS=$'\t' read -r pr_number recorded_head; do
+            pr="$(gh pr view "$pr_number" --json mergedAt,headRefOid,mergeCommit)"
+            merged_at="$(jq -r '.mergedAt // empty' <<< "$pr")"
+            current_head="$(jq -r '.headRefOid // empty' <<< "$pr")"
+            merge_sha="$(jq -r '.mergeCommit.oid // empty' <<< "$pr")"
+            if [[ -z "$merged_at" || -z "$merge_sha" ]]; then
+              echo "CHANGESET_PR_NOT_MERGED: #${pr_number}" >&2
+              exit 2
+            fi
+            if [[ "$current_head" != "$recorded_head" ]]; then
+              echo "CHANGESET_HEAD_SHA_MISMATCH: #${pr_number}" >&2
+              exit 2
+            fi
+            if ! git merge-base --is-ancestor "$merge_sha" "$GITHUB_SHA"; then
+              echo "CHANGESET_MERGE_NOT_REACHABLE: #${pr_number}" >&2
+              exit 2
+            fi
+          done < <(jq -r '.ready_products[] | [.pr_number, .head_sha] | @tsv' "$path")
+      - name: Create immutable numeric tags
+        run: |
+          mapfile -t tags < <(jq -r '.product_tag, .table_tags[]' dist/release-plan.json)
+          refs=()
+          for tag in "${tags[@]}"; do
+            if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+              target="$(git rev-list -n 1 "$tag")"
+              if [[ "$target" != "$GITHUB_SHA" ]]; then
+                echo "TAG_TARGET_CONFLICT: $tag -> $target" >&2
+                exit 2
+              fi
+            else
+              git tag --annotate "$tag" "$GITHUB_SHA" --message "$tag"
+              refs+=("refs/tags/${tag}")
+            fi
+          done
+          if [[ "${#refs[@]}" -gt 0 ]]; then git push origin "${refs[@]}"; fi
+      - name: Create or update product GitHub Release
+        run: |
+          tag="$(jq -r .product_tag dist/release-plan.json)"
+          bundle="$(find dist -maxdepth 1 -name '*.zip' -print -quit)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$bundle" --clobber
+          else
+            gh release create "$tag" "$bundle" \
+              --title "$(jq -r '.product_key + " v" + (.product_version | tostring)' dist/release-plan.json)" \
+              --notes "Validated AI Ready Data and Apache Ossie artifacts."
+          fi
+
+  linkage:
+    needs: [detect, release]
+    if: needs.detect.outputs.products != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        product_key: ${{ fromJSON(needs.detect.outputs.products) }}
+    runs-on: ubuntu-24.04
+    environment: production-linkage
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCT_KEY: ${{ matrix.product_key }}
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Emit approved downstream linkage event
+        run: |
+          plan="products/${PRODUCT_KEY}/quality/quality-report.json"
+          record="$(jq -c --arg key "$PRODUCT_KEY" \
+            'select(.product_key == $key)' registry/products/*.json | head -1)"
+          product_id="$(jq -r .product_id <<< "$record")"
+          version="$(jq -r .version <<< "$record")"
+          tag="product/${product_id}/v${version}"
+          jq -n \
+            --arg event_type ard_product_released \
+            --arg product_id "$product_id" \
+            --argjson version "$version" \
+            --arg tag "$tag" \
+            --arg commit "$GITHUB_SHA" \
+            --argjson artifact_hashes "$(jq .artifact_hashes "$plan")" \
+            '{event_type: $event_type, client_payload: {product_id: $product_id, version: $version, tag: $tag, commit: $commit, artifact_hashes: $artifact_hashes}}' \
+            | gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input -

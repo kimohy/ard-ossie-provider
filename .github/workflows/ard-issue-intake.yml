@@ -1,0 +1,143 @@
+name: ARD approved issue intake
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: ard-intake-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: github.event.label.name == 'ard:approved'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      allowed: ${{ steps.permission.outputs.allowed }}
+    steps:
+      - name: Verify the labeler has write permission
+        id: permission
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const response = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            const allowed = ['admin', 'maintain', 'write'].includes(response.data.user.permission);
+            core.setOutput('allowed', String(allowed));
+            if (!allowed) {
+              core.setFailed('ard:approved requires write, maintain, or admin permission');
+            }
+
+  intake:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+      statuses: write
+    outputs:
+      branch: ${{ steps.metadata.outputs.branch }}
+      product_key: ${{ steps.metadata.outputs.product_key }}
+      pr_number: ${{ steps.pull_request.outputs.pr_number }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARD_MAX_ATTACHMENT_BYTES: ${{ vars.ARD_MAX_ATTACHMENT_BYTES || '52428800' }}
+    steps:
+      - name: Checkout the default branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          lfs: true
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Install the locked project
+        run: |
+          python -m pip install uv==0.11.33
+          uv sync --frozen
+      - name: Mark issue as processing
+        run: gh issue edit "${{ github.event.issue.number }}" --add-label ard:processing
+      - name: Validate and download public attachments
+        run: |
+          uv run python -m ard_ossie.github_event prepare \
+            --event "$GITHUB_EVENT_PATH" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --output .ard-intake.json
+      - name: Derive trusted branch metadata
+        id: metadata
+        run: |
+          product_key="$(jq -r .product_key .ard-intake.json)"
+          branch="ard/issue-${{ github.event.issue.number }}-${product_key}"
+          echo "product_key=${product_key}" >> "$GITHUB_OUTPUT"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+      - name: Commit the validated source set
+        env:
+          BRANCH: ${{ steps.metadata.outputs.branch }}
+          PRODUCT_KEY: ${{ steps.metadata.outputs.product_key }}
+        run: |
+          git switch -c "$BRANCH"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git lfs install --local
+          git add -- "products/${PRODUCT_KEY}"
+          git commit -m "data: ingest ARD issue #${{ github.event.issue.number }}"
+          git lfs push origin HEAD
+          git push --set-upstream origin "$BRANCH"
+      - name: Create Draft PR
+        id: pull_request
+        env:
+          BRANCH: ${{ steps.metadata.outputs.branch }}
+          PRODUCT_KEY: ${{ steps.metadata.outputs.product_key }}
+        run: |
+          pr_url="$(gh pr create --draft \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "$BRANCH" \
+            --title "data(${PRODUCT_KEY}): ARD issue #${{ github.event.issue.number }}" \
+            --body "Closes #${{ github.event.issue.number }}")"
+          pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
+          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+          gh issue edit "${{ github.event.issue.number }}" --add-label ard:pr-created
+
+  process:
+    needs: intake
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+    uses: ./.github/workflows/ard-process.yml
+    with:
+      branch: ${{ needs.intake.outputs.branch }}
+      product_key: ${{ needs.intake.outputs.product_key }}
+      pr_number: ${{ fromJSON(needs.intake.outputs.pr_number) }}
+      allow_writeback: true
+
+  finalize:
+    needs: [authorize, intake, process]
+    if: always() && needs.authorize.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      PROCESS_RESULT: ${{ needs.process.result }}
+    steps:
+      - name: Update issue processing labels
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --remove-label ard:processing
+          if [[ "$PROCESS_RESULT" != success ]]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --add-label ard:failed
+          fi

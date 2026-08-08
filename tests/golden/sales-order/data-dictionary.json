@@ -1,0 +1,54 @@
+{
+  "product_id": "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631",
+  "product_version": 12,
+  "tables": [
+    {
+      "columns": [
+        {
+          "column_id": "col_0198f6d0-2a11-78d1-8672-67d49e69f14c",
+          "data_type": "INT64",
+          "description": "Unique order identifier",
+          "logical_name": "Order ID",
+          "name": "order_id",
+          "nullable": false,
+          "ordinal": 1,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_0198f6d0-2a11-78d1-8672-67d49e69f14e",
+          "data_type": "INT64",
+          "description": "Ordering customer",
+          "logical_name": "Customer ID",
+          "name": "customer_id",
+          "nullable": false,
+          "ordinal": 2,
+          "primary_key": false
+        }
+      ],
+      "dataset_name": "orders",
+      "description": "Sales orders",
+      "source": "analytics.sales.orders",
+      "table_id": "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c",
+      "table_version": 7
+    },
+    {
+      "columns": [
+        {
+          "column_id": "col_0198f6d0-2a11-78d1-8672-67d49e69f14d",
+          "data_type": "INT64",
+          "description": "Unique customer identifier",
+          "logical_name": "Customer ID",
+          "name": "customer_id",
+          "nullable": false,
+          "ordinal": 1,
+          "primary_key": true
+        }
+      ],
+      "dataset_name": "customers",
+      "description": "Customer master",
+      "source": "analytics.sales.customers",
+      "table_id": "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14d",
+      "table_version": 3
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kimohy/ard-ossie-provider/schemas/reports/quality-report.schema.json",
+  "title": "ARD quality report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "product_id",
+    "product_version",
+    "completeness",
+    "hard_errors",
+    "warnings",
+    "artifact_hashes"
+  ],
+  "properties": {
+    "status": {"enum": ["PASS", "WARN", "FAIL"]},
+    "product_id": {"type": ["string", "null"]},
+    "product_version": {"type": ["integer", "null"], "minimum": 1, "maximum": 999},
+    "completeness": {"type": "number", "minimum": 0, "maximum": 1},
+    "hard_errors": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "warnings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "artifact_hashes": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "path"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "path": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

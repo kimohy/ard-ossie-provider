@@ -1,0 +1,113 @@
+name: ARD direct branch change
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - products/*/sources/**
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - products/*/sources/**
+
+concurrency:
+  group: ard-direct-${{ github.event.pull_request.head.label || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      product_key: ${{ steps.changed.outputs.product_key }}
+    steps:
+      - name: Checkout source commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Detect exactly one changed product
+        id: changed
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        run: |
+          git fetch origin "$BASE_BRANCH"
+          base="$(git merge-base HEAD "origin/${BASE_BRANCH}")"
+          mapfile -t products < <(
+            git diff --name-only "$base"...HEAD -- 'products/*/sources/**' |
+              awk -F/ 'NF >= 4 {print $2}' | sort -u
+          )
+          if [[ "${#products[@]}" -ne 1 ]]; then
+            echo "MULTIPLE_PRODUCTS_NOT_ALLOWED" >&2
+            printf '%s\n' "${products[@]}" >&2
+            exit 2
+          fi
+          echo "product_key=${products[0]}" >> "$GITHUB_OUTPUT"
+
+  source-check:
+    needs: detect
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      PRODUCT_KEY: ${{ needs.detect.outputs.product_key }}
+      PR_NUMBER: ${{ github.event.pull_request.number || 1 }}
+    steps:
+      - name: Checkout untrusted source without credentials
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          lfs: true
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Install and validate without LLM secrets
+        run: |
+          python -m pip install uv==0.11.33
+          uv sync --frozen
+          uv run ard process "products/${PRODUCT_KEY}" \
+            --registry registry \
+            --pr-number "$PR_NUMBER"
+
+  pull_request:
+    needs: [detect, source-check]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ github.ref_name }}
+      PRODUCT_KEY: ${{ needs.detect.outputs.product_key }}
+    steps:
+      - name: Find or create the product PR
+        id: pr
+        run: |
+          pr_number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr_number" ]]; then
+            pr_url="$(gh pr create --draft --head "$BRANCH" \
+              --title "data(${PRODUCT_KEY}): update ARD sources" \
+              --body "Automated ARD validation and Ossie generation.")"
+            pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
+          fi
+          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+
+  process:
+    needs: [detect, source-check, pull_request]
+    if: github.event_name == 'push'
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+    uses: ./.github/workflows/ard-process.yml
+    with:
+      branch: ${{ github.ref_name }}
+      product_key: ${{ needs.detect.outputs.product_key }}
+      pr_number: ${{ fromJSON(needs.pull_request.outputs.pr_number) }}
+      allow_writeback: true
