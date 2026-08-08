@@ -21,7 +21,7 @@
 
 이 산출물과 동일한 Canonical IR을 이용해 Apache Ossie 0.1.1 형식의 `ossie-model.json`을 생성한다. 생성된 MD/JSON은 직접 수정하지 않으며 원본 문서, 설정 또는 ID Registry를 변경한 뒤 전체 파이프라인으로 재생성한다.
 
-각 프러덕트는 불변 `product_id`와 독립적인 SemVer 릴리스를 가진다. 물리 테이블에도 불변 `table_id`를 부여하며, 프러덕트와 테이블의 관계는 다대다로 관리한다. 같은 물리 테이블을 여러 프러덕트가 사용하면 동일한 `table_id`를 재사용한다.
+각 프러덕트는 불변 `product_id`와 `v1`부터 순차 증가하는 독립 숫자 버전을 가진다. 물리 테이블에도 불변 `table_id`와 독립 숫자 버전을 부여하며, 프러덕트와 테이블의 관계는 다대다로 관리한다. 같은 물리 테이블을 여러 프러덕트가 사용하면 동일한 `table_id`를 재사용한다.
 
 LLM은 OpenAI-compatible API로 호출하며 특정 공급자나 모델에 종속되지 않는다. LLM은 비정형 문장에서 의미 후보를 추출하고 정규화하는 역할만 담당한다. 최종 IR과 Ossie 객체의 ID 매핑 및 출력은 결정적인 코드로 수행한다.
 
@@ -58,7 +58,7 @@ LLM은 OpenAI-compatible API로 호출하며 특정 공급자나 모델에 종�
 | 저장소 | 복수 프러덕트를 관리하는 단일 모노레포 |
 | 변환 방식 | Canonical IR 컴파일러형 |
 | 생성물 편집 | 완전 자동 생성, 직접 편집 금지 |
-| 프러덕트 버전 | 원본별 변경 이력 + 프러덕트 단위 SemVer 릴리스 |
+| 프러덕트·테이블 버전 | 각 객체별 `v1`~`v999` 단순 증가 버전 |
 | 물리 스키마 | Excel에 DB/스키마/테이블/컬럼/타입/PK/FK 포함 |
 | 프러덕트–테이블 관계 | 다대다 공동 사용 |
 | LLM 연결 | OpenAI-compatible API Provider Adapter |
@@ -96,7 +96,7 @@ flowchart TD
 | Renderers | IR에서 MD와 Dictionary JSON 생성 | 아니요 |
 | Ossie Compiler | IR을 Ossie 0.1.1로 결정적 변환 | 아니요 |
 | Validator | 스키마, 참조, SQL, 결정성, 품질검사 | 아니요 |
-| Release Manager | SemVer, changelog, snapshot, tag 관리 | 변경 설명에만 선택 사용 |
+| Release Manager | 숫자 버전, changelog, tag, GitHub Release 관리 | 변경 설명에만 선택 사용 |
 
 ## 5. 저장소 구조
 
@@ -130,8 +130,16 @@ ai-ready-data-registry/
 │   ├── data-semantic.md.j2
 │   └── changelog.md.j2
 ├── registry/
-│   ├── tables.json
-│   ├── table-aliases.json
+│   ├── products/<product-id>.json
+│   ├── tables/<table-id>.json
+│   ├── mappings/<product-id>.json
+│   ├── aliases/
+│   │   ├── products.json
+│   │   └── tables.json
+│   ├── indexes/
+│   │   ├── product-keys.json
+│   │   └── table-locators.json
+│   ├── changesets/<changeset-id>.json
 │   └── identity-events.jsonl
 ├── products/
 │   └── <product-key>/
@@ -157,15 +165,7 @@ ai-ready-data-registry/
 │       │       ├── validation-report.json
 │       │       ├── lineage-report.json
 │       │       └── change-report.json
-│       ├── releases/
-│       │   ├── index.json
-│       │   └── vX.Y.Z/
-│       │       ├── release-manifest.json
-│       │       ├── data-product.md
-│       │       ├── data-semantic.md
-│       │       ├── data-dictionary.json
-│       │       ├── ossie-model.json
-│       │       └── validation-report.json
+│       ├── manifest.json
 │       └── CHANGELOG.md
 ├── catalog/
 │   ├── products.json
@@ -191,18 +191,24 @@ ai-ready-data-registry/
 │   ├── integration/
 │   ├── fixtures/
 │   └── golden/
-└── .github/workflows/
-    ├── validate-product.yml
-    └── release-product.yml
+└── .github/
+    ├── ISSUE_TEMPLATE/ard-content.yml
+    └── workflows/
+        ├── ard-issue-intake.yml
+        ├── ard-direct-change.yml
+        ├── ard-process.yml
+        ├── ard-changeset.yml
+        └── ard-release.yml
 ```
 
 ### 5.1 Git 추적 정책
 
-- 추적: 원본 문서, product 설정, Registry, 검증된 IR, 구조화 LLM 추출 cache, 공개 산출물, 보고서, 릴리스 스냅샷
+- 추적: 최신 원본 문서, product 설정, Registry, 검증된 IR, 구조화 LLM 추출 cache, 최신 공개 산출물과 보고서
 - 미추적: `.build/`, Docling 로컬 원시 cache, 로그, API 응답 envelope, 임시 OCR 이미지
 - PDF, DOCX, XLSX는 Git LFS를 사용한다.
 - 생성 파일명에는 실행시각, 랜덤 ID 또는 임시 경로를 넣지 않는다.
-- 릴리스 디렉터리에는 원본을 복제하지 않고 commit과 source hash로 참조한다.
+- 과거 버전은 제품·테이블 tag와 Git history로 조회하고 저장소 내부에 버전별 디렉터리를 복제하지 않는다.
+- GitHub Release asset에는 해당 tag의 공개 산출물, manifest와 검증 보고서를 묶어 게시한다.
 
 ## 6. ID 및 다대다 매핑
 
@@ -231,7 +237,7 @@ aliases:
 
 ### 6.3 테이블 Registry
 
-`registry/tables.json`은 table과 column의 불변 ID, 현재 물리 FQN, 상태를 보관한다. 같은 정규화 FQN이 여러 프러덕트에 등장하면 기존 `table_id`를 재사용한다.
+`registry/tables/<table-id>.json`은 table과 column의 불변 ID, 독립 숫자 버전, 현재 물리 locator, alias와 상태를 보관한다. 같은 정규화 locator가 여러 프러덕트에 등장하면 기존 `table_id`를 재사용한다. locator는 `source_system_id + catalog + schema + table_name`으로 계산하며 credential과 실제 endpoint는 포함하지 않는다.
 
 이름 변경을 자동 확정할 수 없으면 `IDENTITY_CONFLICT`로 실패한다. 운영자가 `ard registry alias add`를 실행하면 CLI가 Registry와 `identity-events.jsonl`을 갱신한다. 사용자는 Registry 파일을 직접 편집하지 않는다.
 
@@ -249,6 +255,18 @@ aliases:
 ```
 
 `usage`는 `SOURCE`, `OUTPUT`, `REFERENCE`로 제한한다. 한 테이블은 여러 프러덕트와 연결될 수 있으며 소유 프러덕트를 강제하지 않는다.
+
+### 6.5 중복 판정
+
+신규 프러덕트는 명시된 `product_id`, 정규화 `product_key`, alias, canonical content hash 순서로 검사한다. 기존 ID와 key가 충돌하거나 ID 없이 기존 key를 신규 생성하려는 요청은 병합을 차단한다. canonical content hash가 기존 프러덕트와 같으면 새 버전을 만들지 않는 `NO_CHANGE`로 판정한다.
+
+신규 테이블은 물리 locator를 우선 식별자로 사용한다. locator가 같으면 기존 `table_id`를 재사용하고 새 ID 발급을 차단한다. locator는 다르지만 schema hash가 같은 테이블은 자동 병합하지 않고 `POSSIBLE_CLONE`으로 보고한다. 이름 변경이나 물리 이동은 이전 locator와 운영자 결정을 명시한 identity event가 있을 때만 기존 ID를 유지한다.
+
+LLM 또는 embedding 유사도는 `POSSIBLE_DUPLICATE` 후보를 만드는 데만 사용하며 ID 재사용, 병합 또는 이름 변경을 확정하지 않는다. 모든 중복 판정은 `duplicate-report.json`에 비교 대상 ID, 판정 단계, 근거 hash와 조치 방법을 기록한다.
+
+### 6.6 폐기와 ID 재사용 금지
+
+프러덕트와 테이블을 삭제하지 않고 `status: retired` tombstone으로 보존한다. 폐기는 현재 버전에서 1을 증가시킨 뒤 적용하며 `retired_at`과 선택적 `replaced_by`를 기록한다. 폐기된 ID는 어떤 신규 객체에도 재사용할 수 없다.
 
 ## 7. Canonical IR
 
@@ -435,25 +453,33 @@ LLM cache key는 provider fingerprint, source chunk hash, prompt hash, output sc
 
 ## 11. 버전과 릴리스
 
-각 프러덕트는 독립 SemVer를 사용한다.
+프러덕트와 테이블은 각각 독립적인 `1`~`999` 정수 버전을 사용하고 외부 표현은 `v<number>`로 통일한다. 신규 객체는 `v1`이며 변경된 객체는 현재 버전에서 정확히 1만 증가할 수 있다. 버전 건너뛰기, 역행, 변경 없는 증가와 변경 후 미증가는 모두 병합을 차단한다.
 
-- Major: dataset/field/metric 삭제·rename, 타입·PK·지표 의미 변경
-- Minor: 하위 호환 dataset/field/metric 추가
-- Patch: 의미 계약에 영향 없는 설명·라벨 변경
-- No release: 생성 결과에 변화 없음
+버전 비교용 canonical hash에서는 생성 시각, commit SHA, Actions run ID, LLM response ID, provenance 수집 시각, JSON key 순서와 Markdown 서식을 제외한다. 원본 파일이 달라도 canonical hash가 같으면 Git commit만 남기고 새 release를 생성하지 않는다. 파서, prompt 또는 provider 변경으로 canonical 의미가 달라지면 정상적인 객체 변경으로 처리한다.
 
-지표 계산식 변경은 값이 달라질 수 있으므로 기본적으로 Major이다.
+### 11.1 증가 규칙
 
-Git tag는 `product/<product-key>/vX.Y.Z` 형식을 사용한다. release manifest에는 commit, tag, source hash, compiler/Docling/prompt/provider lock, target Ossie version, artifact hash, 이전 버전, 변경 분류, validation 요약과 사용 table ID를 기록한다.
+- 제품 설명, 업무 의미, 지표, 품질 규칙 또는 product-table mapping 변경: 해당 product `+1`
+- 테이블 컬럼, 타입, nullability, key, 관계, 설명 또는 locator 변경: 해당 table `+1`
+- 공용 테이블 변경: table `+1` 및 참조하는 모든 product `+1`
+- mapping만 추가·삭제·역할 변경: product만 `+1`
+- 제품 또는 테이블 폐기: 해당 객체 `+1` 후 `retired`
+- canonical 변경 없음: 버전 유지 및 release 없음
+
+제품 manifest는 참조하는 `table_id`와 `table_version`을 고정한다. 공용 테이블 변경은 `changeset_id`로 영향 제품별 PR을 연결하고 모든 PR이 승인·병합될 때까지 외부 연계를 보류한다.
+
+각 PR은 `base_product_version`, `proposed_product_version`, `base_table_versions`를 기록한다. 동일 객체를 변경하는 다른 PR이 먼저 병합되면 `VERSION_STALE`로 차단하고 최신 `main` 기준으로 다시 계산한다. 주요 오류 코드는 `VERSION_GAP`, `VERSION_NO_CHANGE`, `VERSION_COLLISION`, `VERSION_LIMIT_REACHED`이다.
+
+Git tag는 `product/<product-id>/v<number>`와 `table/<table-id>/v<number>` 형식을 사용한다. 제품 tag마다 GitHub Release를 만들고 table tag는 공용 테이블 변경의 불변 참조로 사용한다. release manifest에는 commit, tag, source hash, compiler/Docling/prompt/provider lock, target Ossie version, artifact hash, 이전 숫자 버전, validation 요약과 고정된 table ID/version을 기록한다.
 
 과거 버전 조회는 다음 CLI로 제공한다.
 
 ```bash
 ard history sales-order
-ard show sales-order@2.0.0
-ard diff sales-order@1.2.0..2.0.0
+ard show sales-order@12
+ard diff sales-order@11..12
 ard history sales-order --metric net_revenue
-ard export sales-order@2.0.0 --format ossie
+ard export sales-order@12 --format ossie
 ```
 
 ## 12. CLI와 CI/CD
@@ -469,10 +495,18 @@ ard registry conflicts
 ard impact table <table-id>
 ard validate <product-key>
 ard release plan <product-key>
-ard release create <product-key> --bump auto
+ard release create <product-key> --version auto
 ```
 
-Git 작업 흐름은 원본 수정, `ard build --changed`, 원본과 생성물 commit, PR, CI 재생성 및 diff, 검증, merge, release 순서이다. CI는 저장소에 쓰지 않고 깨끗한 환경에서 생성한 결과가 commit된 generated와 동일한지만 검증한다.
+Git 작업 흐름은 Issue 또는 작업 브랜치 입력, Draft PR, `ard build`, 생성물 자동 commit, 품질·중복·버전 검증, review, merge, release 순서이다. 기본 `GITHUB_TOKEN`을 사용하는 단일 orchestrator가 승인된 Issue의 브랜치 생성부터 최종 commit status 등록까지 담당한다. 사람의 직접 변경은 작업 브랜치에만 허용하며 PR이 없으면 자동 생성한다.
+
+공개 저장소 Issue는 생성만으로 LLM을 호출하지 않는다. write 이상의 권한을 가진 사용자가 `ard:approved` label을 부여하고 workflow가 label actor 권한을 다시 확인한 뒤에만 GitHub Secret의 `ARD_LLM_API_KEY`를 사용한다. 외부 fork PR, 승인 전 Issue와 `pull_request_target`에서 untrusted code를 checkout하는 실행에는 secret과 쓰기 권한을 제공하지 않는다.
+
+`ard-issue-intake.yml`은 Issue Form과 첨부를 검증하고 `ard/issue-<number>-<product-key>` 브랜치와 Draft PR을 만든다. `ard-direct-change.yml`은 `products/*/sources/**` 변경을 감지해 제품 하나·버전 하나 규칙을 확인하고 PR을 생성 또는 갱신한다. 두 입력 경로는 `ard-process.yml`의 동일한 처리 계약을 사용한다.
+
+PR pipeline은 Docling 파싱, OpenAI-compatible LLM 보조 추출, canonical IR/Ossie 생성, 중복·버전·completeness·provenance 검증을 수행하고 같은 PR 브랜치에 생성물을 commit한다. 필수 ID, 물리 구조, 참조 무결성, Ossie schema와 changeset 오류는 차단하고 설명·동의어·예시 누락은 경고와 completeness 점수로 보고한다. LLM은 시맨틱 후보만 `ai_suggested` provenance와 함께 보완하며 물리 구조나 ID를 추측하지 않는다.
+
+`main` merge 후 `ard-release.yml`이 제품·테이블 tag와 제품 GitHub Release를 생성한다. 외부 catalog/API 연계는 보호된 GitHub Environment 승인을 받은 뒤 `workflow_call` 또는 `repository_dispatch` 확장점에서 실행한다.
 
 GitHub Actions는 adapter일 뿐이며 실제 실행 계약은 containerized `ard` CLI이다. 동일 컨테이너를 GitLab CI, Jenkins 또는 Cloud Build에서도 실행할 수 있어야 한다.
 
@@ -490,12 +524,14 @@ Excel에서 공통 테이블이 변경되면 해당 table ID를 사용하는 모
 
 ## 14. 테스트 전략
 
-- Unit: ID, FQN, link, type mapping, expression, SemVer
+- Unit: ID, locator, canonical hash, duplicate classification, link, numeric version, type mapping, expression
 - Parser fixture: HTML, DOCX, digital/scanned PDF, XLSX merged header/composite key
 - Golden: 고정 입력에 대한 MD/JSON/Ossie byte 비교
 - Contract: IR schema, Ossie schema, CLI exit code, manifest schema
 - Integration: 세 입력 형식에서 최종 릴리스까지
-- Shared table: 동일 FQN ID 재사용, rename 보존, 영향 탐지, 삭제 안전성
+- Shared table: 동일 locator ID 재사용, rename 보존, 영향 탐지, 삭제 안전성
+- Version: 신규 v1, 정확한 +1, no-change, stale base, gap, collision, v999 limit
+- GitHub event: 승인 label 권한, 외부 fork secret 차단, 단일 제품 PR, generated write-back, protected release
 - Failure: 손상 파일, schema 위반, 모호한 ID, SQL 손실, provider 장애
 
 ## 15. 보안과 운영
@@ -529,6 +565,11 @@ Excel에서 공통 테이블이 변경되면 해당 table ID를 사용하는 모
 13. product/table/column/metric ID는 이름 변경 후에도 유지된다.
 14. 과거 릴리스와 metric 변경 이력을 CLI로 조회한다.
 15. Git과 manifest에 secret이나 원본 API 인증정보가 남지 않는다.
+16. product와 table은 각각 독립적인 v1~v999 버전을 가지며 변경 시 정확히 1만 증가한다.
+17. 동일 product key, table locator, canonical content가 중복 생성되지 않는다.
+18. 공용 table 변경은 changeset으로 모든 영향 product의 버전 증가를 요구한다.
+19. Issue는 `ard:approved` label과 승인자 권한 확인 전에는 LLM secret을 사용할 수 없다.
+20. 저장소에는 최신 산출물만 유지하며 과거 버전은 Git tag, history와 GitHub Release로 재현한다.
 
 ## 17. 공식 참고자료
 
