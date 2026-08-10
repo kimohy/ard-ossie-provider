@@ -88,34 +88,25 @@ wheel build는 각각 별도 matrix runner의 격리된 checkout에서 실행되
 status는 candidate 코드를 실행하지 않는 별도 finalizer job이 기본 브랜치의 CLI로만
 게시합니다.
 
-### 최초 설치 PR bootstrap
+### 최초 운영 전환 기록
 
-`main`에 아직 프로젝트와 trusted CLI가 없는 PR #1만
-`.github/workflows/ard-initial-bootstrap.yml`을 사용합니다. 이 workflow는 PR 번호, 초기
-base commit, same-repository head branch를 모두 고정하고, 검증 코드도 이미 독립 검증된
-commit `cb79416c4585d383181e75e7f87579bbf368ca65`에서 checkout합니다. 후보 exact head는
-별도 checkout에 두고 `static`, `pytest`, `wheel`을 각각 다른 read-only matrix runner에서
-실행합니다.
+최초 구현 [PR #1](https://github.com/kimohy/ard-ossie-provider/pull/1)은
+2026-08-11 merge commit
+`d6603bd941523eff3de145361368e28df74347d3`로 병합했습니다. 병합 직후 repository
+bootstrap을 적용해 다음 운영 계약을 구성했습니다.
 
-bootstrap에는 Secret, status/PR 쓰기 권한, persisted checkout credential이 없습니다.
-또한 check 이름을 `ard/quality-gate` 또는 `ard/changeset`으로 만들지 않으므로 병합 뒤
-비활성화된 bootstrap job이 영구 required status를 대신 만족할 수 없습니다. PR #1 병합
-후에는 기본 브랜치의 `ARD repository change gate`만 신뢰 가능한 집계와 status 게시를
-담당합니다. bootstrap workflow는 후속 정리 PR에서 삭제할 수 있습니다.
+- `ard-llm`과 `production-linkage`는 repository owner 승인을 요구하며 `main`에서만
+  deployment할 수 있습니다.
+- `ard-llm`에는 `ARD_LLM_API_KEY` Environment Secret과 승인된 provider 변수 네 개가
+  있습니다. Secret 값은 운영 기록과 workflow log에 남기지 않습니다.
+- Actions 기본 권한은 read이며 workflow의 pull request 생성을 허용합니다.
+- `main`은 pull request, 최신 base, conversation resolution,
+  `ard/quality-gate`, `ard/changeset`을 요구하고 관리자 우회, force push, 삭제를 허용하지
+  않습니다. 비소유자 writer가 준비되기 전까지 승인 수는 0입니다.
 
-최초 운영 전환은 다음 순서로 진행합니다.
-
-1. PR #1의 현재 `head_sha`를 읽고, 같은 SHA에 연결된 최신 bootstrap run에서 matrix와 aggregate가 모두 성공했는지 확인합니다.
-2. 영구 required status는 아직 branch protection에 추가하지 않은 상태로 PR #1을 병합합니다.
-3. 다른 변경을 받지 않고 즉시 새 `main`에서 `ard github bootstrap --dry-run`과 apply를 실행합니다.
-4. bootstrap이 no-op에 수렴하고 두 required status가 branch protection에 설정됐는지 확인합니다.
-5. 후속 정리 PR에서 일회성 workflow를 삭제하고 영구 repository gate가 두 status를 게시하는지 검증합니다.
-
-1단계 검토가 끝난 뒤 병합 직전에 PR head를 다시 읽습니다. SHA가 바뀌었으면 이전 run을 근거로 병합하지 않고 새 head의 검토와 bootstrap run 확인을 처음부터 다시 수행합니다.
-
-PR #1 병합 전에 `ard/quality-gate`와 `ard/changeset`을 필수로 만들면, 일회성 bootstrap은
-의도적으로 이 이름의 status를 게시하지 않기 때문에 최초 PR이 교착됩니다. admin bypass로
-우회하지 말고 위 전환 순서를 사용합니다. 상세 작업과 acceptance 기준은
+PR #1만 검증하던 일회성 `ard-initial-bootstrap.yml`은 운영 전환 뒤 제거했습니다. 이후
+코드·workflow·문서 PR은 기본 브랜치의 `ARD repository change gate`만 사용하며, trusted
+finalizer가 정확한 PR head에 두 required status를 게시합니다. P1 이후의 후속 acceptance는
 [다음 작업 로드맵](next-steps.md)을 따릅니다.
 
 ## 5. 승인 환경

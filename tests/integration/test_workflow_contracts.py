@@ -16,7 +16,6 @@ PROCESSING_WORKFLOWS = tuple(
         "ard-changeset.yml",
         "ard-release.yml",
         "ard-repository-change.yml",
-        "ard-initial-bootstrap.yml",
     )
 )
 FORBIDDEN_RUN_TOKENS = (
@@ -362,75 +361,3 @@ def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
     assert any("--publish-success-statuses" in run for run in finalizer_runs)
     assert any("--authoritative-statuses" in run for run in finalizer_runs)
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-repository-change.yml")
-
-
-def test_initial_bootstrap_gate_is_one_time_read_only_and_uses_trusted_cli() -> None:
-    workflow = load_workflow("ard-initial-bootstrap.yml")
-    text = (WORKFLOWS / "ard-initial-bootstrap.yml").read_text(encoding="utf-8")
-
-    assert set(workflow["on"]) == {"pull_request"}
-    assert workflow["on"]["pull_request"]["types"] == [
-        "opened",
-        "synchronize",
-        "reopened",
-    ]
-    assert workflow["permissions"] == {"contents": "read"}
-    assert "pull_request_target" not in text
-    assert "secrets." not in text
-    assert "GH_TOKEN" not in text
-    assert "statuses: write" not in text
-
-    verification = workflow["jobs"]["verification"]
-    guard = verification["if"]
-    assert "github.event.pull_request.number == 1" in guard
-    assert (
-        "github.event.pull_request.base.sha == "
-        "'c23333610cb1d27ff136910de010011b6c870f3a'"
-    ) in guard
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in guard
-    assert (
-        "github.event.pull_request.head.ref == "
-        "'agent/design-numeric-versions-actions'"
-    ) in guard
-    assert verification["permissions"] == {"contents": "read"}
-    assert verification["strategy"]["fail-fast"] == "false"
-    assert verification["strategy"]["matrix"]["verification_group"] == [
-        "static",
-        "pytest",
-        "wheel",
-    ]
-
-    checkouts = [
-        step
-        for step in verification["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
-    ]
-    assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
-    assert checkouts[0]["with"]["ref"] == (
-        "cb79416c4585d383181e75e7f87579bbf368ca65"
-    )
-    assert checkouts[1]["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
-    assert all(step["with"]["persist-credentials"] == "false" for step in checkouts)
-
-    run_step = next(step for step in verification["steps"] if step.get("run"))
-    assert run_step["working-directory"] == "trusted"
-    assert "--repository \"$CANDIDATE_REPOSITORY\"" in run_step["run"]
-    assert "--verification-group \"$VERIFICATION_GROUP\"" in run_step["run"]
-    assert "publish-statuses" not in run_step["run"]
-    assert "repository-name" not in run_step["run"]
-
-    aggregate = workflow["jobs"]["aggregate"]
-    assert aggregate["name"] == "ARD initial bootstrap aggregate"
-    assert aggregate["needs"] == "verification"
-    assert "always()" in aggregate["if"]
-    assert "github.event.pull_request.number == 1" in aggregate["if"]
-    assert aggregate["permissions"] == {"contents": "read"}
-    assert aggregate["steps"][0]["uses"] == (
-        "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
-    )
-    assert aggregate["steps"][0]["env"] == {
-        "VERIFICATION_RESULT": "${{ needs.verification.result }}"
-    }
-    assert "core.setFailed" in aggregate["steps"][0]["with"]["script"]
-    assert aggregate["name"] not in {"ard/quality-gate", "ard/changeset"}
-    assert_actions_are_sha_pinned(WORKFLOWS / "ard-initial-bootstrap.yml")
