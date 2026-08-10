@@ -141,6 +141,7 @@ Metric과 relationship도 각각 `met_*`, `rel_*` 불변 ID를 Registry의 제�
 ## 문서
 
 - [GitHub Actions 설정](docs/github-actions-setup.md)
+- [다음 작업 로드맵](docs/next-steps.md)
 - [상세 아키텍처](docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md)
 - [구현 계획](docs/superpowers/plans/2026-08-08-ard-github-pipeline.md)
 

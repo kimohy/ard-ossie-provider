@@ -103,6 +103,19 @@ bootstrap에는 Secret, status/PR 쓰기 권한, persisted checkout credential�
 후에는 기본 브랜치의 `ARD repository change gate`만 신뢰 가능한 집계와 status 게시를
 담당합니다. bootstrap workflow는 후속 정리 PR에서 삭제할 수 있습니다.
 
+최초 운영 전환은 다음 순서로 진행합니다.
+
+1. PR #1의 정확한 head에서 bootstrap matrix와 aggregate가 모두 성공했는지 확인합니다.
+2. 영구 required status는 아직 branch protection에 추가하지 않은 상태로 PR #1을 병합합니다.
+3. 다른 변경을 받지 않고 즉시 새 `main`에서 `ard github bootstrap --dry-run`과 apply를 실행합니다.
+4. bootstrap이 no-op에 수렴하고 두 required status가 branch protection에 설정됐는지 확인합니다.
+5. 후속 정리 PR에서 일회성 workflow를 삭제하고 영구 repository gate가 두 status를 게시하는지 검증합니다.
+
+PR #1 병합 전에 `ard/quality-gate`와 `ard/changeset`을 필수로 만들면, 일회성 bootstrap은
+의도적으로 이 이름의 status를 게시하지 않기 때문에 최초 PR이 교착됩니다. admin bypass로
+우회하지 말고 위 전환 순서를 사용합니다. 상세 작업과 acceptance 기준은
+[다음 작업 로드맵](next-steps.md)을 따릅니다.
+
 ## 5. 승인 환경
 
 `Settings → Environments`에서 `production-linkage` 환경도 생성합니다.
