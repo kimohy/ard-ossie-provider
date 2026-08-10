@@ -88,6 +88,21 @@ wheel build는 각각 별도 matrix runner의 격리된 checkout에서 실행되
 status는 candidate 코드를 실행하지 않는 별도 finalizer job이 기본 브랜치의 CLI로만
 게시합니다.
 
+### 최초 설치 PR bootstrap
+
+`main`에 아직 프로젝트와 trusted CLI가 없는 PR #1만
+`.github/workflows/ard-initial-bootstrap.yml`을 사용합니다. 이 workflow는 PR 번호, 초기
+base commit, same-repository head branch를 모두 고정하고, 검증 코드도 이미 독립 검증된
+commit `cb79416c4585d383181e75e7f87579bbf368ca65`에서 checkout합니다. 후보 exact head는
+별도 checkout에 두고 `static`, `pytest`, `wheel`을 각각 다른 read-only matrix runner에서
+실행합니다.
+
+bootstrap에는 Secret, status/PR 쓰기 권한, persisted checkout credential이 없습니다.
+또한 check 이름을 `ard/quality-gate` 또는 `ard/changeset`으로 만들지 않으므로 병합 뒤
+비활성화된 bootstrap job이 영구 required status를 대신 만족할 수 없습니다. PR #1 병합
+후에는 기본 브랜치의 `ARD repository change gate`만 신뢰 가능한 집계와 status 게시를
+담당합니다. bootstrap workflow는 후속 정리 PR에서 삭제할 수 있습니다.
+
 ## 5. 승인 환경
 
 `Settings → Environments`에서 `production-linkage` 환경도 생성합니다.
