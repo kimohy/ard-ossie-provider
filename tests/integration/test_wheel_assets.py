@@ -8,11 +8,22 @@ from pathlib import Path
 
 def test_wheel_contains_runtime_templates_and_schemas(tmp_path: Path) -> None:
     subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
+        [
+            "uv",
+            "build",
+            "--wheel",
+            "--no-build-isolation",
+            "--out-dir",
+            str(tmp_path),
+        ],
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, "UV_CACHE_DIR": str(tmp_path / "uv-cache")},
+        env={
+            **os.environ,
+            "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+            "UV_OFFLINE": "1",
+        },
     )
     wheel = next(tmp_path.glob("*.whl"))
 
