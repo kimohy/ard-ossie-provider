@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "required_product_ids": {
+      "items": {
+        "pattern": "^prd_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "title": "Required Product Ids",
+      "type": "array"
+    },
+    "shared": {
+      "title": "Shared",
+      "type": "boolean"
+    },
+    "table_id": {
+      "pattern": "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "title": "Table Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "table_id",
+    "required_product_ids",
+    "shared"
+  ],
+  "title": "ImpactReport",
+  "type": "object"
+}

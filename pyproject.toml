@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ard-ossie-provider"
+version = "0.1.0"
+description = "Git-managed AI Ready Data compiler for Apache Ossie"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "docling==2.114.0",
+  "httpx>=0.28,<1",
+  "jinja2>=3.1,<4",
+  "jsonschema>=4.25,<5",
+  "openai==2.46.0",
+  "openpyxl>=3.1,<4",
+  "pydantic>=2.12,<3",
+  "pyyaml>=6.0,<7",
+  "typer==0.26.8",
+]
+
+[project.scripts]
+ard = "ard_ossie.cli:app"
+
+[dependency-groups]
+dev = [
+  "hatchling>=1.27,<2",
+  "pytest>=8.4,<9",
+  "pytest-cov>=7,<8",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ard_ossie"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "ard_ossie/assets/templates"
+"schemas" = "ard_ossie/assets/schemas"
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

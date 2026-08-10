@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "DuplicateDecision": {
+      "enum": [
+        "BLOCK",
+        "CREATE",
+        "NO_CHANGE",
+        "REUSE",
+        "UPDATE",
+        "WARN"
+      ],
+      "title": "DuplicateDecision",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "candidate_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Candidate Ids",
+      "type": "array"
+    },
+    "code": {
+      "title": "Code",
+      "type": "string"
+    },
+    "decision": {
+      "$ref": "#/$defs/DuplicateDecision"
+    },
+    "entity_type": {
+      "enum": [
+        "product",
+        "table"
+      ],
+      "title": "Entity Type",
+      "type": "string"
+    },
+    "evidence": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "object"
+    },
+    "target_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Id"
+    }
+  },
+  "required": [
+    "entity_type",
+    "decision",
+    "code"
+  ],
+  "title": "DuplicateReport",
+  "type": "object"
+}

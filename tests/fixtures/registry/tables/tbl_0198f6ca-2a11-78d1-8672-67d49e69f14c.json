@@ -1,0 +1,14 @@
+{
+  "aliases": [],
+  "canonical_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "locator": {
+    "catalog": "analytics",
+    "schema_name": "sales",
+    "source_system_id": "erp",
+    "table_name": "orders"
+  },
+  "schema_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "status": "active",
+  "table_id": "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c",
+  "version": 1
+}

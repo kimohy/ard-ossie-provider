@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "QualityFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "QualityFinding",
+      "type": "object"
+    },
+    "QualityStatus": {
+      "enum": [
+        "PASS",
+        "WARN",
+        "FAIL"
+      ],
+      "title": "QualityStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://github.com/kimohy/ard-ossie-provider/schemas/reports/quality-report.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "$ref": "#/$defs/QualityStatus"
+    },
+    "product_id": {
+      "anyOf": [
+        {
+          "pattern": "^prd_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Product Id"
+    },
+    "product_version": {
+      "anyOf": [
+        {
+          "maximum": 999,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Product Version"
+    },
+    "completeness": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Completeness",
+      "type": "number"
+    },
+    "hard_errors": {
+      "items": {
+        "$ref": "#/$defs/QualityFinding"
+      },
+      "title": "Hard Errors",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/QualityFinding"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "artifact_hashes": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Artifact Hashes",
+      "type": "object"
+    }
+  },
+  "required": [
+    "status",
+    "product_id",
+    "product_version",
+    "completeness",
+    "hard_errors",
+    "warnings",
+    "artifact_hashes"
+  ],
+  "title": "ARD quality report",
+  "type": "object"
+}

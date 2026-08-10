@@ -1,0 +1,143 @@
+name: ARD trusted direct branch coordinator
+
+on:
+  workflow_run:
+    workflows: [ARD direct branch signal]
+    types: [completed]
+
+concurrency:
+  group: ard-direct-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch != github.event.repository.default_branch &&
+      github.event.workflow_run.head_sha != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      product_key: ${{ steps.detect.outputs.product_key }}
+      expected_head: ${{ steps.detect.outputs.expected_head }}
+      merge_base: ${{ steps.detect.outputs.merge_base }}
+    env:
+      BASE_REF: origin/${{ github.event.repository.default_branch }}
+      HEAD_REF: ${{ github.event.workflow_run.head_sha }}
+      CANDIDATE_REPOSITORY: ${{ github.workspace }}/candidate
+    steps:
+      - name: Checkout trusted coordinator code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout exact candidate data without credentials
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          lfs: true
+          path: candidate
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Detect exactly one changed product with trusted code
+        id: detect
+        working-directory: trusted
+        env:
+          PYTHONSAFEPATH: '1'
+        run: >-
+          uv run --frozen ard workflow detect-product
+          --base-ref "$BASE_REF"
+          --head-ref "$HEAD_REF"
+          --repository "$CANDIDATE_REPOSITORY"
+      - name: Validate candidate sources without LLM credentials
+        id: source_check
+        working-directory: trusted
+        env:
+          PYTHONSAFEPATH: '1'
+          PRODUCT_KEY: ${{ steps.detect.outputs.product_key }}
+          EXPECTED_HEAD: ${{ steps.detect.outputs.expected_head }}
+        run: >-
+          uv run --frozen ard workflow source-check
+          --product-key "$PRODUCT_KEY"
+          --expected-head "$EXPECTED_HEAD"
+          --repository "$CANDIDATE_REPOSITORY"
+
+  pull_request:
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      pr_number: ${{ steps.pull_request.outputs.pr_number }}
+      expected_head: ${{ steps.pull_request.outputs.expected_head }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      PRODUCT_KEY: ${{ needs.validate.outputs.product_key }}
+      EXPECTED_HEAD: ${{ needs.validate.outputs.expected_head }}
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      CANDIDATE_REPOSITORY: ${{ github.workspace }}/candidate
+    steps:
+      - name: Checkout trusted PR coordinator code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout exact candidate Git state without credentials
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.validate.outputs.expected_head }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Ensure one Draft product PR with trusted code
+        id: pull_request
+        working-directory: trusted
+        env:
+          PYTHONSAFEPATH: '1'
+        run: >-
+          uv run --frozen ard workflow ensure-product-pr
+          --branch "$BRANCH"
+          --product-key "$PRODUCT_KEY"
+          --expected-head "$EXPECTED_HEAD"
+          --base-branch "$BASE_BRANCH"
+          --repository-name "$REPOSITORY_NAME"
+          --repository "$CANDIDATE_REPOSITORY"
+
+  process:
+    needs: [validate, pull_request]
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+    uses: ./.github/workflows/ard-process.yml
+    with:
+      branch: ${{ github.event.workflow_run.head_branch }}
+      product_key: ${{ needs.validate.outputs.product_key }}
+      pr_number: ${{ fromJSON(needs.pull_request.outputs.pr_number) }}
+      expected_head: ${{ needs.validate.outputs.expected_head }}
+      allow_writeback: true

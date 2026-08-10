@@ -1,0 +1,34 @@
+# {{ product.display_name }} semantics
+{% if product.instructions %}
+
+## Semantic source
+
+{{ product.instructions }}
+{% endif %}
+
+## Metrics
+{% for metric in metrics %}
+
+### {{ metric.name }}
+
+{{ metric.description or "" }}
+
+- Expression: `{{ metric.expression }}`
+{% if metric.synonyms -%}
+- Synonyms: {{ metric.synonyms | join(", ") }}
+{% endif -%}
+{% if metric.examples -%}
+- Examples: {{ metric.examples | join("; ") }}
+{% endif -%}
+{% endfor %}
+
+## Relationships
+{% for relationship in relationships %}
+
+### {{ relationship.name }}
+
+{{ relationship.description or "" }}
+
+- From: `{{ table_names[relationship.from_table_id] }}.{{ relationship.from_columns | join(",") }}`
+- To: `{{ table_names[relationship.to_table_id] }}.{{ relationship.to_columns | join(",") }}`
+{% endfor %}

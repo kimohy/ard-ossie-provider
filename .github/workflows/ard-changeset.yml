@@ -1,0 +1,118 @@
+name: ARD shared-table changeset coordinator
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Create a changeset or mark one product ready
+        required: true
+        type: choice
+        options: [create, ready]
+      changeset_id:
+        required: true
+        type: string
+      table_ids:
+        description: Comma-separated table IDs for create mode
+        required: false
+        type: string
+      product_ids:
+        description: Comma-separated product IDs for create mode
+        required: false
+        type: string
+      product_id:
+        required: false
+        type: string
+      version:
+        required: false
+        type: string
+      pr_number:
+        required: false
+        type: string
+      head_sha:
+        required: false
+        type: string
+      initiating_pr:
+        required: false
+        type: string
+
+concurrency:
+  group: ard-registry-write
+  cancel-in-progress: false
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANGESET_ID: ${{ inputs.changeset_id }}
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Create changeset coordination without initiating PR
+        id: create
+        if: inputs.mode == 'create' && inputs.initiating_pr == ''
+        env:
+          TABLE_IDS: ${{ inputs.table_ids }}
+          PRODUCT_IDS: ${{ inputs.product_ids }}
+        run: >-
+          uv run --frozen ard workflow changeset
+          --mode create
+          --changeset-id "$CHANGESET_ID"
+          --table-ids "$TABLE_IDS"
+          --product-ids "$PRODUCT_IDS"
+          --base-branch "$BASE_BRANCH"
+          --repository-name "$REPOSITORY_NAME"
+          --target-url "$TARGET_URL"
+      - name: Create changeset coordination with impact summary
+        id: create_with_pr
+        if: inputs.mode == 'create' && inputs.initiating_pr != ''
+        env:
+          TABLE_IDS: ${{ inputs.table_ids }}
+          PRODUCT_IDS: ${{ inputs.product_ids }}
+          INITIATING_PR: ${{ inputs.initiating_pr }}
+        run: >-
+          uv run --frozen ard workflow changeset
+          --mode create
+          --changeset-id "$CHANGESET_ID"
+          --table-ids "$TABLE_IDS"
+          --product-ids "$PRODUCT_IDS"
+          --initiating-pr "$INITIATING_PR"
+          --base-branch "$BASE_BRANCH"
+          --repository-name "$REPOSITORY_NAME"
+          --target-url "$TARGET_URL"
+      - name: Mark product changeset ready
+        id: ready
+        if: inputs.mode == 'ready'
+        env:
+          PRODUCT_ID: ${{ inputs.product_id }}
+          VERSION: ${{ inputs.version }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: >-
+          uv run --frozen ard workflow changeset
+          --mode ready
+          --changeset-id "$CHANGESET_ID"
+          --product-id "$PRODUCT_ID"
+          --version "$VERSION"
+          --pr-number "$PR_NUMBER"
+          --head-sha "$HEAD_SHA"
+          --base-branch "$BASE_BRANCH"
+          --repository-name "$REPOSITORY_NAME"
+          --target-url "$TARGET_URL"

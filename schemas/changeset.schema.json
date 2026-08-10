@@ -1,0 +1,72 @@
+{
+  "$defs": {
+    "ProductReadiness": {
+      "additionalProperties": false,
+      "properties": {
+        "head_sha": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "pr_number": {
+          "exclusiveMinimum": 0,
+          "title": "Pr Number",
+          "type": "integer"
+        },
+        "version": {
+          "maximum": 999,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "pr_number",
+        "head_sha"
+      ],
+      "title": "ProductReadiness",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "changeset_id": {
+      "pattern": "^cst_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "title": "Changeset Id",
+      "type": "string"
+    },
+    "ready_products": {
+      "patternProperties": {
+        "^prd_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$": {
+          "$ref": "#/$defs/ProductReadiness"
+        }
+      },
+      "title": "Ready Products",
+      "type": "object"
+    },
+    "required_product_ids": {
+      "items": {
+        "pattern": "^prd_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "title": "Required Product Ids",
+      "type": "array"
+    },
+    "table_ids": {
+      "items": {
+        "pattern": "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "title": "Table Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "changeset_id",
+    "table_ids",
+    "required_product_ids"
+  ],
+  "title": "ChangeSetRecord",
+  "type": "object"
+}

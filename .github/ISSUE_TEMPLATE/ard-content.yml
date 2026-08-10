@@ -1,0 +1,89 @@
+name: AI Ready Data submission
+description: Submit one public ARD product for validation and Ossie conversion
+title: "[ARD] "
+labels:
+  - ard:submission
+body:
+  - type: markdown
+    attributes:
+      value: |
+        모든 입력, 첨부파일, 생성 결과는 공개 저장소에 영구적으로 기록됩니다.
+        비밀정보, 개인정보, 접근 토큰을 첨부하지 마세요.
+  - type: checkboxes
+    id: public_acknowledgement
+    attributes:
+      label: Public content acknowledgement
+      options:
+        - label: I confirm that all submitted content may be published publicly.
+          required: true
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Operation
+      options:
+        - create
+        - update
+    validations:
+      required: true
+  - type: input
+    id: product_key
+    attributes:
+      label: Product key
+      description: Lowercase kebab-case identifier, for example sales-order
+    validations:
+      required: true
+  - type: input
+    id: product_id
+    attributes:
+      label: Existing product ID
+      description: Required for update; leave empty only for create
+  - type: input
+    id: version
+    attributes:
+      label: Requested version
+      description: Numeric version from 1 through 999, optionally prefixed with v
+    validations:
+      required: true
+  - type: input
+    id: display_name
+    attributes:
+      label: Display name
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+  - type: input
+    id: changeset_id
+    attributes:
+      label: Changeset ID
+      description: Required when updating a table shared by multiple products
+  - type: textarea
+    id: product_html
+    attributes:
+      label: Product HTML
+      description: Attach exactly one .html or .htm file; do not paste an external URL
+    validations:
+      required: true
+  - type: textarea
+    id: semantic_document
+    attributes:
+      label: Semantic document
+      description: Attach exactly one .docx or .pdf file; do not paste an external URL
+    validations:
+      required: true
+  - type: textarea
+    id: dictionary_excel
+    attributes:
+      label: Data dictionary
+      description: Attach exactly one .xlsx file; do not paste an external URL
+    validations:
+      required: true
+  - type: textarea
+    id: change_reason
+    attributes:
+      label: Change reason
+      description: Explain why this product/version should be created or changed
+    validations:
+      required: true

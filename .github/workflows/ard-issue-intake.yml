@@ -1,0 +1,138 @@
+name: ARD approved issue intake
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: ard-intake-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: github.event.label.name == 'ard:approved'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      allowed: ${{ steps.authorization.outputs.allowed }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      ACTOR: ${{ github.actor }}
+      LABEL: ${{ github.event.label.name }}
+    steps:
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Authorize approved issue label
+        id: authorization
+        run: >-
+          uv run --frozen ard workflow issue-authorize
+          --event "$GITHUB_EVENT_PATH"
+          --repository-name "$REPOSITORY_NAME"
+          --actor "$ACTOR"
+          --label "$LABEL"
+
+  intake:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+      statuses: write
+    outputs:
+      branch: ${{ steps.intake.outputs.branch }}
+      product_key: ${{ steps.intake.outputs.product_key }}
+      pr_number: ${{ steps.intake.outputs.pr_number }}
+      expected_head: ${{ steps.intake.outputs.expected_head }}
+      product_id: ${{ steps.intake.outputs.product_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARD_MAX_ATTACHMENT_BYTES: ${{ vars.ARD_MAX_ATTACHMENT_BYTES || '52428800' }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      ACTOR: ${{ github.actor }}
+    steps:
+      - name: Checkout the default branch with LFS
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          lfs: true
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Ingest approved issue
+        id: intake
+        run: >-
+          uv run --frozen ard workflow issue-intake
+          --event "$GITHUB_EVENT_PATH"
+          --repository-name "$REPOSITORY_NAME"
+          --actor "$ACTOR"
+
+  process:
+    needs: intake
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+    uses: ./.github/workflows/ard-process.yml
+    with:
+      branch: ${{ needs.intake.outputs.branch }}
+      product_key: ${{ needs.intake.outputs.product_key }}
+      pr_number: ${{ fromJSON(needs.intake.outputs.pr_number) }}
+      expected_head: ${{ needs.intake.outputs.expected_head }}
+      allow_writeback: true
+
+  finalize:
+    needs: [authorize, intake, process]
+    if: always() && needs.authorize.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_RESULT: ${{ needs.process.result }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout trusted finalizer code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Reconcile issue labels
+        id: finalizer
+        run: >-
+          uv run --frozen ard workflow finalize
+          --upstream-result "$UPSTREAM_RESULT"
+          --repository-name "$REPOSITORY_NAME"
+          --issue-number "$ISSUE_NUMBER"
+          --target-url "$TARGET_URL"

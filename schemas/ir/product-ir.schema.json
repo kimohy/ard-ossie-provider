@@ -1,0 +1,479 @@
+{
+  "$defs": {
+    "ColumnIR": {
+      "additionalProperties": false,
+      "properties": {
+        "column_id": {
+          "pattern": "^col_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Column Id",
+          "type": "string"
+        },
+        "data_type": {
+          "title": "Data Type",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "foreign_key": {
+          "anyOf": [{"type": "string"}, {"type": "null"}],
+          "default": null,
+          "title": "Foreign Key"
+        },
+        "formula": {
+          "anyOf": [{"type": "string"}, {"type": "null"}],
+          "default": null,
+          "title": "Formula"
+        },
+        "comment": {
+          "anyOf": [{"type": "string"}, {"type": "null"}],
+          "default": null,
+          "title": "Comment"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "logical_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logical Name"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "nullable": {
+          "title": "Nullable",
+          "type": "boolean"
+        },
+        "ordinal": {
+          "exclusiveMinimum": 0,
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "primary_key": {
+          "default": false,
+          "title": "Primary Key",
+          "type": "boolean"
+        },
+        "synonyms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Synonyms",
+          "type": "array"
+        },
+        "unique": {
+          "default": false,
+          "title": "Unique",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "column_id",
+        "ordinal",
+        "name",
+        "data_type",
+        "nullable",
+        "evidence"
+      ],
+      "title": "ColumnIR",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt"
+        },
+        "locator": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Locator",
+          "type": "object"
+        },
+        "role": {
+          "$ref": "#/$defs/SourceRole"
+        },
+        "source_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_hash",
+        "role",
+        "locator"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "MetricIR": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "dialect": {
+          "const": "ANSI_SQL",
+          "default": "ANSI_SQL",
+          "title": "Dialect",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "examples": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Examples",
+          "type": "array"
+        },
+        "expression": {
+          "title": "Expression",
+          "type": "string"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instructions"
+        },
+        "metric_id": {
+          "pattern": "^met_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Metric Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "synonyms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Synonyms",
+          "type": "array"
+        }
+      },
+      "required": [
+        "metric_id",
+        "name",
+        "expression",
+        "evidence"
+      ],
+      "title": "MetricIR",
+      "type": "object"
+    },
+    "RelationshipIR": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "from_columns": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "From Columns",
+          "type": "array"
+        },
+        "from_table_id": {
+          "pattern": "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "From Table Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "relationship_id": {
+          "pattern": "^rel_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Relationship Id",
+          "type": "string"
+        },
+        "to_columns": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "To Columns",
+          "type": "array"
+        },
+        "to_table_id": {
+          "pattern": "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "To Table Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relationship_id",
+        "name",
+        "from_table_id",
+        "to_table_id",
+        "from_columns",
+        "to_columns",
+        "evidence"
+      ],
+      "title": "RelationshipIR",
+      "type": "object"
+    },
+    "SourceRole": {
+      "enum": [
+        "product_html",
+        "semantic_document",
+        "dictionary_excel"
+      ],
+      "title": "SourceRole",
+      "type": "string"
+    },
+    "TableIR": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/ColumnIR"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        },
+        "dataset_name": {
+          "title": "Dataset Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "synonyms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Synonyms",
+          "type": "array"
+        },
+        "table_id": {
+          "pattern": "^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Table Id",
+          "type": "string"
+        },
+        "table_version": {
+          "maximum": 999,
+          "minimum": 1,
+          "title": "Table Version",
+          "type": "integer"
+        },
+        "unique_keys": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Unique Keys",
+          "type": "array"
+        }
+      },
+      "required": [
+        "table_id",
+        "table_version",
+        "dataset_name",
+        "source",
+        "columns"
+      ],
+      "title": "TableIR",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "examples": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Examples",
+      "type": "array"
+    },
+    "instructions": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instructions"
+    },
+    "product_document_markdown": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "default": null,
+      "title": "Product Document Markdown"
+    },
+    "metrics": {
+      "items": {
+        "$ref": "#/$defs/MetricIR"
+      },
+      "title": "Metrics",
+      "type": "array"
+    },
+    "product_id": {
+      "pattern": "^prd_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "title": "Product Id",
+      "type": "string"
+    },
+    "product_key": {
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "title": "Product Key",
+      "type": "string"
+    },
+    "relationships": {
+      "items": {
+        "$ref": "#/$defs/RelationshipIR"
+      },
+      "title": "Relationships",
+      "type": "array"
+    },
+    "source_hashes": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Source Hashes",
+      "type": "object"
+    },
+    "synonyms": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Synonyms",
+      "type": "array"
+    },
+    "tables": {
+      "items": {
+        "$ref": "#/$defs/TableIR"
+      },
+      "minItems": 1,
+      "title": "Tables",
+      "type": "array"
+    },
+    "version": {
+      "maximum": 999,
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "product_id",
+    "product_key",
+    "version",
+    "display_name",
+    "source_hashes",
+    "tables"
+  ],
+  "title": "ProductIR",
+  "type": "object"
+}

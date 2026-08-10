@@ -1,0 +1,145 @@
+name: ARD numeric release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - products/**
+      - registry/**
+
+concurrency:
+  group: ard-release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      products: ${{ steps.detect.outputs.products }}
+      tables: ${{ steps.detect.outputs.tables }}
+    env:
+      BEFORE: ${{ github.event.before }}
+      CURRENT: ${{ github.sha }}
+    steps:
+      - name: Checkout merged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Detect verified release targets
+        id: detect
+        run: >-
+          uv run --frozen ard workflow release-detect
+          --before "$BEFORE"
+          --current "$CURRENT"
+
+  release:
+    needs: detect
+    if: needs.detect.outputs.products != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        product_key: ${{ fromJSON(needs.detect.outputs.products) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCT_KEY: ${{ matrix.product_key }}
+      CURRENT: ${{ github.sha }}
+      TABLE_IDS: ${{ needs.detect.outputs.tables }}
+      REPOSITORY_NAME: ${{ github.repository }}
+    steps:
+      - name: Checkout merged commit, tags, and LFS assets
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          lfs: true
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Publish verified immutable product release
+        id: release_product
+        run: >-
+          uv run --frozen ard workflow release-product
+          --product-key "$PRODUCT_KEY"
+          --current "$CURRENT"
+          --table-ids "$TABLE_IDS"
+          --output dist
+          --repository-name "$REPOSITORY_NAME"
+      - name: Upload release result and public bundle
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ard-release-${{ matrix.product_key }}-${{ github.run_id }}
+          path: |
+            dist
+            .ard/run/workflow.release-product-result.json
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: error
+
+  linkage:
+    needs: [detect, release]
+    if: needs.detect.outputs.products != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        product_key: ${{ fromJSON(needs.detect.outputs.products) }}
+    runs-on: ubuntu-24.04
+    environment: production-linkage
+    permissions:
+      contents: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CURRENT: ${{ github.sha }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      RESULT_PATH: .ard/run/workflow.release-product-result.json
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout approved release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download exact product release result
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ard-release-${{ matrix.product_key }}-${{ github.run_id }}
+          path: .
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Dispatch approved downstream linkage
+        id: release_dispatch
+        run: >-
+          uv run --frozen ard workflow release-dispatch
+          --result-path "$RESULT_PATH"
+          --current "$CURRENT"
+          --repository-name "$REPOSITORY_NAME"
+          --target-url "$TARGET_URL"
