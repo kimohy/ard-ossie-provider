@@ -7,12 +7,14 @@
 | 항목 | 상태 |
 |---|---|
 | 최초 구현 PR | [PR #1](https://github.com/kimohy/ard-ossie-provider/pull/1), Draft, mergeable |
-| 검증 대상 head | `839076628426ff059e4c9defa3dd5dd610144d2c` |
-| bootstrap 검증 | [Actions run #2](https://github.com/kimohy/ard-ossie-provider/actions/runs/31395383040)에서 `static`, `pytest`, `wheel`, aggregate 모두 성공 |
-| 로컬 검증 기준 | Python 3.12에서 `317 passed`, Ruff, actionlint, sdist/wheel 및 통합 static verifier 성공 |
+| 검증 대상 head | 병합 검토를 시작할 때 PR API/UI에서 읽은 현재 `head_sha`; 문서에 고정하지 않음 |
+| bootstrap 검증 | 현재 `head_sha`와 같은 commit에 연결된 최신 run에서 `static`, `pytest`, `wheel`, aggregate가 모두 성공해야 함 |
+| 로컬 검증 기준 | 현재 head와 같은 tree에서 전체 pytest, Ruff, actionlint, sdist/wheel 및 통합 static verifier를 새로 실행 |
 | 아직 필요한 운영 설정 | Environments, LLM Secret/Variables, labels, `main` 보호 규칙, 최초 실데이터 acceptance |
 
 `ard-initial-bootstrap.yml`은 PR #1의 정확한 번호, 초기 base SHA와 head branch에만 작동하며 영구 required status인 `ard/quality-gate`, `ard/changeset`을 게시하지 않습니다. 따라서 PR #1 병합 전에 이 두 status를 branch protection의 필수 조건으로 설정하면 최초 PR이 스스로 조건을 만족할 수 없습니다. 최초 병합 직후 `main`의 trusted CLI로 repository bootstrap을 적용하고, 곧바로 정상 gate를 검증하는 정리 PR을 만드는 순서를 지켜야 합니다.
+
+병합 검토자는 PR을 조회해 현재 `head_sha`를 기록하고, 해당 SHA에 연결된 bootstrap run만 선택합니다. 네 job이 모두 성공한 뒤에도 병합 직전에 PR head를 다시 읽으며, SHA가 바뀌면 이전 run을 재사용하지 않고 처음부터 검토와 검증을 다시 수행합니다.
 
 ## 작업 순서 요약
 
@@ -38,7 +40,8 @@ P0는 하나의 변경 시간대에 연속 실행합니다. PR #1 병합과 bran
 - [ ] `ARD_LLM_MODEL`, `ARD_LLM_API_STYLE`, `ARD_LLM_BASE_URL`, `ARD_MAX_ATTACHMENT_BYTES` 값을 확정합니다.
 - [ ] bootstrap이 두 Environment의 required reviewer로 설정할 repository owner 계정을 확인합니다.
 - [ ] 실제 API 키는 GitHub Environment Secret에만 넣고 문서, shell history, commit, Issue, PR 본문에는 기록하지 않습니다.
-- [ ] PR #1의 head가 위 기준 SHA와 같고 bootstrap run #2의 네 job이 모두 성공인지 다시 확인합니다.
+- [ ] PR #1의 현재 `head_sha`를 읽고, 같은 SHA에 연결된 최신 bootstrap run의 네 job이 모두 성공인지 확인합니다.
+- [ ] 병합 직전에 `head_sha`를 다시 읽고 검토 시작 시점과 다르면 검토와 run 확인을 처음부터 다시 수행합니다.
 - [ ] PR diff에서 공개하면 안 되는 데이터, credential, 로컬 생성물과 불필요한 대용량 파일이 없는지 최종 검토합니다.
 
 완료 기준:
@@ -72,7 +75,7 @@ uv run ard github bootstrap --repo kimohy/ard-ossie-provider
 - [ ] apply 단계에서 `ARD_LLM_API_KEY`를 숨김 입력으로 제공합니다.
 - [ ] 두 번째 dry-run 또는 apply로 desired state가 no-op에 수렴하는지 확인합니다.
 - [ ] 다섯 labels와 두 Environments가 생성되고 repository owner가 required reviewer인지 확인합니다.
-- [ ] `ard-llm`은 `ard/*`, `main`만 허용하고 `production-linkage`는 `main`만 허용하는지 확인합니다.
+- [ ] `ard-llm`과 `production-linkage`가 모두 `main`만 deployment branch로 허용하는지 확인합니다.
 - [ ] provider Variables가 확정값과 일치하는지 확인합니다.
 - [ ] Actions 기본 권한이 read이고 workflow의 PR 생성이 허용됐는지 확인합니다.
 - [ ] `main`이 PR, 최신 base, conversation resolution과 `ard/quality-gate`, `ard/changeset`을 요구하는지 확인합니다.
@@ -129,7 +132,8 @@ uv run ard github enable-review-protection --repo kimohy/ard-ossie-provider
 ### 3. 직접 브랜치 업데이트로 `v2` 생성
 
 - [ ] 기존 제품의 `product_id`, `operation: update`, 현재 `base_version`, 정확히 `+1`인 버전을 사용합니다.
-- [ ] 하나의 제품 source만 변경한 same-repository branch에서 자동 Draft PR 생성/재사용을 확인합니다.
+- [ ] 하나의 제품 source만 변경한 same-repository branch에서 read-only signal이 실행되고, 기본 브랜치의 `workflow_run` coordinator가 자동 Draft PR을 생성/재사용하는지 확인합니다.
+- [ ] coordinator와 processor가 `trusted/`의 기본 브랜치 CLI만 실행하고 exact candidate는 `--repository candidate/` 데이터로만 읽는지 확인합니다.
 - [ ] 내용이 바뀌지 않은 테이블은 버전을 유지하고 실제 변경된 제품/테이블만 `v2`가 되는지 확인합니다.
 - [ ] `ard history`, `ard diff`, Registry current version, release tag와 Git history가 같은 변화를 설명하는지 확인합니다.
 - [ ] stale base, 건너뛴 버전과 fork writeback이 fail-closed인지 별도 거부 테스트로 확인합니다.

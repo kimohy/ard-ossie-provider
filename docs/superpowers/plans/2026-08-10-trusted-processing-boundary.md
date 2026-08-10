@@ -177,45 +177,45 @@ git commit -m "fix: require immutable issue attachments"
 **Files:**
 - Modify: `docs/next-steps.md`
 - Modify: `docs/github-actions-setup.md`
-- Modify: `tests/integration/test_workflow_contracts.py`
 - Modify: PR #1 description after push
 
 **Interfaces:**
 - Consumes: live PR `head_sha` and workflow runs associated with that exact commit.
 - Produces: a merge checklist that cannot become stale merely because documentation is committed.
 
-- [ ] **Step 1: Add a failing documentation contract**
-
-Add a test to `tests/integration/test_workflow_contracts.py` that reads `docs/next-steps.md` and asserts the historical PR head and run #2 URL are absent, while `head_sha`, same-head workflow selection, and head-change restart language are present.
-
-- [ ] **Step 2: Run the documentation contract and verify RED**
+- [ ] **Step 1: Confirm the stale documentation evidence**
 
 Run:
 
 ```bash
-UV_CACHE_DIR=/tmp/ard-uv-cache uv run --frozen pytest -q tests/integration/test_workflow_contracts.py
+rg -n "검증 대상 head|bootstrap 검증|run #2|ard/\\*" docs/next-steps.md docs/github-actions-setup.md
 ```
 
-Expected: the current roadmap still embeds `8390766...` and run #2, so the new contract fails.
+Expected before editing: the roadmap contains a fixed historical head/run and the setup guide allows `ard/*` into the protected Environment.
 
-- [ ] **Step 3: Replace fixed checkpoints with live checks**
+- [ ] **Step 2: Replace fixed checkpoints with live checks**
 
 Update both documents to require reading the current PR head, selecting the latest bootstrap run with matching `head_sha`, requiring all four jobs to succeed, and restarting review if the head moves. Document the read-only signal/default-branch coordinator and `ard-llm` main-only policy. Remove statements that same-repository candidate branches enter the protected Environment directly.
 
-- [ ] **Step 4: Run the focused documentation/workflow contract for GREEN**
+- [ ] **Step 3: Verify the documentation invariant**
 
-Run the command from Step 2 and `git diff --check`.
-
-Expected: contract passes and no whitespace errors are reported.
-
-- [ ] **Step 5: Commit documentation and contracts**
+Run:
 
 ```bash
-git add docs/next-steps.md docs/github-actions-setup.md tests/integration/test_workflow_contracts.py
+rg -n "head_sha|같은 SHA|처음부터 다시" docs/next-steps.md docs/github-actions-setup.md
+git diff --check
+```
+
+Expected: live same-head/restart instructions are present and no whitespace errors are reported. Human-facing prose is not protected by a source-text unit test.
+
+- [ ] **Step 4: Commit documentation**
+
+```bash
+git add docs/next-steps.md docs/github-actions-setup.md docs/superpowers/plans/2026-08-10-trusted-processing-boundary.md
 git commit -m "docs: make bootstrap review head-aware"
 ```
 
-- [ ] **Step 6: Run complete local verification**
+- [ ] **Step 5: Run complete local verification**
 
 Run in a disposable clone pinned to the final commit tree:
 
@@ -229,10 +229,10 @@ UV_CACHE_DIR=/tmp/ard-uv-cache uv run --frozen ard workflow repository-check --b
 
 Expected: zero failures; the test count is recorded from fresh output rather than copied from an older run.
 
-- [ ] **Step 7: Push without force and verify GitHub Actions**
+- [ ] **Step 6: Push without force and verify GitHub Actions**
 
 Confirm PR #1 still has the expected old head, create equivalent Git data objects for the local commits, compare each remote tree to the local tree, and move the PR branch with `force=false`. Wait for the new bootstrap run and require `static`, `pytest`, `wheel`, and aggregate to succeed.
 
-- [ ] **Step 8: Update PR #1 description and perform a fresh review**
+- [ ] **Step 7: Update PR #1 description and perform a fresh review**
 
 Replace historical checkpoint language with the new live head/run and summarize the trust-boundary and attachment changes. Re-fetch PR metadata, reviews, threads, diff, and same-head workflow conclusion. Review the final diff against the design invariants. If no Critical/High/Medium issue remains, report merge readiness; do not merge unless the user separately asks after this review.

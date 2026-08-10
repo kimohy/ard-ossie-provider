@@ -48,7 +48,7 @@ Repository 또는 `ard-llm` Environment Variables:
 - `ARD_LLM_API_STYLE` — `chat_completions`
 - `ARD_MAX_ATTACHMENT_BYTES` — 파일 하나의 최대 byte; 기본값 `52428800`
 
-변경 경로 검사를 통과한 same-repository 브랜치만 `ard-llm` 환경 승인을 요청합니다. workflow는 API 키를 승인 전 Issue job, fork PR, artifact, commit 또는 PR 코멘트에 전달하지 않습니다. Secret 값은 public ARD 문서에 절대로 포함하면 안 됩니다.
+`ard-llm`과 `production-linkage`의 deployment branch는 모두 `main`만 허용합니다. direct branch의 push workflow는 `contents: read` signal만 남기고, 기본 브랜치에서 로드되는 `workflow_run` coordinator가 exact candidate를 검증한 뒤 보호된 processor를 호출합니다. processor는 `trusted/`의 기본 브랜치 CLI만 실행하고 candidate checkout은 `--repository`로 지정한 데이터와 Git state로만 사용합니다. API 키는 credential-free validation job, fork PR, artifact, commit 또는 PR 코멘트에 전달하지 않습니다. Secret 값은 public ARD 문서에 절대로 포함하면 안 됩니다.
 
 ## 3. Labels
 
@@ -105,11 +105,13 @@ bootstrap에는 Secret, status/PR 쓰기 권한, persisted checkout credential�
 
 최초 운영 전환은 다음 순서로 진행합니다.
 
-1. PR #1의 정확한 head에서 bootstrap matrix와 aggregate가 모두 성공했는지 확인합니다.
+1. PR #1의 현재 `head_sha`를 읽고, 같은 SHA에 연결된 최신 bootstrap run에서 matrix와 aggregate가 모두 성공했는지 확인합니다.
 2. 영구 required status는 아직 branch protection에 추가하지 않은 상태로 PR #1을 병합합니다.
 3. 다른 변경을 받지 않고 즉시 새 `main`에서 `ard github bootstrap --dry-run`과 apply를 실행합니다.
 4. bootstrap이 no-op에 수렴하고 두 required status가 branch protection에 설정됐는지 확인합니다.
 5. 후속 정리 PR에서 일회성 workflow를 삭제하고 영구 repository gate가 두 status를 게시하는지 검증합니다.
+
+1단계 검토가 끝난 뒤 병합 직전에 PR head를 다시 읽습니다. SHA가 바뀌었으면 이전 run을 근거로 병합하지 않고 새 head의 검토와 bootstrap run 확인을 처음부터 다시 수행합니다.
 
 PR #1 병합 전에 `ard/quality-gate`와 `ard/changeset`을 필수로 만들면, 일회성 bootstrap은
 의도적으로 이 이름의 status를 게시하지 않기 때문에 최초 PR이 교착됩니다. admin bypass로
@@ -121,7 +123,7 @@ PR #1 병합 전에 `ard/quality-gate`와 `ard/changeset`을 필수로 만들면
 `Settings → Environments`에서 `production-linkage` 환경도 생성합니다.
 
 - required reviewers를 지정합니다.
-- 가능하면 `main` branch만 deployment branch로 허용합니다.
+- `main` branch만 deployment branch로 허용합니다.
 
 제품/테이블 태그와 GitHub Release가 만들어진 뒤 이 환경의 승인을 받아야 `ard_product_released` repository dispatch가 발행됩니다. payload에는 product ID, 숫자 버전, tag, merged commit과 artifact SHA-256만 포함합니다.
 
@@ -137,7 +139,7 @@ downstream은 `(product_id, version, tag, commit)`을 중복 제거 키로 사�
 5. 변환 결과와 보고서를 검토하고 누락 경고를 보완합니다.
 6. hard error가 0이고 두 required status가 성공한 뒤 병합합니다.
 
-Issue 첨부에는 외부 URL을 쓰지 않습니다. GitHub Issue에 직접 업로드된 파일만 허용됩니다.
+Issue 첨부에는 외부 URL을 쓰지 않습니다. 최초 링크는 정확히 `https://github.com/user-attachments/assets/<UUID>` 형태의 GitHub Issue 직접 업로드만 허용됩니다. raw branch, repository raw route, avatar, 임의 `*.githubusercontent.com`과 asset storage 직접 링크는 거부합니다. 다운로드 redirect는 검증된 GitHub asset storage host만 허용하고 매 hop을 다시 검사합니다.
 
 ## 7. Shared table changeset
 
