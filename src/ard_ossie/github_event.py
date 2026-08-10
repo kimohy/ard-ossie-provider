@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urljoin, urlsplit
+from uuid import UUID
 
 import httpx
 import yaml
@@ -77,6 +78,13 @@ class IntakeManifest(StrictModel):
 _APPROVER_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _HEADING_PATTERN = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
 _MARKDOWN_LINK_PATTERN = re.compile(r"^\s*\[([^\]]+)\]\((https://[^\s)]+)\)\s*$")
+_USER_ATTACHMENT_PATH = re.compile(
+    r"^/user-attachments/assets/"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+)
+_ASSET_STORAGE_HOST = re.compile(
+    r"^github-production-user-asset-[a-z0-9-]+\.s3\.amazonaws\.com$"
+)
 _FIELD_NAMES = {
     "Operation": "operation",
     "Product key": "product_key",
@@ -100,7 +108,31 @@ def authorize_label(permission: str, label: str) -> AuthorizationDecision:
     return AuthorizationDecision(allowed=True, code="AUTHORIZED")
 
 
-def validate_attachment_url(url: str, *, allow_query: bool = False) -> str:
+def validate_attachment_url(url: str) -> str:
+    parsed = _validate_attachment_transport(url, allow_query=False)
+    host = (parsed.hostname or "").lower()
+    if host != "github.com":
+        raise AttachmentSecurityError(f"UNTRUSTED_ATTACHMENT_HOST: {host}")
+    _validate_user_attachment_path(parsed.path)
+    return url
+
+
+def _validate_attachment_redirect_url(url: str) -> str:
+    parsed = _validate_attachment_transport(url, allow_query=True)
+    host = (parsed.hostname or "").lower()
+    if host == "github.com":
+        if parsed.query:
+            raise AttachmentSecurityError("ATTACHMENT_QUERY_FORBIDDEN")
+        _validate_user_attachment_path(parsed.path)
+        return url
+    if host == "objects.githubusercontent.com" or _ASSET_STORAGE_HOST.fullmatch(host):
+        if not parsed.path or parsed.path == "/":
+            raise AttachmentSecurityError("ATTACHMENT_PATH_FORBIDDEN")
+        return url
+    raise AttachmentSecurityError(f"UNTRUSTED_ATTACHMENT_HOST: {host}")
+
+
+def _validate_attachment_transport(url: str, *, allow_query: bool):
     parsed = urlsplit(url)
     if parsed.scheme.lower() != "https":
         raise AttachmentSecurityError("ATTACHMENT_HTTPS_REQUIRED")
@@ -110,15 +142,20 @@ def validate_attachment_url(url: str, *, allow_query: bool = False) -> str:
         raise AttachmentSecurityError("ATTACHMENT_QUERY_FORBIDDEN")
     if parsed.port not in (None, 443):
         raise AttachmentSecurityError("ATTACHMENT_PORT_FORBIDDEN")
-    host = (parsed.hostname or "").lower()
-    trusted = (
-        host == "github.com"
-        or host.endswith(".githubusercontent.com")
-        or bool(re.fullmatch(r"github-production-user-asset-[a-z0-9-]+\.s3\.amazonaws\.com", host))
-    )
-    if not trusted:
-        raise AttachmentSecurityError(f"UNTRUSTED_ATTACHMENT_HOST: {host}")
-    return url
+    return parsed
+
+
+def _validate_user_attachment_path(path: str) -> None:
+    match = _USER_ATTACHMENT_PATH.fullmatch(path)
+    if match is None:
+        raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH")
+    value = match.group(1)
+    try:
+        parsed = UUID(value)
+    except ValueError as error:
+        raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH") from error
+    if str(parsed) != value:
+        raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH")
 
 
 def parse_issue_body(body: str) -> IssueIntake:
@@ -192,8 +229,8 @@ def download_attachment(
                     location = response.headers.get("location")
                     if not location:
                         raise AttachmentSecurityError("ATTACHMENT_REDIRECT_WITHOUT_LOCATION")
-                    current_url = validate_attachment_url(
-                        urljoin(current_url, location), allow_query=True
+                    current_url = _validate_attachment_redirect_url(
+                        urljoin(current_url, location)
                     )
                     continue
                 response.raise_for_status()

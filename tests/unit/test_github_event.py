@@ -21,6 +21,11 @@ from ard_ossie.github_event import (
     validate_attachment_url,
 )
 
+ATTACHMENT_URL = (
+    "https://github.com/user-attachments/assets/"
+    "11111111-1111-1111-1111-111111111111"
+)
+
 
 def issue_body() -> str:
     return """### Operation
@@ -73,13 +78,29 @@ def test_attachment_rejects_non_github_host() -> None:
         validate_attachment_url("https://example.org/dictionary.xlsx")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://raw.githubusercontent.com/acme/repo/main/product.html",
+        "https://github.com/acme/repo/raw/main/dictionary.xlsx",
+        "https://avatars.githubusercontent.com/u/1",
+        "https://objects.githubusercontent.com/download/1",
+        "https://objects.githubusercontent.com/download/1?signature=value",
+        "https://github.com/user-attachments/assets/not-a-uuid",
+    ],
+)
+def test_initial_attachment_requires_canonical_immutable_github_upload(url: str) -> None:
+    with pytest.raises(AttachmentSecurityError):
+        validate_attachment_url(url)
+
+
 def test_attachment_rejects_http_and_credentialed_url() -> None:
     with pytest.raises(AttachmentSecurityError, match="ATTACHMENT_HTTPS_REQUIRED"):
-        validate_attachment_url("http://github.com/user-attachments/assets/1")
+        validate_attachment_url(ATTACHMENT_URL.replace("https://", "http://"))
     with pytest.raises(AttachmentSecurityError, match="ATTACHMENT_CREDENTIALS_FORBIDDEN"):
-        validate_attachment_url("https://user:pass@github.com/user-attachments/assets/1")
+        validate_attachment_url(ATTACHMENT_URL.replace("https://", "https://user:pass@"))
     with pytest.raises(AttachmentSecurityError, match="ATTACHMENT_QUERY_FORBIDDEN"):
-        validate_attachment_url("https://github.com/user-attachments/assets/1?token=secret")
+        validate_attachment_url(f"{ATTACHMENT_URL}?token=secret")
 
 
 def test_issue_form_requires_one_product_and_three_source_roles() -> None:
@@ -127,7 +148,7 @@ def test_download_validates_every_redirect_host(tmp_path) -> None:
     attachment = IntakeAttachment(
         role="dictionary_excel",
         filename="dictionary.xlsx",
-        url="https://github.com/user-attachments/assets/1",
+        url=ATTACHMENT_URL,
     )
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
@@ -150,7 +171,7 @@ def test_download_rejects_declared_size_before_writing(tmp_path) -> None:
     attachment = IntakeAttachment(
         role="dictionary_excel",
         filename="dictionary.xlsx",
-        url="https://github.com/user-attachments/assets/1",
+        url=ATTACHMENT_URL,
     )
     target = tmp_path / "dictionary.xlsx"
     with (
@@ -161,7 +182,20 @@ def test_download_rejects_declared_size_before_writing(tmp_path) -> None:
     assert not target.exists()
 
 
-def test_download_allows_signed_query_only_after_trusted_redirect(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://objects.githubusercontent.com/download/1?signature=value",
+        (
+            "https://github-production-user-asset-6210df.s3.amazonaws.com/"
+            "asset.xlsx?X-Amz-Signature=value"
+        ),
+    ],
+)
+def test_download_allows_signed_query_only_after_trusted_redirect(
+    tmp_path,
+    location: str,
+) -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("[Content_Types].xml", "types")
@@ -169,12 +203,7 @@ def test_download_allows_signed_query_only_after_trusted_redirect(tmp_path) -> N
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "github.com":
-            return httpx.Response(
-                302,
-                headers={
-                    "location": "https://objects.githubusercontent.com/download/1?signature=value"
-                },
-            )
+            return httpx.Response(302, headers={"location": location})
         return httpx.Response(
             200,
             headers={"content-type": "application/octet-stream"},
@@ -184,7 +213,7 @@ def test_download_allows_signed_query_only_after_trusted_redirect(tmp_path) -> N
     attachment = IntakeAttachment(
         role="dictionary_excel",
         filename="dictionary.xlsx",
-        url="https://github.com/user-attachments/assets/1",
+        url=ATTACHMENT_URL,
     )
     target = tmp_path / "dictionary.xlsx"
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -192,6 +221,35 @@ def test_download_allows_signed_query_only_after_trusted_redirect(tmp_path) -> N
 
     assert result.size_bytes == len(buffer.getvalue())
     assert target.is_file()
+
+
+def test_download_rejects_mutable_github_redirect(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "github.com":
+            return httpx.Response(
+                302,
+                headers={
+                    "location": (
+                        "https://raw.githubusercontent.com/acme/repo/main/dictionary.xlsx"
+                    )
+                },
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=b"PK\x03\x04",
+        )
+
+    attachment = IntakeAttachment(
+        role="dictionary_excel",
+        filename="dictionary.xlsx",
+        url=ATTACHMENT_URL,
+    )
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(AttachmentSecurityError, match="UNTRUSTED_ATTACHMENT_HOST"),
+    ):
+        download_attachment(attachment, tmp_path / "dictionary.xlsx", client=client)
 
 
 def test_update_preserves_table_config_and_replaces_old_role_extensions(
