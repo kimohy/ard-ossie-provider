@@ -106,7 +106,7 @@ bootstrap을 적용해 다음 운영 계약을 구성했습니다.
 
 PR #1만 검증하던 일회성 `ard-initial-bootstrap.yml`은 운영 전환 뒤 제거했습니다. 이후
 코드·workflow·문서 PR은 기본 브랜치의 `ARD repository change gate`만 사용하며, trusted
-finalizer가 정확한 PR head에 두 required status를 게시합니다. 상세 후속 acceptance는
+finalizer가 정확한 PR head에 두 required status를 게시합니다. P1 이후의 후속 acceptance는
 [다음 작업 로드맵](next-steps.md)을 따릅니다.
 
 ## 5. 승인 환경

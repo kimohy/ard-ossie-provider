@@ -1,110 +1,45 @@
 # ARD Ossie 다음 작업 로드맵
 
-이 문서는 최초 구현 PR 이후 ARD Ossie를 실제 운영 상태로 전환하기 위한 작업 순서와 완료 기준을 정리합니다. 항목은 의존성 순서대로 실행하며, 각 단계의 증거를 남긴 뒤 다음 단계로 이동합니다.
+이 문서는 ARD Ossie의 운영 전환 기록과 이후 acceptance 작업 순서를 정리합니다. 완료된 P0는 감사 기록으로 유지하고, P1부터는 의존성 순서대로 실행하며 각 단계의 증거를 남긴 뒤 다음 단계로 이동합니다.
 
 ## 현재 기준점
 
 | 항목 | 상태 |
 |---|---|
-| 최초 구현 PR | [PR #1](https://github.com/kimohy/ard-ossie-provider/pull/1), Draft, mergeable |
-| 검증 대상 head | 병합 검토를 시작할 때 PR API/UI에서 읽은 현재 `head_sha`; 문서에 고정하지 않음 |
-| bootstrap 검증 | 현재 `head_sha`와 같은 commit에 연결된 최신 run에서 `static`, `pytest`, `wheel`, aggregate가 모두 성공해야 함 |
-| 로컬 검증 기준 | 현재 head와 같은 tree에서 전체 pytest, Ruff, actionlint, sdist/wheel 및 통합 static verifier를 새로 실행 |
-| 아직 필요한 운영 설정 | Environments, LLM Secret/Variables, labels, `main` 보호 규칙, 최초 실데이터 acceptance |
+| 최초 구현 PR | [PR #1](https://github.com/kimohy/ard-ossie-provider/pull/1), 2026-08-11 병합, merge commit `d6603bd941523eff3de145361368e28df74347d3` |
+| bootstrap 검증 | PR #1의 검토 대상 head `c6812b3dddcd2c79556514cecbee153732d41f34`에서 run #4의 `static`, `pytest`, `wheel`, aggregate 성공 |
+| 운영 설정 | labels, 두 Environments, LLM Secret/Variables, Actions 권한과 `main` 보호 규칙 적용·read-back 검증 완료 |
+| 영구 gate 전환 | [정리 PR #2](https://github.com/kimohy/ard-ossie-provider/pull/2)에서 일회성 workflow를 제거하고 같은 head의 `ard/quality-gate`, `ard/changeset` 성공 후 병합 |
+| 다음 작업 | P1 Issue 기반 합성 데이터 acceptance |
 
-`ard-initial-bootstrap.yml`은 PR #1의 정확한 번호, 초기 base SHA와 head branch에만 작동하며 영구 required status인 `ard/quality-gate`, `ard/changeset`을 게시하지 않습니다. 따라서 PR #1 병합 전에 이 두 status를 branch protection의 필수 조건으로 설정하면 최초 PR이 스스로 조건을 만족할 수 없습니다. 최초 병합 직후 `main`의 trusted CLI로 repository bootstrap을 적용하고, 곧바로 정상 gate를 검증하는 정리 PR을 만드는 순서를 지켜야 합니다.
-
-병합 검토자는 PR을 조회해 현재 `head_sha`를 기록하고, 해당 SHA에 연결된 bootstrap run만 선택합니다. 네 job이 모두 성공한 뒤에도 병합 직전에 PR head를 다시 읽으며, SHA가 바뀌면 이전 run을 재사용하지 않고 처음부터 검토와 검증을 다시 수행합니다.
+`ard-initial-bootstrap.yml`은 영구 required status가 아직 없던 PR #1만 검증하기 위한 일회성 workflow였습니다. PR #1 병합 뒤 운영 설정과 정상 gate를 검증한 [정리 PR #2](https://github.com/kimohy/ard-ossie-provider/pull/2)에서 제거했으므로, 현재 운영자가 이 workflow를 다시 실행하거나 복원해서는 안 됩니다. 이후 모든 검증은 기본 브랜치의 영구 `ARD repository change gate`를 사용합니다.
 
 ## 작업 순서 요약
 
-| 우선순위 | 작업 | 선행조건 | 완료 증거 |
-|---|---|---|---|
-| P0 | PR #1 최종 검토와 최초 병합 | bootstrap run 성공 | PR merge commit SHA |
-| P0 | 저장소 운영 설정 bootstrap | PR #1 병합 | CLI convergence 결과와 GitHub 설정 화면 |
-| P0 | 일회성 bootstrap workflow 제거 | 영구 branch protection 적용 | 정리 PR의 두 required status 성공 |
-| P1 | Issue 기반 신규 제품 E2E | LLM Environment 설정 | 생성 PR, 품질 보고서, 두 status 성공 |
-| P1 | 병합·릴리스·후속 연계 E2E | 신규 제품 PR 승인 | tag, GitHub Release, artifact hash, dispatch 기록 |
-| P1 | 직접 브랜치 업데이트 E2E | 최초 제품 `v1` 릴리스 | 정확한 `v2`, diff/history 및 새 release |
-| P2 | shared-table changeset E2E | 서로 같은 테이블을 쓰는 제품 2개 | readiness, 병합 순서, 제품·테이블 버전 증거 |
-| P2 | review 보호와 운영 runbook | 비소유자 writer 확보 | 1인 승인 보호와 재시도/복구 리허설 기록 |
-| P3 | 후속 기능·유지보수 backlog | 운영 E2E 안정화 | 각 기능별 별도 spec/PR |
+| 우선순위 | 상태 | 작업 | 선행조건 | 완료 증거 |
+|---|---|---|---|---|
+| P0 | 완료 | PR #1 최종 검토와 최초 병합 | bootstrap run 성공 | merge commit `d6603bd941523eff3de145361368e28df74347d3` |
+| P0 | 완료 | 저장소 운영 설정 bootstrap | PR #1 병합 | desired state read-back 결과와 GitHub 설정 화면 |
+| P0 | 완료 | 일회성 bootstrap workflow 제거 | 영구 branch protection 적용 | [정리 PR #2](https://github.com/kimohy/ard-ossie-provider/pull/2)의 두 required status 성공 |
+| P1 | 대기 | Issue 기반 신규 제품 E2E | LLM Environment 설정 | 생성 PR, 품질 보고서, 두 status 성공 |
+| P1 | 대기 | 병합·릴리스·후속 연계 E2E | 신규 제품 PR 승인 | tag, GitHub Release, artifact hash, dispatch 기록 |
+| P1 | 대기 | 직접 브랜치 업데이트 E2E | 최초 제품 `v1` 릴리스 | 정확한 `v2`, diff/history 및 새 release |
+| P2 | 대기 | shared-table changeset E2E | 서로 같은 테이블을 쓰는 제품 2개 | readiness, 병합 순서, 제품·테이블 버전 증거 |
+| P2 | 대기 | review 보호와 운영 runbook | 비소유자 writer 확보 | 1인 승인 보호와 재시도/복구 리허설 기록 |
+| P3 | 대기 | 후속 기능·유지보수 backlog | 운영 E2E 안정화 | 각 기능별 별도 spec/PR |
 
-## P0. 최초 운영 전환
+## P0. 최초 운영 전환 완료 기록
 
-P0는 하나의 변경 시간대에 연속 실행합니다. PR #1 병합과 branch protection 적용 사이에는 보호 공백이 생기므로 다른 변경을 받지 않습니다.
+P0는 2026-08-11에 연속 실행했습니다. PR #1의 정확한 head에서 bootstrap 네 job을 확인한 뒤 병합했고, 이어서 다음 desired state를 적용하고 GitHub UI/API read-back으로 검증했습니다.
 
-### 1. 병합 전 준비
+- `ard:submission`, `ard:approved`, `ard:processing`, `ard:failed`, `ard:pr-created` labels가 있습니다.
+- `ard-llm`과 `production-linkage`는 repository owner 승인을 요구하고 `main`만 deployment branch로 허용합니다.
+- `ard-llm`에는 `ARD_LLM_API_KEY` Environment Secret과 `ARD_LLM_BASE_URL`, `ARD_LLM_MODEL`, `ARD_LLM_API_STYLE`, `ARD_MAX_ATTACHMENT_BYTES` Variables가 있습니다. Secret 값은 읽거나 교체하거나 기록하지 않았습니다.
+- Actions 기본 권한은 read이며 workflow의 pull request 생성을 허용합니다.
+- `main`은 pull request, 최신 base, conversation resolution, `ard/quality-gate`, `ard/changeset`을 요구합니다. 관리자 우회, force push와 삭제는 허용하지 않으며, 비소유자 writer가 없으므로 required approvals는 0입니다.
+- 정리 PR #2에서 일회성 workflow와 해당 테스트 계약을 제거하고 운영 문서를 갱신했습니다. 영구 gate의 `static`, `pytest`, `wheel`과 aggregate가 성공하고 trusted finalizer가 같은 PR head에 두 required status를 게시한 뒤 병합했습니다.
 
-- [ ] 저장소 admin 권한으로 인증된 `gh`, Python 3.12, `uv`, Git LFS를 준비합니다.
-- [ ] `ARD_LLM_MODEL`, `ARD_LLM_API_STYLE`, `ARD_LLM_BASE_URL`, `ARD_MAX_ATTACHMENT_BYTES` 값을 확정합니다.
-- [ ] bootstrap이 두 Environment의 required reviewer로 설정할 repository owner 계정을 확인합니다.
-- [ ] 실제 API 키는 GitHub Environment Secret에만 넣고 문서, shell history, commit, Issue, PR 본문에는 기록하지 않습니다.
-- [ ] PR #1의 현재 `head_sha`를 읽고, 같은 SHA에 연결된 최신 bootstrap run의 네 job이 모두 성공인지 확인합니다.
-- [ ] 병합 직전에 `head_sha`를 다시 읽고 검토 시작 시점과 다르면 검토와 run 확인을 처음부터 다시 수행합니다.
-- [ ] PR diff에서 공개하면 안 되는 데이터, credential, 로컬 생성물과 불필요한 대용량 파일이 없는지 최종 검토합니다.
-
-완료 기준:
-
-- PR #1을 Ready로 바꿀 수 있는 검토가 끝났고, repository bootstrap 실행에 필요한 admin 환경과 비밀값이 준비되어 있습니다.
-
-### 2. PR #1 병합
-
-- [ ] PR #1을 Ready for review로 전환합니다.
-- [ ] 승인된 merge 방식을 사용해 PR #1을 `main`에 병합합니다.
-- [ ] merge commit SHA와 병합 시각을 운영 기록에 남깁니다.
-
-중단 조건:
-
-- head SHA가 바뀌었거나 bootstrap check가 재실행 중/실패 상태이면 병합하지 않습니다.
-- 영구 required status가 이미 활성화되어 PR #1을 막고 있으면 admin bypass로 우회하지 말고 해당 보호 설정을 제거한 뒤 bootstrap gate를 다시 확인합니다.
-
-### 3. 저장소 bootstrap 적용
-
-병합 직후 깨끗한 `main` checkout에서 다음을 실행합니다.
-
-```bash
-git switch main
-git pull --ff-only
-uv sync --frozen
-uv run ard github bootstrap --repo kimohy/ard-ossie-provider --dry-run
-uv run ard github bootstrap --repo kimohy/ard-ossie-provider
-```
-
-- [ ] dry-run의 대상 저장소와 변경 계획이 정확한지 확인합니다.
-- [ ] apply 단계에서 `ARD_LLM_API_KEY`를 숨김 입력으로 제공합니다.
-- [ ] 두 번째 dry-run 또는 apply로 desired state가 no-op에 수렴하는지 확인합니다.
-- [ ] 다섯 labels와 두 Environments가 생성되고 repository owner가 required reviewer인지 확인합니다.
-- [ ] `ard-llm`과 `production-linkage`가 모두 `main`만 deployment branch로 허용하는지 확인합니다.
-- [ ] provider Variables가 확정값과 일치하는지 확인합니다.
-- [ ] Actions 기본 권한이 read이고 workflow의 PR 생성이 허용됐는지 확인합니다.
-- [ ] `main`이 PR, 최신 base, conversation resolution과 `ard/quality-gate`, `ard/changeset`을 요구하는지 확인합니다.
-
-비소유자 writer가 아직 없으면 required review 수는 0으로 유지합니다. writer가 준비된 뒤에만 다음을 실행합니다.
-
-```bash
-uv run ard github enable-review-protection --repo kimohy/ard-ossie-provider
-```
-
-완료 기준:
-
-- bootstrap이 no-op에 수렴하고, Secret 값이 CLI 결과·Git diff·Actions log에 나타나지 않으며, `main` 보호 설정이 적용되어 있습니다.
-
-### 4. 일회성 bootstrap 제거와 영구 gate 검증
-
-후속 정리 PR에서 다음 변경을 함께 수행합니다.
-
-- [ ] `.github/workflows/ard-initial-bootstrap.yml`을 삭제합니다.
-- [ ] `tests/integration/test_workflow_contracts.py`에서 일회성 workflow 계약만 제거합니다.
-- [ ] `docs/github-actions-setup.md`의 최초 설치 설명을 운영 완료 상태로 갱신합니다.
-- [ ] PR #1 본문 또는 운영 기록에 최종 bootstrap 적용 결과를 연결합니다.
-- [ ] 정상 `ARD repository change gate`가 `static`, `pytest`, `wheel`을 성공시키는지 확인합니다.
-- [ ] trusted finalizer가 동일 head에 `ard/quality-gate=success`, `ard/changeset=success`를 게시하는지 확인합니다.
-- [ ] 두 required status를 만족한 상태에서만 정리 PR을 병합합니다.
-
-완료 기준:
-
-- 일회성 workflow가 기본 브랜치에서 제거되고, 영구 gate만으로 코드·workflow·문서 PR이 보호됩니다.
+자세한 repository 설정과 재검증 절차는 [GitHub Actions 설정](github-actions-setup.md)을 따릅니다. required review 수는 비소유자 writer가 준비된 뒤 `ard github enable-review-protection`으로만 활성화합니다.
 
 ## P1. 핵심 운영 경로 acceptance
 
@@ -178,8 +113,8 @@ P2 완료 기준:
 
 ARD Ossie의 최초 운영 전환은 다음 조건을 모두 만족할 때 완료로 판단합니다.
 
-- [ ] PR #1이 병합되고 일회성 bootstrap workflow가 후속 PR에서 제거되었습니다.
-- [ ] repository bootstrap이 no-op에 수렴하며 영구 required status 두 개가 정상 gate에서 게시됩니다.
+- [x] PR #1이 병합되고 일회성 bootstrap workflow가 후속 PR에서 제거되었습니다.
+- [x] repository bootstrap desired state가 read-back 검증에 수렴하며 영구 required status 두 개가 정상 gate에서 게시됩니다.
 - [ ] Issue 기반 `v1`, 직접 업데이트 `v2`, shared-table changeset 경로가 실제 GitHub Actions에서 검증되었습니다.
 - [ ] 태그, Release asset, manifest hash와 Registry 버전이 일치합니다.
 - [ ] Secret 비노출, fork/권한/경로/LFS/혼합 PR fail-closed 증거가 남아 있습니다.
