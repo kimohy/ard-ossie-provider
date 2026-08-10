@@ -140,6 +140,7 @@ def test_second_bootstrap_is_noop_and_secret_never_enters_result() -> None:
     assert all(item.action == "noop" for item in second.items)
     assert github.secret_inputs == ["sentinel-key"]
     assert "sentinel-key" not in result.model_dump_json()
+    assert github.environments["ard-llm"].branch_patterns == ("main",)
 
 
 def test_apply_replans_noop_resources_after_confirmation_drift() -> None:

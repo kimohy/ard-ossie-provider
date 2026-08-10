@@ -417,7 +417,7 @@ def _llm_environment(owner: EnvironmentReviewer) -> EnvironmentState:
         reviewers=(owner,),
         prevent_self_review=False,
         wait_timer=0,
-        branch_patterns=("ard/*", "main"),
+        branch_patterns=("main",),
     )
 
 

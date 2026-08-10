@@ -10,6 +10,7 @@ PROCESSING_WORKFLOWS = tuple(
     WORKFLOWS / name
     for name in (
         "ard-issue-intake.yml",
+        "ard-direct-signal.yml",
         "ard-direct-change.yml",
         "ard-process.yml",
         "ard-changeset.yml",
@@ -114,8 +115,30 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     }
     assert call["inputs"]["expected_head"]["required"] == "true"
     assert workflow["concurrency"]["group"] == "ard-registry-write"
-    assert workflow["jobs"]["process"]["environment"] == "ard-llm"
+    validation = workflow["jobs"]["validate"]
+    assert validation["permissions"] == {"contents": "read"}
+    assert "environment" not in validation
+    assert "GH_TOKEN" not in str(validation)
+    validation_checkouts = [
+        step
+        for step in validation["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert [step["with"]["path"] for step in validation_checkouts] == [
+        "trusted",
+        "candidate",
+    ]
+    assert validation_checkouts[0]["with"]["ref"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
+    assert validation_checkouts[1]["with"]["ref"] == "${{ inputs.expected_head }}"
+    validation_run = next(step for step in validation["steps"] if step.get("run"))
+    assert validation_run["working-directory"] == "trusted"
+    assert '--repository "$CANDIDATE_REPOSITORY"' in validation_run["run"]
+
     job = workflow["jobs"]["process"]
+    assert job["needs"] == "validate"
+    assert job["environment"] == "ard-llm"
     assert job["permissions"] == {
         "actions": "write",
         "contents": "write",
@@ -129,13 +152,22 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert "--expected-head" in text
     assert "retention-days: 30" in text
     assert "lfs: true" in text
-    checkout = next(
+    checkouts = [
         step
         for step in job["steps"]
         if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
+    assert checkouts[0]["with"]["ref"] == (
+        "${{ github.event.repository.default_branch }}"
     )
-    assert checkout["with"]["ref"] == "${{ inputs.expected_head }}"
-    assert "products/${{ inputs.product_key }}/quality" in text
+    assert checkouts[0]["with"]["persist-credentials"] == "false"
+    assert checkouts[1]["with"]["ref"] == "${{ inputs.expected_head }}"
+    process_runs = [step for step in job["steps"] if step.get("run")]
+    assert all(step["working-directory"] == "trusted" for step in process_runs)
+    assert all('--repository "$CANDIDATE_REPOSITORY"' in step["run"] for step in process_runs)
+    assert all(step["env"].get("PYTHONSAFEPATH") == "1" for step in process_runs)
+    assert "candidate/products/${{ inputs.product_key }}/quality" in text
     finalizer = workflow["jobs"]["finalize"]
     assert finalizer["if"] == "always()"
     assert "environment" not in finalizer
@@ -143,25 +175,65 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-process.yml")
 
 
-def test_direct_change_never_gives_fork_prs_llm_secrets_or_writeback() -> None:
-    workflow = load_workflow("ard-direct-change.yml")
-    triggers = workflow["on"]
+def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() -> None:
+    signal = load_workflow("ard-direct-signal.yml")
+    assert set(signal["on"]) == {"push"}
+    assert signal["on"]["push"]["branches-ignore"] == ["main"]
+    assert signal["on"]["push"]["paths"] == ["products/*/sources/**"]
+    assert signal["permissions"] == {"contents": "read"}
+    assert all("run" not in step for step in signal["jobs"]["signal"]["steps"])
+    assert "environment" not in signal["jobs"]["signal"]
+    assert_actions_are_sha_pinned(WORKFLOWS / "ard-direct-signal.yml")
 
-    assert "pull_request_target" not in triggers
-    assert triggers["push"]["paths"] == ["products/*/sources/**"]
-    assert triggers["pull_request"]["paths"] == ["products/*/sources/**"]
+    workflow = load_workflow("ard-direct-change.yml")
+    assert set(workflow["on"]) == {"workflow_run"}
+    trigger = workflow["on"]["workflow_run"]
+    assert trigger["workflows"] == ["ARD direct branch signal"]
+    assert trigger["types"] == ["completed"]
     assert "secrets.ARD_LLM_API_KEY" not in (WORKFLOWS / "ard-direct-change.yml").read_text()
+
+    validation = workflow["jobs"]["validate"]
+    guard = validation["if"]
+    assert "github.event.workflow_run.conclusion == 'success'" in guard
+    assert "github.event.workflow_run.event == 'push'" in guard
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in guard
+    assert (
+        "github.event.workflow_run.head_branch != github.event.repository.default_branch"
+        in guard
+    )
+    assert validation["permissions"] == {"contents": "read"}
+    assert "environment" not in validation
+    assert "GH_TOKEN" not in str(validation)
+    checkouts = [
+        step
+        for step in validation["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
+    assert checkouts[0]["with"]["ref"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
+    assert checkouts[1]["with"]["ref"] == "${{ github.event.workflow_run.head_sha }}"
+    validation_runs = [step for step in validation["steps"] if step.get("run")]
+    assert all(step["working-directory"] == "trusted" for step in validation_runs)
+    assert all('--repository "$CANDIDATE_REPOSITORY"' in step["run"] for step in validation_runs)
+
+    pull_request = workflow["jobs"]["pull_request"]
+    assert pull_request["needs"] == "validate"
+    assert pull_request["permissions"] == {
+        "contents": "read",
+        "pull-requests": "write",
+    }
+    pr_run = next(step for step in pull_request["steps"] if step.get("run"))
+    assert pr_run["working-directory"] == "trusted"
+    assert '--repository "$CANDIDATE_REPOSITORY"' in pr_run["run"]
+
     process = workflow["jobs"]["process"]
-    assert "github.event_name == 'push'" in process["if"]
+    assert process["needs"] == ["validate", "pull_request"]
+    assert process["uses"] == "./.github/workflows/ard-process.yml"
     assert process["with"]["allow_writeback"] == "true"
-    assert process["with"]["expected_head"] == "${{ needs.detect.outputs.expected_head }}"
+    assert process["with"]["expected_head"] == "${{ needs.validate.outputs.expected_head }}"
     assert "secrets" not in process
-    source_check = workflow["jobs"]["source-check"]
-    assert source_check["permissions"] == {"contents": "read"}
-    assert "environment" not in source_check
-    assert "persist-credentials: false" in (
-        WORKFLOWS / "ard-direct-change.yml"
-    ).read_text(encoding="utf-8")
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-direct-change.yml")
 
 
