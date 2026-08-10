@@ -224,7 +224,7 @@ UV_CACHE_DIR=/tmp/ard-uv-cache uv run --frozen pytest -q
 UV_CACHE_DIR=/tmp/ard-uv-cache uv run --frozen ruff check src tests
 actionlint .github/workflows/*.yml
 UV_CACHE_DIR=/tmp/ard-uv-cache uv build --sdist --wheel
-UV_CACHE_DIR=/tmp/ard-uv-cache uv run --frozen ard workflow repository-check --base-ref origin/main --head-ref HEAD --head-sha "$(git rev-parse HEAD)" --repository . --verification-group static
+UV_CACHE_DIR=/tmp/ard-uv-cache uv run --frozen ard workflow repository-check --base-ref c23333610cb1d27ff136910de010011b6c870f3a --head-ref "$(git rev-parse HEAD)" --head-sha "$(git rev-parse HEAD)" --repository . --verification-group static
 ```
 
 Expected: zero failures; the test count is recorded from fresh output rather than copied from an older run.
