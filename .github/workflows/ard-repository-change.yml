@@ -9,89 +9,77 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  classify:
+  check:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      statuses: write
     outputs:
-      code_only: ${{ steps.paths.outputs.code_only }}
+      code_only: ${{ steps.repository_check.outputs.code_only }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_REF: ${{ github.event.pull_request.base.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Checkout pull request without credentials
+      - name: Checkout exact pull request head without credentials
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: false
-      - name: Separate repository changes from ARD data changes
-        id: paths
-        env:
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
-        run: |
-          git fetch origin "$BASE_BRANCH"
-          base="$(git merge-base HEAD "origin/${BASE_BRANCH}")"
-          data_change=false
-          repository_change=false
-          while IFS= read -r path; do
-            case "$path" in
-              products/*|registry/*) data_change=true ;;
-              *) repository_change=true ;;
-            esac
-          done < <(git diff --name-only "$base"...HEAD)
-          if [[ "$data_change" == true && "$repository_change" == true ]]; then
-            echo "MIXED_CODE_AND_ARD_DATA_NOT_ALLOWED" >&2
-            exit 2
-          fi
-          if [[ "$repository_change" == true ]]; then
-            echo "code_only=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code_only=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  validate:
-    needs: classify
-    if: needs.classify.outputs.code_only == 'true'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout code without credentials
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
-      - name: Run repository verification
-        run: |
-          python -m pip install uv==0.11.33
-          uv sync --frozen
-          uv run pytest -q
-          uv run ruff check src tests
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Classify and verify repository change
+        id: repository_check
+        run: >-
+          uv run --frozen ard workflow repository-check
+          --base-ref "$BASE_REF"
+          --head-ref "$HEAD_REF"
+          --head-sha "$HEAD_SHA"
+          --repository-name "$REPOSITORY_NAME"
+          --target-url "$TARGET_URL"
 
-  publish:
-    needs: [classify, validate]
-    if: always() && needs.classify.outputs.code_only == 'true'
+  finalize:
+    needs: check
+    if: always()
     runs-on: ubuntu-24.04
     permissions:
+      contents: read
       statuses: write
     env:
       GH_TOKEN: ${{ github.token }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      VALIDATE_RESULT: ${{ needs.validate.result }}
+      UPSTREAM_RESULT: ${{ needs.check.result }}
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Publish repository validation statuses
-        run: |
-          state=failure
-          description="Repository validation failed"
-          if [[ "$VALIDATE_RESULT" == success ]]; then
-            state=success
-            description="Repository validation passed"
-          fi
-          for context in ard/quality-gate ard/changeset; do
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
-              -f state="$state" -f context="$context" -f description="$description" \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          done
-          [[ "$state" == success ]]
+      - name: Checkout trusted finalizer code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Publish missing repository failure statuses
+        id: finalizer
+        run: >-
+          uv run --frozen ard workflow finalize
+          --upstream-result "$UPSTREAM_RESULT"
+          --repository-name "$REPOSITORY_NAME"
+          --expected-head "$EXPECTED_HEAD"
+          --target-url "$TARGET_URL"

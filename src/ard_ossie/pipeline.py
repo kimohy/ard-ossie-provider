@@ -129,6 +129,7 @@ def process_product(
     provider: LLMProvider | None = None,
     parser: DoclingParser | None = None,
     pr_number: int | None = None,
+    warnings_as_errors: bool = False,
 ) -> ProcessResult:
     root = Path(product_path).resolve()
     registry_path = Path(registry_root).resolve()
@@ -218,6 +219,13 @@ def process_product(
     )
     hard_errors.extend(relationship_findings)
     warnings = _completeness_findings(config, table_irs, semantic_document)
+    if warnings_as_errors and warnings:
+        hard_errors.append(
+            QualityFinding(
+                code="WARNINGS_AS_ERRORS",
+                message="Completeness warnings are configured as hard failures",
+            )
+        )
 
     quality = QualityReport(
         status=QualityStatus.FAIL

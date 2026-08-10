@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 import ard_ossie.pipeline as pipeline_module
 from ard_ossie.cli import app
-from ard_ossie.pipeline import process_product
+from ard_ossie.pipeline import PipelineValidationError, process_product
 from tests.integration.test_cli_process import create_product_fixture
 
 
@@ -109,3 +109,23 @@ def test_cli_preserves_detailed_hard_failure_report(tmp_path: Path) -> None:
         "VERSION_GAP",
         "VERSION_NO_CHANGE",
     ]
+
+
+def test_warnings_as_errors_blocks_promotion_but_preserves_quality_evidence(
+    tmp_path: Path,
+) -> None:
+    """Strict processing must decide warning policy before Registry/generated promotion."""
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+
+    with pytest.raises(PipelineValidationError, match="WARNINGS_AS_ERRORS"):
+        process_product(
+            product,
+            registry_root=registry,
+            warnings_as_errors=True,
+        )
+
+    assert not (product / "generated").exists()
+    assert not (registry / "products").exists()
+    report = json.loads((product / "quality" / "quality-report.json").read_text())
+    assert report["hard_errors"][0]["code"] == "WARNINGS_AS_ERRORS"

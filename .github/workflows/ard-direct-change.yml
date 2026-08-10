@@ -20,56 +20,61 @@ jobs:
     permissions:
       contents: read
     outputs:
-      product_key: ${{ steps.changed.outputs.product_key }}
+      product_key: ${{ steps.detect.outputs.product_key }}
+      expected_head: ${{ steps.detect.outputs.expected_head }}
+      merge_base: ${{ steps.detect.outputs.merge_base }}
     steps:
-      - name: Checkout source commit
+      - name: Checkout exact source commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
       - name: Detect exactly one changed product
-        id: changed
+        id: detect
         env:
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
-        run: |
-          git fetch origin "$BASE_BRANCH"
-          base="$(git merge-base HEAD "origin/${BASE_BRANCH}")"
-          mapfile -t products < <(
-            git diff --name-only "$base"...HEAD -- 'products/*/sources/**' |
-              awk -F/ 'NF >= 4 {print $2}' | sort -u
-          )
-          if [[ "${#products[@]}" -ne 1 ]]; then
-            echo "MULTIPLE_PRODUCTS_NOT_ALLOWED" >&2
-            printf '%s\n' "${products[@]}" >&2
-            exit 2
-          fi
-          echo "product_key=${products[0]}" >> "$GITHUB_OUTPUT"
+          BASE_REF: origin/${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        run: >-
+          uv run --frozen ard workflow detect-product
+          --base-ref "$BASE_REF"
 
   source-check:
     needs: detect
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    env:
-      PRODUCT_KEY: ${{ needs.detect.outputs.product_key }}
-      PR_NUMBER: ${{ github.event.pull_request.number || 1 }}
     steps:
       - name: Checkout untrusted source without credentials
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.detect.outputs.expected_head }}
           persist-credentials: false
           lfs: true
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
-      - name: Install and validate without LLM secrets
-        run: |
-          python -m pip install uv==0.11.33
-          uv sync --frozen
-          uv run ard process "products/${PRODUCT_KEY}" \
-            --registry registry \
-            --pr-number "$PR_NUMBER"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Validate sources without LLM credentials
+        id: source_check
+        env:
+          PRODUCT_KEY: ${{ needs.detect.outputs.product_key }}
+          EXPECTED_HEAD: ${{ needs.detect.outputs.expected_head }}
+        run: >-
+          uv run --frozen ard workflow source-check
+          --product-key "$PRODUCT_KEY"
+          --expected-head "$EXPECTED_HEAD"
 
   pull_request:
     needs: [detect, source-check]
@@ -79,23 +84,38 @@ jobs:
       contents: read
       pull-requests: write
     outputs:
-      pr_number: ${{ steps.pr.outputs.pr_number }}
+      pr_number: ${{ steps.pull_request.outputs.pr_number }}
+      expected_head: ${{ steps.pull_request.outputs.expected_head }}
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: ${{ github.ref_name }}
       PRODUCT_KEY: ${{ needs.detect.outputs.product_key }}
+      EXPECTED_HEAD: ${{ needs.detect.outputs.expected_head }}
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      REPOSITORY_NAME: ${{ github.repository }}
     steps:
-      - name: Find or create the product PR
-        id: pr
-        run: |
-          pr_number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
-          if [[ -z "$pr_number" ]]; then
-            pr_url="$(gh pr create --draft --head "$BRANCH" \
-              --title "data(${PRODUCT_KEY}): update ARD sources" \
-              --body "Automated ARD validation and Ossie generation.")"
-            pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
-          fi
-          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+      - name: Checkout trusted PR coordinator code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Ensure one Draft product PR
+        id: pull_request
+        run: >-
+          uv run --frozen ard workflow ensure-product-pr
+          --branch "$BRANCH"
+          --product-key "$PRODUCT_KEY"
+          --expected-head "$EXPECTED_HEAD"
+          --base-branch "$BASE_BRANCH"
+          --repository-name "$REPOSITORY_NAME"
 
   process:
     needs: [detect, source-check, pull_request]
@@ -110,4 +130,5 @@ jobs:
       branch: ${{ github.ref_name }}
       product_key: ${{ needs.detect.outputs.product_key }}
       pr_number: ${{ fromJSON(needs.pull_request.outputs.pr_number) }}
+      expected_head: ${{ needs.detect.outputs.expected_head }}
       allow_writeback: true

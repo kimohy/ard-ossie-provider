@@ -6,6 +6,47 @@ from pathlib import Path
 import yaml
 
 WORKFLOWS = Path(".github/workflows")
+PROCESSING_WORKFLOWS = tuple(
+    WORKFLOWS / name
+    for name in (
+        "ard-issue-intake.yml",
+        "ard-direct-change.yml",
+        "ard-process.yml",
+        "ard-changeset.yml",
+        "ard-release.yml",
+        "ard-repository-change.yml",
+    )
+)
+FORBIDDEN_RUN_TOKENS = (
+    "git ",
+    "gh ",
+    "jq ",
+    "awk ",
+    "sed ",
+    "python ",
+    "pytest",
+    "ruff",
+    "actionlint",
+    "go ",
+    "curl ",
+    "wget ",
+)
+FORBIDDEN_SHELL_CONTROL = ("&&", "||", ";", "`", "$(`", "<(", ">(")
+APPROVED_LIFECYCLES = (
+    "workflow issue-authorize",
+    "workflow issue-intake",
+    "workflow detect-product",
+    "workflow source-check",
+    "workflow ensure-product-pr",
+    "workflow process",
+    "workflow process-reconcile",
+    "workflow changeset",
+    "workflow finalize",
+    "workflow release-detect",
+    "workflow release-product",
+    "workflow release-dispatch",
+    "workflow repository-check",
+)
 
 
 def load_workflow(name: str) -> dict:
@@ -20,11 +61,57 @@ def assert_actions_are_sha_pinned(path: Path) -> None:
         assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", match.group(1)), line
 
 
+def test_processing_run_steps_only_invoke_ard_cli() -> None:
+    for path in PROCESSING_WORKFLOWS:
+        workflow = load_workflow(path.name)
+        for job in workflow["jobs"].values():
+            for step in job.get("steps", []):
+                if "run" not in step:
+                    continue
+                command = step["run"].strip()
+                assert command.startswith("uv run --frozen ard "), (
+                    f"{path.name}: {step.get('name', '<unnamed>')}"
+                )
+                assert "${{" not in command, (
+                    f"{path.name}: expressions must enter commands through env"
+                )
+                assert not any(token in command for token in FORBIDDEN_RUN_TOKENS), (
+                    f"{path.name}: {step.get('name', '<unnamed>')}"
+                )
+                assert not any(token in command for token in FORBIDDEN_SHELL_CONTROL), (
+                    f"{path.name}: shell control syntax is forbidden"
+                )
+                assert any(
+                    f"ard {lifecycle}" in command for lifecycle in APPROVED_LIFECYCLES
+                ), f"{path.name}: unapproved lifecycle command"
+                assert step.get("id"), f"{path.name}: run step must expose an id"
+
+
+def test_processing_workflows_use_locked_uv_setup_action() -> None:
+    setup_uv = "astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b"
+    for path in PROCESSING_WORKFLOWS:
+        workflow = load_workflow(path.name)
+        for job in workflow["jobs"].values():
+            steps = job.get("steps", [])
+            if not any("run" in step for step in steps):
+                continue
+            uv_steps = [step for step in steps if step.get("uses") == setup_uv]
+            assert len(uv_steps) == 1, path.name
+            assert uv_steps[0]["with"]["version"] == "0.11.33"
+
+
 def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None:
     workflow = load_workflow("ard-process.yml")
     call = workflow["on"]["workflow_call"]
 
-    assert set(call["inputs"]) == {"branch", "product_key", "pr_number", "allow_writeback"}
+    assert set(call["inputs"]) == {
+        "branch",
+        "product_key",
+        "pr_number",
+        "expected_head",
+        "allow_writeback",
+    }
+    assert call["inputs"]["expected_head"]["required"] == "true"
     assert workflow["concurrency"]["group"] == "ard-registry-write"
     assert workflow["jobs"]["process"]["environment"] == "ard-llm"
     job = workflow["jobs"]["process"]
@@ -36,13 +123,22 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     }
     text = (WORKFLOWS / "ard-process.yml").read_text(encoding="utf-8")
     assert "secrets.ARD_LLM_API_KEY" in text
-    assert "ard/quality-gate" in text
+    assert "ard workflow process" in text
+    assert "ard workflow process-reconcile" in text
+    assert "--expected-head" in text
     assert "retention-days: 30" in text
-    assert "MULTIPLE_PRODUCTS_NOT_ALLOWED" in text
-    assert "UNTRUSTED_BRANCH_PATH" in text
     assert "lfs: true" in text
-    assert "products/${PRODUCT_KEY}/generated" in text
-    assert "products/${PRODUCT_KEY}/quality" in text
+    checkout = next(
+        step
+        for step in job["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert checkout["with"]["ref"] == "${{ inputs.expected_head }}"
+    assert "products/${{ inputs.product_key }}/quality" in text
+    finalizer = workflow["jobs"]["finalize"]
+    assert finalizer["if"] == "always()"
+    assert "environment" not in finalizer
+    assert "ard workflow finalize" in text
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-process.yml")
 
 
@@ -57,7 +153,14 @@ def test_direct_change_never_gives_fork_prs_llm_secrets_or_writeback() -> None:
     process = workflow["jobs"]["process"]
     assert "github.event_name == 'push'" in process["if"]
     assert process["with"]["allow_writeback"] == "true"
+    assert process["with"]["expected_head"] == "${{ needs.detect.outputs.expected_head }}"
     assert "secrets" not in process
+    source_check = workflow["jobs"]["source-check"]
+    assert source_check["permissions"] == {"contents": "read"}
+    assert "environment" not in source_check
+    assert "persist-credentials: false" in (
+        WORKFLOWS / "ard-direct-change.yml"
+    ).read_text(encoding="utf-8")
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-direct-change.yml")
 
 
@@ -67,7 +170,11 @@ def test_issue_intake_calls_processor_without_waiting_for_token_event() -> None:
     assert workflow["on"]["issues"]["types"] == ["labeled"]
     assert workflow["jobs"]["process"]["uses"] == "./.github/workflows/ard-process.yml"
     assert workflow["jobs"]["process"]["needs"] == "intake"
+    assert workflow["jobs"]["process"]["with"]["expected_head"] == (
+        "${{ needs.intake.outputs.expected_head }}"
+    )
     assert "ARD_LLM_API_KEY" not in str(workflow["jobs"]["authorize"])
+    assert workflow["jobs"]["finalize"]["if"].startswith("always()")
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-issue-intake.yml")
 
 
@@ -80,11 +187,10 @@ def test_shared_changeset_serializes_registry_and_reconciles_pr_statuses() -> No
         "ready",
     ]
     assert workflow["concurrency"]["group"] == "ard-registry-write"
-    assert "ard/changeset" in text
-    assert "ready_products" in text
-    assert "Create one Draft tracking PR per required product" in text
+    assert text.count("ard workflow changeset") == 3
+    assert "--mode create" in text
+    assert "--mode ready" in text
     assert "head_sha" in workflow["on"]["workflow_dispatch"]["inputs"]
-    assert "Publish coordination PR checks" in text
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-changeset.yml")
 
 
@@ -94,13 +200,12 @@ def test_release_uses_numeric_id_tags_and_protected_linkage_dispatch() -> None:
 
     assert workflow["on"]["push"]["branches"] == ["main"]
     assert workflow["jobs"]["linkage"]["environment"] == "production-linkage"
-    assert "product/${product_id}/v${version}" in text
-    assert "table_tags" in text
-    assert "ard_product_released" in text
-    assert "TAG_TARGET_CONFLICT" in text
-    assert "CHANGESET_PR_NOT_MERGED" in text
-    assert "CHANGESET_HEAD_SHA_MISMATCH" in text
-    assert "CHANGESET_MERGE_NOT_REACHABLE" in text
+    assert "ard workflow release-detect" in text
+    assert "ard workflow release-product" in text
+    assert "ard workflow release-dispatch" in text
+    assert "--table-ids" in text
+    assert "production-linkage" in text
+    assert "retention-days: 30" in text
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-release.yml")
 
 
@@ -113,9 +218,7 @@ def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
         "synchronize",
         "reopened",
     ]
-    assert "MIXED_CODE_AND_ARD_DATA_NOT_ALLOWED" in text
-    assert "ard/quality-gate" in text
-    assert "ard/changeset" in text
-    assert "uv run pytest -q" in text
-    assert "actionlint@v1.7.7" in text
+    assert "ard workflow repository-check" in text
+    assert "ard workflow finalize" in text
+    assert workflow["jobs"]["finalize"]["if"] == "always()"
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-repository-change.yml")

@@ -16,23 +16,33 @@ jobs:
       contents: read
       issues: read
     outputs:
-      allowed: ${{ steps.permission.outputs.allowed }}
+      allowed: ${{ steps.authorization.outputs.allowed }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      ACTOR: ${{ github.actor }}
+      LABEL: ${{ github.event.label.name }}
     steps:
-      - name: Verify the labeler has write permission
-        id: permission
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          script: |
-            const response = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              username: context.actor,
-            });
-            const allowed = ['admin', 'maintain', 'write'].includes(response.data.user.permission);
-            core.setOutput('allowed', String(allowed));
-            if (!allowed) {
-              core.setFailed('ard:approved requires write, maintain, or admin permission');
-            }
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Authorize approved issue label
+        id: authorization
+        run: >-
+          uv run --frozen ard workflow issue-authorize
+          --event "$GITHUB_EVENT_PATH"
+          --repository-name "$REPOSITORY_NAME"
+          --actor "$ACTOR"
+          --label "$LABEL"
 
   intake:
     needs: authorize
@@ -45,14 +55,18 @@ jobs:
       pull-requests: write
       statuses: write
     outputs:
-      branch: ${{ steps.metadata.outputs.branch }}
-      product_key: ${{ steps.metadata.outputs.product_key }}
-      pr_number: ${{ steps.pull_request.outputs.pr_number }}
+      branch: ${{ steps.intake.outputs.branch }}
+      product_key: ${{ steps.intake.outputs.product_key }}
+      pr_number: ${{ steps.intake.outputs.pr_number }}
+      expected_head: ${{ steps.intake.outputs.expected_head }}
+      product_id: ${{ steps.intake.outputs.product_id }}
     env:
       GH_TOKEN: ${{ github.token }}
       ARD_MAX_ATTACHMENT_BYTES: ${{ vars.ARD_MAX_ATTACHMENT_BYTES || '52428800' }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      ACTOR: ${{ github.actor }}
     steps:
-      - name: Checkout the default branch
+      - name: Checkout the default branch with LFS
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
@@ -61,52 +75,17 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
-      - name: Install the locked project
-        run: |
-          python -m pip install uv==0.11.33
-          uv sync --frozen
-      - name: Mark issue as processing
-        run: gh issue edit "${{ github.event.issue.number }}" --add-label ard:processing
-      - name: Validate and download public attachments
-        run: |
-          uv run python -m ard_ossie.github_event prepare \
-            --event "$GITHUB_EVENT_PATH" \
-            --workspace "$GITHUB_WORKSPACE" \
-            --output .ard-intake.json
-      - name: Derive trusted branch metadata
-        id: metadata
-        run: |
-          product_key="$(jq -r .product_key .ard-intake.json)"
-          branch="ard/issue-${{ github.event.issue.number }}-${product_key}"
-          echo "product_key=${product_key}" >> "$GITHUB_OUTPUT"
-          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
-      - name: Commit the validated source set
-        env:
-          BRANCH: ${{ steps.metadata.outputs.branch }}
-          PRODUCT_KEY: ${{ steps.metadata.outputs.product_key }}
-        run: |
-          git switch -c "$BRANCH"
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git lfs install --local
-          git add -- "products/${PRODUCT_KEY}"
-          git commit -m "data: ingest ARD issue #${{ github.event.issue.number }}"
-          git lfs push origin HEAD
-          git push --set-upstream origin "$BRANCH"
-      - name: Create Draft PR
-        id: pull_request
-        env:
-          BRANCH: ${{ steps.metadata.outputs.branch }}
-          PRODUCT_KEY: ${{ steps.metadata.outputs.product_key }}
-        run: |
-          pr_url="$(gh pr create --draft \
-            --base "${{ github.event.repository.default_branch }}" \
-            --head "$BRANCH" \
-            --title "data(${PRODUCT_KEY}): ARD issue #${{ github.event.issue.number }}" \
-            --body "Closes #${{ github.event.issue.number }}")"
-          pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
-          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
-          gh issue edit "${{ github.event.issue.number }}" --add-label ard:pr-created
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Ingest approved issue
+        id: intake
+        run: >-
+          uv run --frozen ard workflow issue-intake
+          --event "$GITHUB_EVENT_PATH"
+          --repository-name "$REPOSITORY_NAME"
+          --actor "$ACTOR"
 
   process:
     needs: intake
@@ -120,6 +99,7 @@ jobs:
       branch: ${{ needs.intake.outputs.branch }}
       product_key: ${{ needs.intake.outputs.product_key }}
       pr_number: ${{ fromJSON(needs.intake.outputs.pr_number) }}
+      expected_head: ${{ needs.intake.outputs.expected_head }}
       allow_writeback: true
 
   finalize:
@@ -127,17 +107,32 @@ jobs:
     if: always() && needs.authorize.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
+      contents: read
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      UPSTREAM_RESULT: ${{ needs.process.result }}
+      REPOSITORY_NAME: ${{ github.repository }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
-      PROCESS_RESULT: ${{ needs.process.result }}
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Update issue processing labels
-        run: |
-          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --remove-label ard:processing
-          if [[ "$PROCESS_RESULT" != success ]]; then
-            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --add-label ard:failed
-          fi
+      - name: Checkout trusted finalizer code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Reconcile issue labels
+        id: finalizer
+        run: >-
+          uv run --frozen ard workflow finalize
+          --upstream-result "$UPSTREAM_RESULT"
+          --repository-name "$REPOSITORY_NAME"
+          --issue-number "$ISSUE_NUMBER"
+          --target-url "$TARGET_URL"

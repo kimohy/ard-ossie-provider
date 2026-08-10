@@ -84,6 +84,31 @@ uv run ard history sales-order
 uv run ard diff sales-order@v1..v2
 ```
 
+세분화된 명령과 GitHub lifecycle 명령은 다음 help에서 확인합니다.
+
+```bash
+uv run ard --help
+uv run ard workflow --help
+uv run ard github --help
+uv run ard parse --help
+uv run ard model --help
+uv run ard validate --help
+```
+
+GitHub event fixture가 있으면 승인 단계와 intake를 로컬에서 같은 result envelope 계약으로
+실행할 수 있습니다.
+
+```bash
+uv run ard workflow issue-authorize --event event.json --repository-name owner/repo --actor maintainer --label ard:approved
+uv run ard workflow issue-intake --event event.json --repository-name owner/repo --actor maintainer
+```
+
+각 lifecycle은 `.ard/run/<command>-result.json`을 원자적으로 기록합니다. 공통 exit code는
+`0` 성공/no-op, `10` 검증, `20` 구성, `30` 일시 장애, `40` 충돌, `50` 보안 경계,
+`70` 일부 원격 반영입니다. `30`은 원인을 해소한 뒤 재시도하고, `70`은 mutation journal과
+현재 head를 보존한 채 동일 입력으로 수렴시킵니다. 강제 tag 이동이나 branch 덮어쓰기는 하지
+않습니다.
+
 OpenAI-compatible API를 사용할 때만 다음 환경 변수를 설정합니다.
 
 ```bash
@@ -105,6 +130,11 @@ API 키는 파일에 저장하거나 로그로 출력하지 마세요.
 새 엔터티는 반드시 `v1`입니다. 내용이 바뀌면 현재 버전에서 정확히 `+1`, 내용이 같으면 같은 버전을 유지해야 합니다. stale base, 건너뛴 버전, 충돌, `v999` 이후 변경은 차단합니다.
 
 두 제품 이상이 참조하는 테이블을 변경하려면 changeset이 필요합니다. 중앙 `ard/changeset-<id>` 브랜치가 제품별 준비 상태를 직렬화하며 모든 필수 제품 PR이 준비되기 전까지 `ard/changeset`은 pending입니다.
+
+GitHub Actions YAML은 checkout, 권한, Environment, matrix, artifact 전달 같은 플랫폼 선언만
+담습니다. 분류·검증·Git/Release/GitHub mutation은 모두 `uv run --frozen ard ...` lifecycle을
+통해 실행합니다. `production-linkage` 재시도는 dispatch를 다시 보낼 수 있으므로 downstream은
+`(product_id, version, tag, commit)` 튜플을 중복 제거 키로 사용해야 합니다.
 
 Metric과 relationship도 각각 `met_*`, `rel_*` 불변 ID를 Registry의 제품 레코드에 보존합니다. Metric은 읽기 전용 ANSI SQL만 허용하고 알려지지 않은 `table.column` 참조와 변경 SQL을 차단합니다. relationship은 Excel의 `fk_table`/`fk_column`을 현재 제품 테이블에 해석하지 못하면 hard error입니다. 제품 폐기(retire)는 tombstone 전환 파이프라인이 구현되기 전까지 Issue와 `product.yaml`에서 허용하지 않습니다.
 

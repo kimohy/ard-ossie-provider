@@ -2,6 +2,25 @@
 
 이 저장소는 public ARD 컨텐츠, GitHub Issue 승인, 같은 PR writeback, 숫자 릴리스와 승인된 후속 연계를 전제로 합니다.
 
+## 자동 bootstrap
+
+관리자는 웹 설정 대신 동일한 desired state를 CLI로 계획하고 적용할 수 있습니다.
+
+```bash
+uv run ard github bootstrap --repo kimohy/ard-ossie-provider --dry-run
+uv run ard github bootstrap --repo kimohy/ard-ossie-provider
+```
+
+두 번째 명령은 redacted plan 확인 뒤 LLM API key를 숨김 입력으로 요청하며,
+key는 `gh secret set ... --env ard-llm`의 표준 입력에만 전달됩니다. 기존 key 교체는
+기본적으로 거부됩니다. 초기 `main` 보호는 두 required status, 최신 base, PR 및 conversation
+resolution을 요구하지만 승인 수는 0으로 둡니다. 비소유자 writer가 준비된 뒤에만 다음 명령으로
+승인 수를 1로 전환합니다.
+
+```bash
+uv run ard github enable-review-protection --repo kimohy/ard-ossie-provider
+```
+
 ## 1. Repository Actions 설정
 
 `Settings → Actions → General`에서 다음을 설정합니다.
@@ -51,7 +70,7 @@ Repository 또는 `ard-llm` Environment Variables:
 
 - direct push 금지
 - pull request 필수
-- 최소 1명 review 필수
+- bootstrap 초기에는 review 0명, 비소유자 writer 준비 후 최소 1명 review 필수
 - head branch가 최신 base를 포함하도록 요구
 - conversation resolution 요구
 - required status checks:
@@ -70,6 +89,9 @@ shared table 변경이 아닌 PR에도 `ard/changeset=success`가 게시됩니�
 - 가능하면 `main` branch만 deployment branch로 허용합니다.
 
 제품/테이블 태그와 GitHub Release가 만들어진 뒤 이 환경의 승인을 받아야 `ard_product_released` repository dispatch가 발행됩니다. payload에는 product ID, 숫자 버전, tag, merged commit과 artifact SHA-256만 포함합니다.
+
+dispatch가 성공하고 status 기록만 실패한 경우 재시도에서 같은 event가 다시 전달될 수 있습니다.
+downstream은 `(product_id, version, tag, commit)`을 중복 제거 키로 사용해야 합니다.
 
 ## 6. Issue 처리
 
@@ -119,3 +141,10 @@ uv run ruff check src tests
 ```
 
 테스트용 실제 API 키를 public branch나 fixture에 넣지 마세요.
+
+## 10. Result와 재시도
+
+Lifecycle 결과는 `.ard/run/` 아래 version 1 JSON envelope로 기록됩니다. exit `30`은 원격/API
+일시 장애이므로 같은 exact head에서 재시도합니다. exit `70`은 tag, commit, dispatch 같은 일부
+mutation이 이미 성공했을 수 있음을 뜻하므로 result의 `outputs`와 `mutations`를 보존하고 같은
+입력으로 수렴시킵니다. immutable tag를 이동하거나 managed branch를 강제로 덮어쓰지 않습니다.

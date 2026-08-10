@@ -99,7 +99,8 @@ def scan_sources(
 
 
 def _validate_signature(path: Path) -> None:
-    head = path.read_bytes()[:8]
+    with path.open("rb") as stream:
+        head = stream.read(8)
     suffix = path.suffix.lower()
     if suffix in {".docx", ".xlsx"} and not head.startswith(b"PK\x03\x04"):
         raise SourceValidationError(f"SOURCE_SIGNATURE_MISMATCH: {path}")

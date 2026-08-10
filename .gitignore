@@ -20,6 +20,7 @@ build/
 .build/
 .cache/
 logs/
+/.ard/
 
 # IDE and OS
 .idea/

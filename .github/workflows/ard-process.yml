@@ -12,63 +12,26 @@ on:
       pr_number:
         required: true
         type: number
+      expected_head:
+        required: true
+        type: string
       allow_writeback:
         required: true
         type: boolean
+    outputs:
+      current_head:
+        value: ${{ jobs.process.outputs.current_head }}
+      product_id:
+        value: ${{ jobs.process.outputs.product_id }}
+      version:
+        value: ${{ jobs.process.outputs.version }}
+
 concurrency:
   group: ard-registry-write
   cancel-in-progress: false
 
 jobs:
-  scope:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    env:
-      PRODUCT_KEY: ${{ inputs.product_key }}
-    steps:
-      - name: Checkout submitted branch without credentials
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.branch }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Reject executable or multi-product branch changes
-        run: |
-          if [[ ! "$PRODUCT_KEY" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
-            echo "INVALID_PRODUCT_KEY: $PRODUCT_KEY" >&2
-            exit 2
-          fi
-          git fetch origin "${{ github.event.repository.default_branch }}"
-          base="$(git merge-base HEAD "origin/${{ github.event.repository.default_branch }}")"
-          mapfile -t paths < <(git diff --name-only "$base"...HEAD)
-          mapfile -t changed_products < <(
-            printf '%s\n' "${paths[@]}" | awk -F/ \
-              '$1 == "products" && $3 == "sources" {print $2}' | sort -u
-          )
-          if [[ "${#changed_products[@]}" -ne 1 || "${changed_products[0]}" != "$PRODUCT_KEY" ]]; then
-            echo "MULTIPLE_PRODUCTS_NOT_ALLOWED: expected exactly $PRODUCT_KEY" >&2
-            printf '%s\n' "${changed_products[@]}" >&2
-            exit 2
-          fi
-          for path in "${paths[@]}"; do
-            case "$path" in
-              "products/${PRODUCT_KEY}/product.yaml"|\
-              "products/${PRODUCT_KEY}/intake-manifest.json"|\
-              "products/${PRODUCT_KEY}/sources/"*|\
-              "products/${PRODUCT_KEY}/generated/"*|\
-              "products/${PRODUCT_KEY}/quality/"*|\
-              "products/${PRODUCT_KEY}/changesets/"*|registry/*)
-                ;;
-              *)
-                echo "UNTRUSTED_BRANCH_PATH: $path" >&2
-                exit 2
-                ;;
-            esac
-          done
-
   process:
-    needs: scope
     runs-on: ubuntu-24.04
     environment: ard-llm
     permissions:
@@ -76,149 +39,121 @@ jobs:
       contents: write
       pull-requests: write
       statuses: write
+    outputs:
+      current_head: ${{ steps.processor.outputs.current_head || steps.reconcile.outputs.current_head || steps.processor_readonly.outputs.current_head }}
+      product_id: ${{ steps.processor.outputs.product_id || steps.reconcile.outputs.product_id || steps.processor_readonly.outputs.product_id }}
+      version: ${{ steps.processor.outputs.version || steps.reconcile.outputs.version || steps.processor_readonly.outputs.version }}
     env:
       GH_TOKEN: ${{ github.token }}
-      PRODUCT_KEY: ${{ inputs.product_key }}
-      BRANCH: ${{ inputs.branch }}
       ARD_LLM_API_KEY: ${{ secrets.ARD_LLM_API_KEY }}
       ARD_LLM_BASE_URL: ${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}
       ARD_LLM_MODEL: ${{ vars.ARD_LLM_MODEL }}
       ARD_LLM_API_STYLE: ${{ vars.ARD_LLM_API_STYLE || 'chat_completions' }}
+      PRODUCT_KEY: ${{ inputs.product_key }}
+      BRANCH: ${{ inputs.branch }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_HEAD: ${{ inputs.expected_head }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Checkout the exact trusted branch
+      - name: Checkout the exact validated head with LFS
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.expected_head }}
           fetch-depth: 0
           lfs: true
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
-      - name: Install the locked project
-        run: |
-          python -m pip install uv==0.11.33
-          uv sync --frozen
-      - name: Parse, enrich, compile, and validate
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Process and publish exact-head results
         id: processor
+        if: inputs.allow_writeback
         continue-on-error: true
-        run: |
-          uv run ard process "products/${PRODUCT_KEY}" \
-            --registry registry \
-            --pr-number "${{ inputs.pr_number }}" \
-            --report "products/${PRODUCT_KEY}/quality/quality-report.json"
-      - name: Reject unexpected processor writes
-        id: path_guard
-        if: steps.processor.outcome == 'success'
-        run: |
-          unexpected="$(git status --porcelain | awk '{print $2}' | while read -r path; do
-            case "$path" in
-              "products/${PRODUCT_KEY}/generated/"*|\
-              "products/${PRODUCT_KEY}/quality/"*|\
-              registry/products/*|registry/tables/*|registry/mappings/*|registry/indexes/*|registry/changesets/*)
-                ;;
-              *) printf '%s\n' "$path" ;;
-            esac
-          done)"
-          if [[ -n "$unexpected" ]]; then
-            echo "UNEXPECTED_PROCESSOR_WRITE" >&2
-            printf '%s\n' "$unexpected" >&2
-            exit 2
-          fi
-      - name: Commit generated and registry paths to the same PR
-        id: writeback
-        if: steps.processor.outcome == 'success' && inputs.allow_writeback
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A -- \
-            "products/${PRODUCT_KEY}/generated" \
-            "products/${PRODUCT_KEY}/quality" \
-            registry
-          if ! git diff --cached --quiet; then
-            git commit -m "data(${PRODUCT_KEY}): generate validated Ossie artifacts"
-            git push origin "HEAD:${BRANCH}"
-          fi
-      - name: Coordinate shared-table readiness
-        id: changeset
-        if: steps.processor.outcome == 'success' && steps.path_guard.outcome == 'success'
-        continue-on-error: true
+        run: >-
+          uv run --frozen ard workflow process
+          --product-key "$PRODUCT_KEY"
+          --branch "$BRANCH"
+          --pr-number "$PR_NUMBER"
+          --expected-head "$EXPECTED_HEAD"
+          --repository-name "$REPOSITORY_NAME"
+          --allow-writeback
+          --target-url "$TARGET_URL"
+      - name: Reconcile a same-job partial publication
+        id: reconcile
+        if: inputs.allow_writeback && steps.processor.outcome == 'failure'
         env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-        run: |
-          metadata="$(uv run python -c '
-          import yaml
-          from pathlib import Path
-          value = yaml.safe_load(Path("products/'"$PRODUCT_KEY"'/product.yaml").read_text())
-          print("\t".join((value["product_id"], str(value["version"]), value.get("changeset_id") or "")))
-          ')"
-          IFS=$'\t' read -r product_id version changeset_id <<< "$metadata"
-          sha="$(git rev-parse HEAD)"
-          if [[ -z "$changeset_id" ]]; then
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" \
-              -f state=success -f context='ard/changeset' \
-              -f description='No shared-table changeset required'
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" \
-              -f state=pending -f context='ard/changeset' \
-              -f description="Waiting for ${changeset_id}"
-            gh workflow run ard-changeset.yml --ref "${{ github.event.repository.default_branch }}" \
-              -f mode=ready \
-              -f changeset_id="$changeset_id" \
-              -f product_id="$product_id" \
-              -f version="$version" \
-              -f pr_number="$PR_NUMBER" \
-              -f head_sha="$sha"
-          fi
+          RESULT_PATH: .ard/run/workflow.process-result.json
+        run: >-
+          uv run --frozen ard workflow process-reconcile
+          --result-path "$RESULT_PATH"
+          --branch "$BRANCH"
+          --pr-number "$PR_NUMBER"
+          --repository-name "$REPOSITORY_NAME"
+          --target-url "$TARGET_URL"
+      - name: Process without writeback
+        id: processor_readonly
+        if: ${{ !inputs.allow_writeback }}
+        run: >-
+          uv run --frozen ard workflow process
+          --product-key "$PRODUCT_KEY"
+          --branch "$BRANCH"
+          --pr-number "$PR_NUMBER"
+          --expected-head "$EXPECTED_HEAD"
+          --repository-name "$REPOSITORY_NAME"
+          --no-allow-writeback
+          --target-url "$TARGET_URL"
       - name: Upload public quality evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ard-quality-${{ inputs.product_key }}-${{ github.run_id }}
-          path: products/${{ inputs.product_key }}/quality
+          path: |
+            products/${{ inputs.product_key }}/quality
+            .ard/run/workflow.process-result.json
+            .ard/run/workflow.process-reconcile-result.json
           retention-days: 30
           if-no-files-found: warn
-      - name: Publish PR summary
-        if: always() && inputs.pr_number > 0
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-          PROCESS_OUTCOME: ${{ steps.processor.outcome }}
-          PATH_GUARD_OUTCOME: ${{ steps.path_guard.outcome }}
-          WRITEBACK_OUTCOME: ${{ steps.writeback.outcome }}
-          CHANGESET_OUTCOME: ${{ steps.changeset.outcome }}
-        run: |
-          gate_outcome=failure
-          if [[ "$PROCESS_OUTCOME" == success && "$PATH_GUARD_OUTCOME" == success && \
-                "$WRITEBACK_OUTCOME" != failure && "$CHANGESET_OUTCOME" != failure ]]; then
-            gate_outcome=success
-          fi
-          gh pr comment "$PR_NUMBER" --body \
-            "ARD processing result: **${gate_outcome}**. Context: \`ard/quality-gate\`."
-      - name: Publish final commit status
-        if: always()
-        env:
-          PROCESS_OUTCOME: ${{ steps.processor.outcome }}
-          PATH_GUARD_OUTCOME: ${{ steps.path_guard.outcome }}
-          WRITEBACK_OUTCOME: ${{ steps.writeback.outcome }}
-          CHANGESET_OUTCOME: ${{ steps.changeset.outcome }}
-        run: |
-          state=failure
-          description="ARD validation failed"
-          if [[ "$PROCESS_OUTCOME" == success && "$PATH_GUARD_OUTCOME" == success && \
-                "$WRITEBACK_OUTCOME" != failure && "$CHANGESET_OUTCOME" != failure ]]; then
-            state=success
-            description="ARD validation passed"
-          fi
-          sha="$(git rev-parse HEAD)"
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" \
-            -f state="$state" \
-            -f context='ard/quality-gate' \
-            -f description="$description" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-      - name: Fail the workflow after publishing evidence
-        if: >-
-          steps.processor.outcome != 'success' ||
-          steps.path_guard.outcome == 'failure' ||
-          steps.writeback.outcome == 'failure' ||
-          steps.changeset.outcome == 'failure'
-        run: exit 1
+
+  finalize:
+    needs: process
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_RESULT: ${{ needs.process.result }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_HEAD: ${{ needs.process.outputs.current_head || inputs.expected_head }}
+      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout trusted finalizer code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Reconcile PR and missing failure statuses
+        id: finalizer
+        run: >-
+          uv run --frozen ard workflow finalize
+          --upstream-result "$UPSTREAM_RESULT"
+          --repository-name "$REPOSITORY_NAME"
+          --pr-number "$PR_NUMBER"
+          --expected-head "$EXPECTED_HEAD"
+          --target-url "$TARGET_URL"
