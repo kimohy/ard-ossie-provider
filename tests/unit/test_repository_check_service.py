@@ -346,3 +346,15 @@ def test_secret_scan_streams_files_larger_than_previous_limit(tmp_path: Path) ->
 
     with pytest.raises(WorkflowValidationError, match="REPOSITORY_SECRET_PATTERN_FOUND"):
         tools.run("secret-scan")
+
+
+def test_secret_scan_does_not_exclude_a_root_nested_below_dot_ard(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ".ard" / "staging" / "candidate"
+    root.mkdir(parents=True)
+    (root / "secret.txt").write_text("sk-" + "s" * 24, encoding="utf-8")
+    tools = RepositoryVerificationTools(RepositoryPaths(root), runner=None)  # type: ignore[arg-type]
+
+    with pytest.raises(WorkflowValidationError, match="REPOSITORY_SECRET_PATTERN_FOUND"):
+        tools.run("secret-scan")

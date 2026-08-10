@@ -348,10 +348,11 @@ class RepositoryVerificationTools:
     def _run_secret_scan(self) -> None:
         excluded = {".git", ".ard", ".venv", "__pycache__"}
         for path in sorted(self.paths.root.rglob("*")):
+            relative = path.relative_to(self.paths.root)
             if (
                 path.is_symlink()
                 or not path.is_file()
-                or any(part in excluded for part in path.parts)
+                or any(part in excluded for part in relative.parts)
             ):
                 continue
             try:
@@ -359,12 +360,12 @@ class RepositoryVerificationTools:
             except OSError as error:
                 raise WorkflowValidationError(
                     "REPOSITORY_SECRET_SCAN_FAILED",
-                    f"secret scan could not read: {path.relative_to(self.paths.root)}",
+                    f"secret scan could not read: {relative}",
                 ) from error
             if found:
                 raise WorkflowValidationError(
                     "REPOSITORY_SECRET_PATTERN_FOUND",
-                    f"high-confidence secret pattern found: {path.relative_to(self.paths.root)}",
+                    f"high-confidence secret pattern found: {relative}",
                 )
 
     def _verified_actionlint(self) -> Path:
