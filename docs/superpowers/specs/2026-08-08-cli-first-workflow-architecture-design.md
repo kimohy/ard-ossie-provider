@@ -380,7 +380,13 @@ creates or reuses the locked environment without changing `uv.lock`.
 Repository verification is invoked through `ard workflow repository-check`. Its
 tool adapter runs pytest, Ruff, actionlint, schema synchronization, wheel content,
 Ossie checksum, and secret-pattern checks using pinned versions or verified cached
-tools. Actions YAML does not install or orchestrate those tools with shell code.
+tools. Candidate-executable pytest and wheel processes receive an explicit
+credential-free environment with isolated user configuration directories.
+The CLI requires exactly one explicit `static`, `pytest`, or `wheel` group; it
+does not aggregate trusted static checks and candidate execution in one checkout.
+`repository-check` never publishes commit statuses; the trusted finalizer is the
+only status publisher after all isolated verification jobs converge. Actions YAML
+does not install or orchestrate those tools with shell code.
 
 Workflow contract tests fail if a processing `run:` block:
 

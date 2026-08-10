@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, model_validator
 
 from ard_ossie.canonical import canonical_hash, schema_hash
 from ard_ossie.docling_parser import DoclingParser, ParsedDocument
@@ -36,6 +36,7 @@ from ard_ossie.models import (
     ProductRecord,
     ProductTableRef,
     RelationshipRecord,
+    Sha256,
     StrictModel,
     TableLocator,
     TableRecord,
@@ -74,13 +75,26 @@ class QualityFinding(StrictModel):
 
 
 class QualityReport(StrictModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+        title="ARD quality report",
+        json_schema_extra={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": (
+                "https://github.com/kimohy/ard-ossie-provider/"
+                "schemas/reports/quality-report.schema.json"
+            ),
+        },
+    )
+
     status: QualityStatus
-    product_id: str | None = None
-    product_version: int | None = None
+    product_id: ProductId | None
+    product_version: Version | None
     completeness: float = Field(ge=0, le=1)
-    hard_errors: list[QualityFinding] = Field(default_factory=list)
-    warnings: list[QualityFinding] = Field(default_factory=list)
-    artifact_hashes: dict[str, str] = Field(default_factory=dict)
+    hard_errors: list[QualityFinding]
+    warnings: list[QualityFinding]
+    artifact_hashes: dict[str, Sha256]
 
 
 class TableConfig(StrictModel):
@@ -236,6 +250,7 @@ def process_product(
         completeness=_completeness_score(config, table_irs),
         hard_errors=hard_errors,
         warnings=warnings,
+        artifact_hashes={},
     )
     if hard_errors:
         _write_quality(

@@ -234,31 +234,32 @@ class GitHubBootstrapService:
                 "BOOTSTRAP_PLAN_REPOSITORY_MISMATCH",
                 "bootstrap plan targets another repository",
             )
-        needs_secret = not plan.secret_present or replace_secret
+        current_plan = self.plan(plan.config)
+        needs_secret = not current_plan.secret_present or replace_secret
         if needs_secret and api_key is None and api_key_provider is None:
             raise WorkflowConfigurationError(
                 "LLM_API_KEY_REQUIRED",
                 "bootstrap requires a hidden LLM API key input",
             )
-        item_actions = {item.target: item.action for item in plan.items}
         owner = EnvironmentReviewer(
             kind="User",
-            id=plan.owner_id,
-            login=plan.owner_login,
+            id=current_plan.owner_id,
+            login=current_plan.owner_login,
         )
         mutations: list[MutationRecord] = []
         outputs: dict[str, object] = {
-            "repository": plan.repository,
-            "items": [item.model_dump(mode="json") for item in plan.items],
+            "repository": current_plan.repository,
+            "items": [item.model_dump(mode="json") for item in current_plan.items],
             "secret": (
                 "replace"
                 if replace_secret
-                else ("present" if plan.secret_present else "create")
+                else ("present" if current_plan.secret_present else "create")
             ),
         }
         try:
+            current_labels = self.github.list_labels()
             for desired in _LABELS:
-                if item_actions[f"label:{desired.name}"] != "noop":
+                if current_labels.get(desired.name) != desired:
                     mutations.append(
                         self.github.upsert_label(
                             desired.name,
@@ -266,20 +267,20 @@ class GitHubBootstrapService:
                             desired.description,
                         )
                     )
-            if item_actions["actions:workflow-permissions"] != "noop":
+            if self.github.get_actions_permissions() != _ACTIONS:
                 mutations.append(self.github.set_actions_permissions(_ACTIONS))
 
             llm = _llm_environment(owner)
-            if item_actions["environment:ard-llm"] != "noop":
+            if self.github.get_environment(llm.name) != llm:
                 mutations.append(self.github.upsert_environment(llm))
-                current_variables = self.github.list_variables(llm.name)
-                for name, value in sorted(plan.config.variables().items()):
-                    if current_variables.get(name) != value:
-                        mutations.append(
-                            self.github.set_variable(name, value, llm.name)
-                        )
+            current_variables = self.github.list_variables(llm.name)
+            for name, value in sorted(plan.config.variables().items()):
+                if current_variables.get(name) != value:
+                    mutations.append(
+                        self.github.set_variable(name, value, llm.name)
+                    )
             production = _production_environment(owner)
-            if item_actions["environment:production-linkage"] != "noop":
+            if self.github.get_environment(production.name) != production:
                 mutations.append(self.github.upsert_environment(production))
 
             if needs_secret:
@@ -300,13 +301,29 @@ class GitHubBootstrapService:
                 finally:
                     secret_value = ""
 
-            if item_actions["branch:main"] != "noop":
-                current_protection = self.github.get_branch_protection("main")
+            current_protection = self.github.get_branch_protection("main")
+            desired_protection = _bootstrap_protection(current_protection)
+            if current_protection != desired_protection:
                 mutations.append(
                     self.github.set_branch_protection(
                         "main",
-                        _bootstrap_protection(current_protection),
+                        desired_protection,
                     )
+                )
+            postcondition = self.plan(plan.config)
+            remaining = [
+                item.model_dump(mode="json")
+                for item in postcondition.items
+                if item.action != "noop"
+            ]
+            if remaining:
+                outputs["remaining"] = remaining
+                raise WorkflowPartialError(
+                    "BOOTSTRAP_POSTCONDITION_FAILED",
+                    "repository bootstrap did not reach the desired state",
+                    retryable=True,
+                    outputs=outputs,
+                    mutations=mutations,
                 )
         except WorkflowPartialError:
             raise
@@ -322,7 +339,11 @@ class GitHubBootstrapService:
             ) from error
         return WorkflowResult(
             command="github.bootstrap",
-            status=WorkflowStatus.SUCCESS,
+            status=(
+                WorkflowStatus.SUCCESS
+                if any(item.action != "noop" for item in mutations)
+                else WorkflowStatus.NOOP
+            ),
             outputs=outputs,
             mutations=mutations,
         )

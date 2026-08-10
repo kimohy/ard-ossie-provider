@@ -28,6 +28,8 @@ class FinalizeRequest(StrictModel):
     pr_number: int | None = Field(default=None, gt=0)
     expected_head: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     target_url: str = ""
+    publish_success_statuses: bool = False
+    authoritative_statuses: bool = False
 
 
 class FinalizeService:
@@ -64,17 +66,29 @@ class FinalizeService:
                     _summary(request, prior, succeeded),
                 )
             )
-        if not succeeded and expected_head is not None:
+        if expected_head is not None and (
+            not succeeded or request.publish_success_statuses
+        ):
+            state = "success" if succeeded else "failure"
+            description = (
+                "Repository validation passed"
+                if succeeded
+                else "ARD workflow did not complete successfully"
+            )
             for context in ("ard/changeset", "ard/quality-gate"):
                 existing = self.github.get_status(expected_head, context)
-                if existing in {"success", "failure"}:
+                if existing == state or (
+                    not succeeded
+                    and not request.authoritative_statuses
+                    and existing in {"success", "failure"}
+                ):
                     continue
                 mutations.append(
                     self.github.set_status(
                         expected_head,
                         context,
-                        "failure",
-                        "ARD workflow did not complete successfully",
+                        state,
+                        description,
                         request.target_url,
                     )
                 )

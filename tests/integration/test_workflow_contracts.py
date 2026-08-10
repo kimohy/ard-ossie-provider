@@ -206,6 +206,12 @@ def test_release_uses_numeric_id_tags_and_protected_linkage_dispatch() -> None:
     assert "--table-ids" in text
     assert "production-linkage" in text
     assert "retention-days: 30" in text
+    detect_checkout = next(
+        step
+        for step in workflow["jobs"]["detect"]["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert detect_checkout["with"]["fetch-depth"] == "0"
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-release.yml")
 
 
@@ -213,12 +219,73 @@ def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
     workflow = load_workflow("ard-repository-change.yml")
     text = (WORKFLOWS / "ard-repository-change.yml").read_text(encoding="utf-8")
 
-    assert workflow["on"]["pull_request"]["types"] == [
+    assert "pull_request" not in workflow["on"]
+    assert workflow["on"]["pull_request_target"]["types"] == [
         "opened",
         "synchronize",
         "reopened",
     ]
+    assert workflow["on"]["pull_request_target"]["paths-ignore"] == [
+        "products/**",
+        "registry/**",
+    ]
     assert "ard workflow repository-check" in text
     assert "ard workflow finalize" in text
-    assert workflow["jobs"]["finalize"]["if"] == "always()"
+    check = workflow["jobs"]["check"]
+    assert check["permissions"] == {"contents": "read"}
+    assert "GH_TOKEN" not in str(check)
+    checkouts = [
+        step
+        for step in check["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
+    assert checkouts[0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert checkouts[1]["with"]["ref"] == (
+        "refs/pull/${{ github.event.pull_request.number }}/head"
+    )
+    repository_step = next(step for step in check["steps"] if step.get("run"))
+    assert repository_step["working-directory"] == "trusted"
+    assert "--repository \"$CANDIDATE_REPOSITORY\"" in repository_step["run"]
+    assert "--verification-group static" in repository_step["run"]
+    assert "publish-statuses" not in repository_step["run"]
+    assert "repository-name" not in repository_step["run"]
+
+    executable = workflow["jobs"]["executable"]
+    assert executable["needs"] == "check"
+    assert executable["if"] == "needs.check.outputs.code_only == 'true'"
+    assert executable["permissions"] == {"contents": "read"}
+    assert "GH_TOKEN" not in str(executable)
+    assert executable["strategy"]["matrix"]["verification_group"] == [
+        "pytest",
+        "wheel",
+    ]
+    executable_checkouts = [
+        step
+        for step in executable["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert [step["with"]["path"] for step in executable_checkouts] == [
+        "trusted",
+        "candidate",
+    ]
+    assert executable_checkouts[1]["with"]["ref"] == (
+        "refs/pull/${{ github.event.pull_request.number }}/head"
+    )
+    executable_run = next(
+        step["run"] for step in executable["steps"] if step.get("run")
+    )
+    assert "--verification-group \"$VERIFICATION_GROUP\"" in executable_run
+    assert "publish-statuses" not in executable_run
+    assert "repository-name" not in executable_run
+
+    finalizer = workflow["jobs"]["finalize"]
+    assert finalizer["needs"] == ["check", "executable"]
+    assert finalizer["if"] == "always()"
+    assert finalizer["permissions"] == {"contents": "read", "statuses": "write"}
+    assert "GH_TOKEN" in str(finalizer)
+    finalizer_runs = [step["run"] for step in finalizer["steps"] if step.get("run")]
+    assert len(finalizer_runs) == 2
+    assert any("--publish-success-statuses" in run for run in finalizer_runs)
+    assert any("--authoritative-statuses" in run for run in finalizer_runs)
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-repository-change.yml")

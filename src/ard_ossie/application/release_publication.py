@@ -18,7 +18,7 @@ from ard_ossie.application.contracts import (
 )
 from ard_ossie.impact import ChangeSetStatus
 from ard_ossie.models import ProductKey, StrictModel, TableId
-from ard_ossie.ports.filesystem import FileSystemPort
+from ard_ossie.ports.filesystem import FileSystemPort, PathPolicyError
 from ard_ossie.ports.git import GitPort
 from ard_ossie.ports.github import GitHubPort, ReleaseState
 from ard_ossie.registry import Registry
@@ -26,6 +26,7 @@ from ard_ossie.release import (
     ReleaseBlocked,
     ReleasePlan,
     build_release_bundle,
+    release_source_paths,
     resolve_release_plan,
 )
 
@@ -61,12 +62,15 @@ class ReleasePublicationService:
                 "release repository does not match filesystem port",
             )
         self._require_current_head(request.current)
+        product_root = self._verify_release_source_paths(request.product_key)
         plan = self._resolve_plan(request)
         self._verify_changeset_readiness(plan, request.current)
 
         output = self.paths.resolve_write(request.output)
-        product_root = self.paths.resolve_read(Path("products") / plan.product_key)
-        bundle_path = output / f"{plan.product_id}-v{plan.product_version}.zip"
+        bundle_path = self.paths.resolve_write(
+            output / f"{plan.product_id}-v{plan.product_version}.zip"
+        )
+        self._verify_release_source_paths(plan.product_key)
         try:
             bundle = self.bundle_builder(product_root, bundle_path)
         except (OSError, TypeError, ValueError, ReleaseBlocked) as error:
@@ -164,6 +168,16 @@ class ReleasePublicationService:
             )
         except (OSError, TypeError, ValueError, ReleaseBlocked) as error:
             raise _release_conflict(error, "RELEASE_PLAN_INVALID") from error
+
+    def _verify_release_source_paths(self, product_key: str) -> Path:
+        product_root = self.paths.resolve_read(Path("products") / product_key)
+        for source in release_source_paths(product_root):
+            try:
+                self.paths.resolve_read(source)
+            except PathPolicyError as error:
+                if error.code != "READ_PATH_NOT_FOUND":
+                    raise
+        return product_root
 
     def _verify_changeset_readiness(self, plan: ReleasePlan, current: str) -> None:
         if plan.changeset_id is None:

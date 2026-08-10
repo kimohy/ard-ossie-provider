@@ -99,6 +99,57 @@ def test_successful_cross_job_finalizer_does_not_require_result_file(
     assert github.issue_labels == {"ard:approved", "ard:pr-created"}
 
 
+def test_trusted_finalizer_publishes_success_statuses_idempotently(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub()
+    github.statuses[(SHA, "ard/quality-gate")] = "failure"
+    finalizer = FinalizeService(RepositoryPaths(tmp_path), github)
+    successful = request(
+        tmp_path,
+        result_path=None,
+        issue_number=None,
+        pr_number=None,
+        publish_success_statuses=True,
+    )
+
+    first = finalizer.run(successful)
+    second = finalizer.run(successful)
+
+    assert github.statuses == {
+        (SHA, "ard/changeset"): "success",
+        (SHA, "ard/quality-gate"): "success",
+    }
+    assert first.status is WorkflowStatus.SUCCESS
+    assert second.status is WorkflowStatus.NOOP
+
+
+def test_authoritative_failure_replaces_stale_success_statuses(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub()
+    github.statuses = {
+        (SHA, "ard/changeset"): "success",
+        (SHA, "ard/quality-gate"): "success",
+    }
+    finalizer = FinalizeService(RepositoryPaths(tmp_path), github)
+    failed = request(
+        tmp_path,
+        upstream_result="failure",
+        result_path=None,
+        issue_number=None,
+        pr_number=None,
+        authoritative_statuses=True,
+    )
+
+    first = finalizer.run(failed)
+    second = finalizer.run(failed)
+
+    assert set(github.statuses.values()) == {"failure"}
+    assert first.status is WorkflowStatus.SUCCESS
+    assert second.status is WorkflowStatus.NOOP
+
+
 def test_partial_processing_posts_failure_status_and_comment_once(tmp_path: Path) -> None:
     github = FakeGitHub()
     finalizer = FinalizeService(RepositoryPaths(tmp_path), github)

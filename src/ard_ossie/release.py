@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from ard_ossie.impact import ChangeSetRecord, ChangeSetStatus
 from ard_ossie.models import ProductRecord, StrictModel, TableRecord
+from ard_ossie.pipeline import QualityReport
 from ard_ossie.registry import Registry
 
 
@@ -97,7 +98,16 @@ def resolve_release_plan(
     quality_path = product_root / "quality" / "quality-report.json"
     if not quality_path.is_file():
         raise ReleaseBlocked("QUALITY_REPORT_MISSING")
-    quality = json.loads(quality_path.read_text(encoding="utf-8"))
+    try:
+        quality = QualityReport.model_validate_json(
+            quality_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValidationError, ValueError) as error:
+        raise ReleaseBlocked("QUALITY_REPORT_INVALID") from error
+    if quality.product_id != product.product_id:
+        raise ReleaseBlocked("QUALITY_REPORT_PRODUCT_MISMATCH")
+    if quality.product_version != product.version:
+        raise ReleaseBlocked("QUALITY_REPORT_VERSION_MISMATCH")
     config_path = product_root / "product.yaml"
     config = (
         yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
@@ -118,12 +128,15 @@ def resolve_release_plan(
                     f"{required_product_id}:v{readiness.version}"
                 )
 
-    artifact_hashes = _verify_release_files(product_root, quality)
+    artifact_hashes = _verify_release_files(
+        product_root,
+        quality.model_dump(mode="json"),
+    )
     return build_release_plan(
         product,
         tables,
         changeset=changeset,
-        quality_report=quality,
+        quality_report=quality.model_dump(mode="json"),
         artifact_hashes=artifact_hashes,
     )
 
@@ -131,22 +144,53 @@ def resolve_release_plan(
 def build_release_bundle(product_root: str | Path, output_path: str | Path) -> Path:
     root = Path(product_root)
     output = Path(output_path)
-    entries = [
-        *(root / "generated" / name for name in _GENERATED_ASSETS),
-        *(root / "quality" / name for name in _QUALITY_ASSETS),
-    ]
+    entries = _release_bundle_entries(root)
     missing = [path.relative_to(root).as_posix() for path in entries if not path.is_file()]
     if missing:
         raise ReleaseBlocked(f"RELEASE_ARTIFACT_MISSING: {missing[0]}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for path in sorted(entries, key=lambda item: item.relative_to(root).as_posix()):
-            name = path.relative_to(root).as_posix()
-            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o100644 << 16
-            archive.writestr(info, path.read_bytes())
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+        with zipfile.ZipFile(
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as archive:
+            for path in sorted(
+                entries,
+                key=lambda item: item.relative_to(root).as_posix(),
+            ):
+                name = path.relative_to(root).as_posix()
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o100644 << 16
+                archive.writestr(info, path.read_bytes())
+        temporary.replace(output)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return output
+
+
+def release_source_paths(product_root: str | Path) -> tuple[Path, ...]:
+    root = Path(product_root)
+    return (root / "product.yaml", *_release_bundle_entries(root))
+
+
+def _release_bundle_entries(root: Path) -> tuple[Path, ...]:
+    return (
+        *(root / "generated" / name for name in _GENERATED_ASSETS),
+        *(root / "quality" / name for name in _QUALITY_ASSETS),
+    )
 
 
 def verify_tag_target(tag: str, *, expected_commit: str, existing_target: str | None) -> None:
@@ -158,6 +202,8 @@ def verify_tag_target(tag: str, *, expected_commit: str, existing_target: str | 
 
 def _verify_release_files(product_root: Path, quality: dict[str, Any]) -> dict[str, str]:
     expected = quality.get("artifact_hashes", {})
+    if set(expected) != set(_GENERATED_ASSETS):
+        raise ReleaseBlocked("QUALITY_ARTIFACT_HASH_SET_MISMATCH")
     hashes: dict[str, str] = {}
     for directory, names in (("generated", _GENERATED_ASSETS), ("quality", _QUALITY_ASSETS)):
         for name in names:
@@ -166,6 +212,6 @@ def _verify_release_files(product_root: Path, quality: dict[str, Any]) -> dict[s
                 raise ReleaseBlocked(f"RELEASE_ARTIFACT_MISSING: {directory}/{name}")
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             hashes[f"{directory}/{name}"] = digest
-            if directory == "generated" and expected.get(name) not in (None, digest):
+            if directory == "generated" and expected[name] != digest:
                 raise ReleaseBlocked(f"RELEASE_ARTIFACT_HASH_MISMATCH: {name}")
     return hashes

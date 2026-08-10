@@ -48,6 +48,16 @@ class GitCli:
         self._require_success(result, "HEAD_RESOLUTION_FAILED")
         return _validated_sha(result.stdout)
 
+    def is_worktree_clean(self) -> bool:
+        result = self._git(
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        )
+        self._require_success(result, "STATUS_FAILED")
+        return not result.stdout
+
     def remote_branch_sha(self, branch: str) -> str | None:
         _validate_ref(branch)
         ref = f"refs/heads/{branch}"

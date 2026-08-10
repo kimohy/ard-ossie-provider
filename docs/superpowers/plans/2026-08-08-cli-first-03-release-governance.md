@@ -189,7 +189,7 @@ git commit -m "feat: dispatch approved ARD releases through CLI"
 - Test: `tests/integration/test_workflow_repository_check_cli.py`
 
 **Interfaces:**
-- Consumes: `GitPort.changed_paths()`, `CommandRunner`, `GitHubPort.set_status()`
+- Consumes: `GitPort.changed_paths()`, `CommandRunner`
 - Produces: `RepositoryCheckRequest`, `RepositoryCheckService.run()`, `ard workflow repository-check`
 
 - [ ] **Step 1: Write failing classification and tool-order tests**
@@ -216,9 +216,14 @@ Expected: FAIL because `RepositoryCheckService` is unavailable.
 
 Classify `products/**` and `registry/**` as ARD data and every other changed path as repository code/config/docs. Reject mixed changes. For code-only changes, run locked pytest and Ruff, actionlint `v1.7.7`, checked-in schema synchronization, wheel asset inspection, Ossie checksum, and secret pattern scan. The actionlint adapter downloads the official `v1.7.7` release archive and its published checksum manifest into `.ard/tools`, verifies the matching archive digest before extraction, and reuses the verified binary by digest. Stop on first failure but record completed tools.
 
-- [ ] **Step 4: Implement status publication and CLI**
+- [ ] **Step 4: Implement evidence output and CLI**
 
-Publish both ARD status contexts to the exact PR head: success only when all verifiers pass, failure otherwise. The finalizer path must still publish failure if a verifier process crashes. Output `code_only`, `head_sha`, and verifier summaries.
+Output `code_only`, `head_sha`, and verifier summaries without publishing statuses.
+Run candidate-executable verifiers with a credential-free environment. The trusted
+finalizer is the exclusive publisher and publishes success only when every isolated
+verifier job passes; it must still publish failure if a verifier process crashes.
+Require one explicit `static`, `pytest`, or `wheel` group so trusted static checks
+and candidate execution are never aggregated in the same checkout.
 
 - [ ] **Step 5: Run tests and commit**
 

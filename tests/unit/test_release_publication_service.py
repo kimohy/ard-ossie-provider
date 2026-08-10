@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from ard_ossie.adapters.filesystem import RepositoryPaths
-from ard_ossie.application.contracts import WorkflowConflict, WorkflowPartialError
+from ard_ossie.application.contracts import (
+    WorkflowConflict,
+    WorkflowPartialError,
+    WorkflowSecurityError,
+)
 from ard_ossie.application.release_publication import (
     ReleasePublicationRequest,
     ReleasePublicationService,
@@ -172,7 +176,11 @@ def build_repository(tmp_path: Path) -> None:
         json.dumps(
             {
                 "status": "PASS",
+                "product_id": PRODUCT_ID,
+                "product_version": 12,
+                "completeness": 1,
                 "hard_errors": [],
+                "warnings": [],
                 "artifact_hashes": hashes,
             }
         ),
@@ -336,6 +344,71 @@ def test_publish_rejects_missing_quality_before_tags(tmp_path: Path) -> None:
     assert git.created == []
 
 
+@pytest.mark.parametrize(
+    ("update", "code"),
+    [
+        ({"status": "garbage"}, "QUALITY_REPORT_INVALID"),
+        (
+            {"product_id": "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632"},
+            "QUALITY_REPORT_PRODUCT_MISMATCH",
+        ),
+        ({"product_version": 11}, "QUALITY_REPORT_VERSION_MISMATCH"),
+    ],
+)
+def test_publish_rejects_malformed_or_stale_quality_evidence_before_tags(
+    tmp_path: Path,
+    update: dict[str, object],
+    code: str,
+) -> None:
+    build_repository(tmp_path)
+    quality_path = (
+        tmp_path / "products" / "sales-order" / "quality" / "quality-report.json"
+    )
+    quality = json.loads(quality_path.read_text(encoding="utf-8"))
+    quality.update(update)
+    quality_path.write_text(json.dumps(quality), encoding="utf-8")
+    git = FakeGit()
+
+    with pytest.raises(WorkflowConflict, match=code):
+        service(tmp_path, git, FakeGitHub()).run(request(tmp_path))
+
+    assert git.created == []
+
+
+def test_publish_rejects_incomplete_generated_hash_evidence_before_tags(
+    tmp_path: Path,
+) -> None:
+    build_repository(tmp_path)
+    quality_path = (
+        tmp_path / "products" / "sales-order" / "quality" / "quality-report.json"
+    )
+    quality = json.loads(quality_path.read_text(encoding="utf-8"))
+    quality["artifact_hashes"].pop("ossie-model.json")
+    quality_path.write_text(json.dumps(quality), encoding="utf-8")
+    git = FakeGit()
+
+    with pytest.raises(WorkflowConflict, match="QUALITY_ARTIFACT_HASH_SET_MISMATCH"):
+        service(tmp_path, git, FakeGitHub()).run(request(tmp_path))
+
+    assert git.created == []
+
+
+def test_publish_rejects_non_object_quality_evidence_before_tags(
+    tmp_path: Path,
+) -> None:
+    build_repository(tmp_path)
+    quality_path = (
+        tmp_path / "products" / "sales-order" / "quality" / "quality-report.json"
+    )
+    quality_path.write_text("[]", encoding="utf-8")
+    git = FakeGit()
+
+    with pytest.raises(WorkflowConflict, match="QUALITY_REPORT_INVALID"):
+        service(tmp_path, git, FakeGitHub()).run(request(tmp_path))
+
+    assert git.created == []
+
+
 def test_publish_rejects_bundle_source_tampering_before_tags(tmp_path: Path) -> None:
     build_repository(tmp_path)
     git = FakeGit()
@@ -356,4 +429,47 @@ def test_publish_rejects_bundle_source_tampering_before_tags(tmp_path: Path) -> 
             bundle_builder=tampering_builder,
         ).run(request(tmp_path))
 
+    assert git.created == []
+
+
+def test_publish_rejects_symlinked_public_source_before_bundle_or_tags(
+    tmp_path: Path,
+) -> None:
+    build_repository(tmp_path)
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("outside-secret", encoding="utf-8")
+    source = (
+        tmp_path
+        / "products"
+        / "sales-order"
+        / "generated"
+        / "data-product.md"
+    )
+    source.unlink()
+    source.symlink_to(outside)
+    git = FakeGit()
+
+    with pytest.raises(WorkflowSecurityError, match="SYMLINK_NOT_ALLOWED"):
+        service(tmp_path, git, FakeGitHub()).run(request(tmp_path))
+
+    assert git.created == []
+    assert not (tmp_path / "dist").exists()
+
+
+def test_publish_rejects_symlinked_bundle_output_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    build_repository(tmp_path)
+    outside = tmp_path / "outside-target.zip"
+    outside.write_bytes(b"do-not-overwrite")
+    output = tmp_path / "dist"
+    output.mkdir()
+    bundle = output / f"{PRODUCT_ID}-v12.zip"
+    bundle.symlink_to(outside)
+    git = FakeGit()
+
+    with pytest.raises(WorkflowSecurityError, match="SYMLINK_NOT_ALLOWED"):
+        service(tmp_path, git, FakeGitHub()).run(request(tmp_path))
+
+    assert outside.read_bytes() == b"do-not-overwrite"
     assert git.created == []

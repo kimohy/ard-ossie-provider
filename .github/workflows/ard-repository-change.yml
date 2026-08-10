@@ -1,8 +1,11 @@
 name: ARD repository change gate
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - products/**
+      - registry/**
 
 concurrency:
   group: ard-repository-${{ github.event.pull_request.number }}
@@ -13,22 +16,26 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      statuses: write
     outputs:
       code_only: ${{ steps.repository_check.outputs.code_only }}
     env:
-      GH_TOKEN: ${{ github.token }}
       BASE_REF: ${{ github.event.pull_request.base.sha }}
       HEAD_REF: ${{ github.event.pull_request.head.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      REPOSITORY_NAME: ${{ github.repository }}
-      TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      CANDIDATE_REPOSITORY: ${{ github.workspace }}/candidate
     steps:
-      - name: Checkout exact pull request head without credentials
+      - name: Checkout trusted static verifier code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout pristine pull request tree for static verification
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 0
+          path: candidate
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -38,18 +45,68 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: '0.11.33'
-      - name: Classify and verify repository change
+      - name: Classify and statically verify without candidate execution
         id: repository_check
+        working-directory: trusted
         run: >-
           uv run --frozen ard workflow repository-check
           --base-ref "$BASE_REF"
           --head-ref "$HEAD_REF"
           --head-sha "$HEAD_SHA"
-          --repository-name "$REPOSITORY_NAME"
-          --target-url "$TARGET_URL"
+          --repository "$CANDIDATE_REPOSITORY"
+          --verification-group static
+
+  executable:
+    needs: check
+    if: needs.check.outputs.code_only == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        verification_group: [pytest, wheel]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      BASE_REF: ${{ github.event.pull_request.base.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CANDIDATE_REPOSITORY: ${{ github.workspace }}/candidate
+      VERIFICATION_GROUP: ${{ matrix.verification_group }}
+    steps:
+      - name: Checkout trusted executable verifier code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout isolated pull request tree
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Run one isolated executable verifier
+        id: executable_verifier
+        working-directory: trusted
+        run: >-
+          uv run --frozen ard workflow repository-check
+          --base-ref "$BASE_REF"
+          --head-ref "$HEAD_REF"
+          --head-sha "$HEAD_SHA"
+          --repository "$CANDIDATE_REPOSITORY"
+          --verification-group "$VERIFICATION_GROUP"
 
   finalize:
-    needs: check
+    needs: [check, executable]
     if: always()
     runs-on: ubuntu-24.04
     permissions:
@@ -57,7 +114,6 @@ jobs:
       statuses: write
     env:
       GH_TOKEN: ${{ github.token }}
-      UPSTREAM_RESULT: ${{ needs.check.result }}
       EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
       REPOSITORY_NAME: ${{ github.repository }}
       TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -75,11 +131,32 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: '0.11.33'
-      - name: Publish missing repository failure statuses
-        id: finalizer
+      - name: Publish successful code-only repository statuses
+        id: finalize_success
+        if: >-
+          needs.check.result == 'success' &&
+          needs.executable.result == 'success' &&
+          needs.check.outputs.code_only == 'true'
+        env:
+          UPSTREAM_RESULT: success
         run: >-
           uv run --frozen ard workflow finalize
           --upstream-result "$UPSTREAM_RESULT"
           --repository-name "$REPOSITORY_NAME"
           --expected-head "$EXPECTED_HEAD"
           --target-url "$TARGET_URL"
+          --publish-success-statuses
+      - name: Publish repository failure statuses
+        id: finalize_failure
+        if: >-
+          needs.check.result != 'success' ||
+          needs.executable.result != 'success'
+        env:
+          UPSTREAM_RESULT: failure
+        run: >-
+          uv run --frozen ard workflow finalize
+          --upstream-result "$UPSTREAM_RESULT"
+          --repository-name "$REPOSITORY_NAME"
+          --expected-head "$EXPECTED_HEAD"
+          --target-url "$TARGET_URL"
+          --authoritative-statuses

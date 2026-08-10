@@ -31,7 +31,7 @@ def test_workflow_repository_check_maps_exact_head(
     monkeypatch.setattr(
         workflow_cli,
         "_repository_check_service",
-        lambda repository_name, paths: service,
+        lambda paths: service,
         raising=False,
     )
 
@@ -46,8 +46,8 @@ def test_workflow_repository_check_maps_exact_head(
             "b" * 40,
             "--head-sha",
             "b" * 40,
-            "--repository-name",
-            "owner/repository",
+            "--verification-group",
+            "static",
             "--repository",
             str(tmp_path),
         ],
@@ -56,6 +56,7 @@ def test_workflow_repository_check_maps_exact_head(
     assert result.exit_code == 0, result.output
     assert service.request.base_ref == "a" * 40
     assert service.request.head_sha == "b" * 40
+    assert service.request.verification_group == "static"
     envelope = json.loads(
         (tmp_path / ".ard" / "run" / "workflow.repository-check-result.json").read_text()
     )

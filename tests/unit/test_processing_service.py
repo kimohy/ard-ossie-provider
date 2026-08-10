@@ -182,6 +182,9 @@ def successful_processor(product_path: Path, **kwargs) -> ProcessResult:
             product_id=PRODUCT_ID,
             product_version=1,
             completeness=1,
+            hard_errors=[],
+            warnings=[],
+            artifact_hashes={},
         ),
     )
 

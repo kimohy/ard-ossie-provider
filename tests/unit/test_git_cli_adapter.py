@@ -63,6 +63,17 @@ def test_changed_paths_allows_a_deleted_repository_path(tmp_path: Path) -> None:
     assert changed.paths == (Path("products/old/product.yaml"),)
 
 
+def test_worktree_integrity_check_includes_untracked_paths(tmp_path: Path) -> None:
+    clean_runner = RecordingRunner([ok("")])
+    dirty_runner = RecordingRunner([ok("?? generated-secret.txt\x00")])
+
+    assert GitCli(tmp_path, clean_runner).is_worktree_clean() is True
+    assert GitCli(tmp_path, dirty_runner).is_worktree_clean() is False
+    assert clean_runner.argv == [
+        ("git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    ]
+
+
 def test_commit_allowed_paths_rejects_unexpected_status(tmp_path: Path) -> None:
     """A processor write outside its allowlist must be rejected before git add."""
     runner = RecordingRunner([ok(" M README.md\x00")])

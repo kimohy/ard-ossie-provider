@@ -142,6 +142,22 @@ def test_second_bootstrap_is_noop_and_secret_never_enters_result() -> None:
     assert "sentinel-key" not in result.model_dump_json()
 
 
+def test_apply_replans_noop_resources_after_confirmation_drift() -> None:
+    github = FakeGitHub()
+    service = GitHubBootstrapService(REPOSITORY, github)
+    service.apply(service.plan(provider_config()), api_key="sentinel-key")
+    confirmed_plan = service.plan(provider_config())
+    assert all(item.action == "noop" for item in confirmed_plan.items)
+
+    github.protection = None
+    result = service.apply(confirmed_plan)
+
+    assert github.protection is not None
+    assert any(
+        mutation.resource == "branch_protection" for mutation in result.mutations
+    )
+
+
 def test_enable_review_protection_changes_only_approval_count() -> None:
     github = FakeGitHub()
     github.protection = BranchProtectionState(

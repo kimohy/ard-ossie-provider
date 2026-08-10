@@ -255,6 +255,14 @@ def finalize_workflow(
     pr_number: Annotated[int | None, typer.Option("--pr-number", min=1)] = None,
     expected_head: Annotated[str | None, typer.Option("--expected-head")] = None,
     target_url: Annotated[str, typer.Option("--target-url")] = "",
+    publish_success_statuses: Annotated[
+        bool,
+        typer.Option("--publish-success-statuses/--no-publish-success-statuses"),
+    ] = False,
+    authoritative_statuses: Annotated[
+        bool,
+        typer.Option("--authoritative-statuses/--no-authoritative-statuses"),
+    ] = False,
     repository: Annotated[Path, typer.Option("--repository")] = Path("."),
 ) -> None:
     command = "workflow.finalize"
@@ -269,6 +277,8 @@ def finalize_workflow(
             pr_number=pr_number,
             expected_head=expected_head,
             target_url=target_url,
+            publish_success_statuses=publish_success_statuses,
+            authoritative_statuses=authoritative_statuses,
         )
         return _finalize_service(repository_name, paths).run(request)
 
@@ -348,8 +358,10 @@ def repository_check_workflow(
     base_ref: Annotated[str, typer.Option("--base-ref")],
     head_ref: Annotated[str, typer.Option("--head-ref")],
     head_sha: Annotated[str, typer.Option("--head-sha")],
-    repository_name: Annotated[str, typer.Option("--repository-name")],
-    target_url: Annotated[str, typer.Option("--target-url")] = "",
+    verification_group: Annotated[
+        str,
+        typer.Option("--verification-group"),
+    ],
     repository: Annotated[Path, typer.Option("--repository")] = Path("."),
 ) -> None:
     command = "workflow.repository-check"
@@ -361,9 +373,9 @@ def repository_check_workflow(
             base_ref=base_ref,
             head_ref=head_ref,
             head_sha=head_sha,
-            target_url=target_url,
+            verification_group=verification_group,
         )
-        return _repository_check_service(repository_name, paths).run(request)
+        return _repository_check_service(paths).run(request)
 
     _publish(paths.root, command, run)
 
@@ -544,16 +556,14 @@ def _release_dispatch_service(repository_name: str, paths):
     )
 
 
-def _repository_check_service(repository_name: str, paths):
+def _repository_check_service(paths):
     from ard_ossie.adapters.git_cli import GitCli
-    from ard_ossie.adapters.github_cli import GitHubCli
     from ard_ossie.adapters.subprocess import SubprocessRunner
 
     runner = SubprocessRunner()
     return RepositoryCheckService(
         paths,
         GitCli(paths.root, runner, paths=paths),
-        GitHubCli(repository_name, runner, paths=paths),
         RepositoryVerificationTools(paths, runner),
     )
 

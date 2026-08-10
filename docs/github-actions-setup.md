@@ -81,6 +81,13 @@ shared table 변경이 아닌 PR에도 `ard/changeset=success`가 게시됩니�
 
 코드·workflow·문서만 바꾸는 PR은 `ARD repository change gate`가 전체 테스트, Ruff와 actionlint를 실행한 뒤 같은 두 status를 게시합니다. `products/` 또는 `registry/` 변경을 코드 변경과 한 PR에 섞으면 `MIXED_CODE_AND_ARD_DATA_NOT_ALLOWED`로 차단합니다.
 
+이 gate의 `pull_request_target` 정의는 항상 기본 브랜치에서 읽습니다. 정적 검증은
+pristine `candidate/` checkout에서 후보 코드를 실행하지 않고 수행합니다. `pytest`와
+wheel build는 각각 별도 matrix runner의 격리된 checkout에서 실행되며 모든 검증 job은
+`contents: read`만 갖고 `GH_TOKEN`이나 status 쓰기 권한을 받지 않습니다. 두 required
+status는 candidate 코드를 실행하지 않는 별도 finalizer job이 기본 브랜치의 CLI로만
+게시합니다.
+
 ## 5. 승인 환경
 
 `Settings → Environments`에서 `production-linkage` 환경도 생성합니다.

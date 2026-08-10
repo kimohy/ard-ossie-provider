@@ -138,7 +138,18 @@ def test_changeset_readiness_version_must_match_current_registry(
     quality = product_root / "quality"
     quality.mkdir()
     (quality / "quality-report.json").write_text(
-        json.dumps({"status": "PASS", "hard_errors": []}), encoding="utf-8"
+        json.dumps(
+            {
+                "status": "PASS",
+                "product_id": PRODUCT_ID,
+                "product_version": 13,
+                "completeness": 1,
+                "hard_errors": [],
+                "warnings": [],
+                "artifact_hashes": {},
+            }
+        ),
+        encoding="utf-8",
     )
 
     with pytest.raises(ReleaseBlocked, match="CHANGESET_VERSION_NOT_CURRENT"):

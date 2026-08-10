@@ -69,8 +69,12 @@ def _write_failure_report(
     detailed = error.report if isinstance(error, PipelineValidationError) else None
     report = detailed or QualityReport(
         status=QualityStatus.FAIL,
+        product_id=None,
+        product_version=None,
         completeness=0,
         hard_errors=[QualityFinding(code=message.partition(":")[0], message=message)],
+        warnings=[],
+        artifact_hashes={},
     )
     default_path = product_path / "quality" / "quality-report.json"
     write_json(default_path, report.model_dump(mode="json"))

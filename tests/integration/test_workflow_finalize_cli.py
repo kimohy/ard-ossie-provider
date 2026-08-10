@@ -50,6 +50,8 @@ def test_workflow_finalize_cli_writes_independent_result_envelope(
             "a" * 40,
             "--repository-name",
             "owner/repository",
+            "--publish-success-statuses",
+            "--authoritative-statuses",
             "--repository",
             str(tmp_path),
         ],
@@ -57,6 +59,8 @@ def test_workflow_finalize_cli_writes_independent_result_envelope(
 
     assert result.exit_code == 0, result.output
     assert finalizer.requests[0].result_path is None
+    assert finalizer.requests[0].publish_success_statuses is True
+    assert finalizer.requests[0].authoritative_statuses is True
     envelope = json.loads(
         (tmp_path / ".ard" / "run" / "workflow.finalize-result.json").read_text()
     )
