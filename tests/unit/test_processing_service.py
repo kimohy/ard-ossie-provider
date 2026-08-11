@@ -28,6 +28,7 @@ from ard_ossie.pipeline import (
 )
 from ard_ossie.ports.git import ChangedPaths, CommitResult, GitTransientError
 from ard_ossie.ports.github import GitHubTransientError, PullRequestState
+from tests.integration.test_cli_process import create_product_fixture
 
 OLD_SHA = "a" * 40
 NEW_SHA = "b" * 40
@@ -250,6 +251,53 @@ def test_processing_promotes_commits_and_sets_exact_head_status(tmp_path: Path) 
     ]
     assert all(status[0] == NEW_SHA for status in github.statuses)
     assert git.pushes == [("ard/example", True)]
+
+
+def test_processing_creates_first_registry_through_atomic_promotion(
+    tmp_path: Path,
+) -> None:
+    """Trusted processing owns creation of the first authoritative registry."""
+    create_product_fixture(tmp_path)
+    git = FakeGit()
+
+    result = ProcessingService(
+        RepositoryPaths(tmp_path),
+        git,
+        FakeGitHub(git),
+        provider_factory=lambda: None,
+    ).run(request(tmp_path))
+
+    assert result.status is WorkflowStatus.SUCCESS
+    assert (tmp_path / "registry" / "products" / f"{PRODUCT_ID}.json").is_file()
+
+
+def test_processing_rejects_registry_symlink_inserted_before_processor(
+    tmp_path: Path,
+) -> None:
+    """Provider setup must not reopen the vetted registry path outside the repository."""
+    create_product_fixture(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("preserve\n", encoding="utf-8")
+    git = FakeGit()
+
+    def swap_registry_for_symlink():
+        (tmp_path / "registry").symlink_to(outside, target_is_directory=True)
+        return None
+
+    with pytest.raises(WorkflowSecurityError, match="SYMLINK_NOT_ALLOWED"):
+        ProcessingService(
+            RepositoryPaths(tmp_path),
+            git,
+            FakeGitHub(git),
+            provider_factory=swap_registry_for_symlink,
+        ).run(request(tmp_path))
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve\n"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    assert git.sha == OLD_SHA
+    assert git.pushes == []
 
 
 def test_processing_rejects_stale_head_before_loading_provider(tmp_path: Path) -> None:

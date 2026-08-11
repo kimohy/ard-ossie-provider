@@ -5,6 +5,8 @@ import json
 import os
 import re
 import shutil
+import stat
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -56,6 +58,10 @@ class PipelineValidationError(ValueError):
     def __init__(self, message: str, *, report: QualityReport | None = None) -> None:
         super().__init__(message)
         self.report = report
+
+
+class PipelineSecurityError(PipelineValidationError):
+    pass
 
 
 class ProviderExecutionError(RuntimeError):
@@ -146,8 +152,9 @@ def process_product(
     warnings_as_errors: bool = False,
 ) -> ProcessResult:
     root = Path(product_path).resolve()
-    registry_path = Path(registry_root).resolve()
-    registry = Registry.load(registry_path)
+    registry_path = _validated_registry_path(registry_root)
+    registry_initially_exists, registry_snapshot = _snapshot_registry(registry_path)
+    registry = _load_registry_snapshot(registry_snapshot)
     config = _load_config(root / "product.yaml")
     manifest = scan_sources(root / "sources")
     active_parser = parser or DoclingParser()
@@ -303,15 +310,17 @@ def process_product(
         (generated_candidate / name).write_text(content, encoding="utf-8")
 
     mappings = _build_mappings(product_id, table_records, table_drafts, registry)
+    _require_registry_state(
+        registry_path,
+        expected_exists=registry_initially_exists,
+    )
     registry_candidate = registry_path.with_name(
         f".{registry_path.name}.candidate-{candidate_root.parent.name[:12]}"
     )
     if registry_candidate.exists():
         shutil.rmtree(registry_candidate)
-    if registry_path.exists():
-        shutil.copytree(registry_path, registry_candidate)
-    else:
-        registry_candidate.mkdir(parents=True)
+    registry_candidate.mkdir(parents=True)
+    _write_registry_snapshot(registry_candidate, registry_snapshot)
     try:
         staged_registry = Registry.load(registry_candidate)
         staged_registry.write_product(product_record)
@@ -327,6 +336,10 @@ def process_product(
             product_id,
             table_records,
             suggestion_batch,
+        )
+        _require_registry_state(
+            registry_path,
+            expected_exists=registry_initially_exists,
         )
         _promote_directories(
             [
@@ -345,6 +358,219 @@ def process_product(
         generated_dir=root / "generated",
         quality_report=quality,
     )
+
+
+def _validated_registry_path(value: str | Path) -> Path:
+    path = Path(os.path.abspath(Path(value).expanduser()))
+    _require_registry_state(path, expected_exists=None)
+    return path
+
+
+def _require_registry_state(path: Path, *, expected_exists: bool | None) -> None:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        exists = False
+    else:
+        exists = True
+        if _is_link_or_reparse_point(path_stat):
+            raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+        if not stat.S_ISDIR(path_stat.st_mode):
+            raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+    if expected_exists is not None and exists is not expected_exists:
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED")
+
+
+def _snapshot_registry(path: Path) -> tuple[bool, dict[Path, bytes]]:
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    if not directory_flag or not nofollow_flag:
+        return _snapshot_registry_portable(path)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | directory_flag | nofollow_flag)
+    except FileNotFoundError:
+        return False, {}
+    except OSError as error:
+        _raise_registry_snapshot_error(path, error)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+        return True, _read_registry_directory(descriptor, Path())
+    finally:
+        os.close(descriptor)
+
+
+def _read_registry_directory(
+    descriptor: int,
+    prefix: Path,
+) -> dict[Path, bytes]:
+    snapshot: dict[Path, bytes] = {}
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW
+    try:
+        with os.scandir(descriptor) as iterator:
+            entries = sorted(iterator, key=lambda item: item.name)
+        for entry in entries:
+            relative = prefix / entry.name
+            if entry.is_symlink():
+                raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+            if entry.is_dir(follow_symlinks=False):
+                child = os.open(entry.name, directory_flags, dir_fd=descriptor)
+                try:
+                    snapshot.update(_read_registry_directory(child, relative))
+                finally:
+                    os.close(child)
+                continue
+            if not entry.is_file(follow_symlinks=False):
+                raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+            file_descriptor = os.open(entry.name, file_flags, dir_fd=descriptor)
+            try:
+                if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+                    raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+                with os.fdopen(file_descriptor, "rb", closefd=False) as handle:
+                    snapshot[relative] = handle.read()
+            finally:
+                os.close(file_descriptor)
+    except PipelineSecurityError:
+        raise
+    except OSError as error:
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+    return snapshot
+
+
+def _raise_registry_snapshot_error(path: Path, error: OSError) -> None:
+    try:
+        path_stat = path.lstat()
+    except OSError:
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+    if _is_link_or_reparse_point(path_stat):
+        raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+    if not stat.S_ISDIR(path_stat.st_mode):
+        raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+    raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+
+
+def _snapshot_registry_portable(path: Path) -> tuple[bool, dict[Path, bytes]]:
+    """Snapshot safely on platforms without directory-relative no-follow opens."""
+    try:
+        root_stat = path.lstat()
+    except FileNotFoundError:
+        return False, {}
+    except OSError as error:
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+    _require_portable_path_type(root_stat, directory=True)
+    try:
+        snapshot = _read_registry_directory_portable(path, Path(), root_stat)
+        _require_same_path_identity(path, root_stat)
+    except PipelineSecurityError:
+        raise
+    except OSError as error:
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+    return True, snapshot
+
+
+def _read_registry_directory_portable(
+    path: Path,
+    prefix: Path,
+    expected_stat: os.stat_result,
+) -> dict[Path, bytes]:
+    _require_same_path_identity(path, expected_stat)
+    with os.scandir(path) as iterator:
+        entries = sorted(iterator, key=lambda item: item.name)
+    _require_same_path_identity(path, expected_stat)
+    snapshot: dict[Path, bytes] = {}
+    for entry in entries:
+        _require_same_path_identity(path, expected_stat)
+        child_path = path / entry.name
+        child_stat = child_path.lstat()
+        relative = prefix / entry.name
+        if _is_link_or_reparse_point(child_stat):
+            raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+        if stat.S_ISDIR(child_stat.st_mode):
+            snapshot.update(
+                _read_registry_directory_portable(child_path, relative, child_stat)
+            )
+            continue
+        _require_portable_path_type(child_stat, directory=False)
+        snapshot[relative] = _read_registry_file_portable(child_path, child_stat)
+    _require_same_path_identity(path, expected_stat)
+    return snapshot
+
+
+def _read_registry_file_portable(path: Path, expected_stat: os.stat_result) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened_stat = os.fstat(descriptor)
+        _require_same_identity(opened_stat, expected_stat)
+        _require_portable_path_type(opened_stat, directory=False)
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read()
+        _require_same_identity(os.fstat(descriptor), expected_stat)
+    finally:
+        os.close(descriptor)
+    _require_same_path_identity(path, expected_stat)
+    return payload
+
+
+def _require_portable_path_type(
+    path_stat: os.stat_result,
+    *,
+    directory: bool,
+) -> None:
+    if _is_link_or_reparse_point(path_stat):
+        raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+    predicate = stat.S_ISDIR if directory else stat.S_ISREG
+    if not predicate(path_stat.st_mode):
+        raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+
+
+def _require_same_path_identity(path: Path, expected_stat: os.stat_result) -> None:
+    current_stat = path.lstat()
+    if _is_link_or_reparse_point(current_stat):
+        raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+    _require_same_identity(current_stat, expected_stat)
+
+
+def _require_same_identity(
+    current_stat: os.stat_result,
+    expected_stat: os.stat_result,
+) -> None:
+    if _path_identity(current_stat) != _path_identity(expected_stat):
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED")
+
+
+def _path_identity(path_stat: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        stat.S_IFMT(path_stat.st_mode),
+        path_stat.st_dev,
+        path_stat.st_ino,
+        path_stat.st_size,
+        path_stat.st_mtime_ns,
+        path_stat.st_ctime_ns,
+    )
+
+
+def _is_link_or_reparse_point(path_stat: os.stat_result) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    file_attributes = getattr(path_stat, "st_file_attributes", 0)
+    return stat.S_ISLNK(path_stat.st_mode) or bool(
+        reparse_flag and file_attributes & reparse_flag
+    )
+
+
+def _load_registry_snapshot(snapshot: dict[Path, bytes]) -> Registry:
+    with tempfile.TemporaryDirectory(prefix="ard-registry-snapshot-") as value:
+        root = Path(value)
+        _write_registry_snapshot(root, snapshot)
+        return Registry.load(root)
+
+
+def _write_registry_snapshot(root: Path, snapshot: dict[Path, bytes]) -> None:
+    for relative, payload in sorted(snapshot.items(), key=lambda item: item[0].as_posix()):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
 
 
 class _TableDraft(StrictModel):
@@ -1064,6 +1290,8 @@ def _promote_directories(
         for candidate, target in directories:
             target.parent.mkdir(parents=True, exist_ok=True)
             backup = target.with_name(f".{target.name}.backup-{token}")
+            if target.is_symlink() or backup.is_symlink():
+                raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
             if backup.exists():
                 shutil.rmtree(backup)
             if target.exists():

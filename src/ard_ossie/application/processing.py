@@ -23,6 +23,7 @@ from ard_ossie.application.source_check import validate_changeset_binding
 from ard_ossie.ingestion import SourceValidationError
 from ard_ossie.models import StrictModel
 from ard_ossie.pipeline import (
+    PipelineSecurityError,
     PipelineValidationError,
     ProcessResult,
     ProviderExecutionError,
@@ -99,7 +100,7 @@ class ProcessingService:
         processing_head = self._require_expected_head(request, pull_request)
 
         product = self.paths.resolve_read(Path("products") / request.product_key)
-        registry = self.paths.resolve_read("registry")
+        registry = self.paths.resolve_directory("registry", allow_missing=True)
         requested_changeset = validate_changeset_binding(
             self.paths,
             product,
@@ -122,6 +123,11 @@ class ProcessingService:
                 pr_number=request.pr_number,
                 warnings_as_errors=request.warnings_as_errors,
             )
+        except PipelineSecurityError as error:
+            raise WorkflowSecurityError(
+                _error_code(error),
+                "registry path security validation failed",
+            ) from error
         except ProviderExecutionError as error:
             raise WorkflowTransientError(_error_code(error), "provider execution failed") from error
         except (PipelineValidationError, SourceValidationError, ValueError) as error:

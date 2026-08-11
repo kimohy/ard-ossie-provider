@@ -16,6 +16,13 @@ class FileSystemPort(Protocol):
 
     def resolve_read(self, path: str | Path) -> Path: ...
 
+    def resolve_directory(
+        self,
+        path: str | Path,
+        *,
+        allow_missing: bool = False,
+    ) -> Path: ...
+
     def resolve_write(self, path: str | Path) -> Path: ...
 
     def is_writeback_allowed(self, path: str | Path, product_key: str) -> bool: ...
