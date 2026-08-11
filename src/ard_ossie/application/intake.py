@@ -406,9 +406,11 @@ def _validate_existing_intake(
         canonical_content = canonical_source.read_bytes()
         if (
             relative.parts[0] != "sources"
+            or relative != Path(canonical_item.relative_path)
             or item.source_url != expected_attachment.url
             or canonical_item.source_url != expected_attachment.url
-            or item.filename != source.name
+            or item.filename != expected_attachment.filename
+            or canonical_item.filename != expected_attachment.filename
             or item.size_bytes != len(content)
             or item.sha256 != hashlib.sha256(content).hexdigest()
             or canonical_item.sha256 != hashlib.sha256(canonical_content).hexdigest()
