@@ -135,6 +135,7 @@ jobs:
       pull-requests: write
       statuses: write
     uses: ./.github/workflows/ard-process.yml
+    secrets: inherit
     with:
       branch: ${{ github.event.workflow_run.head_branch }}
       product_key: ${{ needs.validate.outputs.product_key }}

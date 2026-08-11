@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import re
+import unittest
+from collections.abc import Iterator
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import yaml
+
+ROOT = Path(__file__).parents[2]
+PROCESSOR = "./.github/workflows/ard-process.yml"
+TRUSTED_CALLERS = (
+    Path(".github/workflows/ard-issue-intake.yml"),
+    Path(".github/workflows/ard-direct-change.yml"),
+)
+SECRET_CONTEXT = re.compile(r"\$\{\{.*?\bsecrets\b.*?\}\}", re.DOTALL)
+
+
+def _workflow(path: Path) -> dict[str, object]:
+    payload = yaml.load((ROOT / path).read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _workflow_paths(root: Path) -> tuple[Path, ...]:
+    workflows = root / ".github/workflows"
+    return tuple(sorted((*workflows.glob("*.yml"), *workflows.glob("*.yaml"))))
+
+
+def _secret_references(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        if SECRET_CONTEXT.search(value):
+            yield value
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _secret_references(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            yield from _secret_references(item)
+
+
+class TestWorkflowSecretContract(unittest.TestCase):
+    def test_trusted_processor_callers_inherit_secrets(self) -> None:
+        for path in TRUSTED_CALLERS:
+            with self.subTest(path=path):
+                jobs = _workflow(path)["jobs"]
+                self.assertIsInstance(jobs, dict)
+                process = jobs["process"]
+                self.assertIsInstance(process, dict)
+
+                self.assertEqual(process["uses"], PROCESSOR)
+                self.assertEqual(process.get("secrets"), "inherit")
+
+    def test_only_trusted_processor_calls_inherit_secrets(self) -> None:
+        actual: set[tuple[Path, str]] = set()
+        for workflow_path in _workflow_paths(ROOT):
+            relative = workflow_path.relative_to(ROOT)
+            jobs = _workflow(relative)["jobs"]
+            self.assertIsInstance(jobs, dict)
+            for job_name, job in jobs.items():
+                if isinstance(job, dict) and job.get("secrets") == "inherit":
+                    actual.add((relative, job_name))
+
+        self.assertEqual(actual, {(path, "process") for path in TRUSTED_CALLERS})
+
+    def test_workflow_discovery_covers_both_supported_yaml_extensions(self) -> None:
+        with TemporaryDirectory() as value:
+            root = Path(value)
+            workflows = root / ".github/workflows"
+            workflows.mkdir(parents=True)
+            (workflows / "first.yml").touch()
+            (workflows / "second.yaml").touch()
+
+            self.assertEqual(
+                tuple(path.name for path in _workflow_paths(root)),
+                ("first.yml", "second.yaml"),
+            )
+
+    def test_secret_reference_detector_covers_github_expression_forms(self) -> None:
+        expressions = (
+            "${{ secrets.ARD_LLM_API_KEY }}",
+            "${{ secrets['ARD_LLM_API_KEY'] }}",
+            "${{ toJSON(secrets) }}",
+        )
+        for expression in expressions:
+            with self.subTest(expression=expression):
+                self.assertEqual(tuple(_secret_references({"value": expression})), (expression,))
+
+    def test_only_protected_processor_job_references_secrets(self) -> None:
+        jobs = _workflow(Path(".github/workflows/ard-process.yml"))["jobs"]
+        self.assertIsInstance(jobs, dict)
+        process = jobs["process"]
+        self.assertIsInstance(process, dict)
+
+        self.assertEqual(process["environment"], "ard-llm")
+        env = process["env"]
+        self.assertIsInstance(env, dict)
+        self.assertEqual(
+            env["ARD_LLM_API_KEY"],
+            "${{ secrets.ARD_LLM_API_KEY }}",
+        )
+        self.assertEqual(
+            {name for name, job in jobs.items() if tuple(_secret_references(job))},
+            {"process"},
+        )
