@@ -232,7 +232,7 @@ def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() ->
     assert process["uses"] == "./.github/workflows/ard-process.yml"
     assert process["with"]["allow_writeback"] == "true"
     assert process["with"]["expected_head"] == "${{ needs.validate.outputs.expected_head }}"
-    assert "secrets" not in process
+    assert process["secrets"] == "inherit"
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-direct-change.yml")
 
 
