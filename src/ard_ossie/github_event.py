@@ -6,10 +6,12 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote_to_bytes, urljoin, urlsplit
 from uuid import UUID
 
 import httpx
@@ -46,6 +48,23 @@ class IssueIntake(StrictModel):
     change_reason: str
     attachments: dict[str, IntakeAttachment]
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_raw_operation(cls, value: object) -> object:
+        if isinstance(value, Mapping):
+            operation = value.get("operation")
+            normalized_operation = (
+                operation.value if isinstance(operation, Operation) else str(operation).lower()
+            )
+            product_id = value.get("product_id")
+            if (
+                normalized_operation == Operation.CREATE.value
+                and product_id is not None
+                and str(product_id).strip()
+            ):
+                raise ValueError("PRODUCT_ID_FORBIDDEN_FOR_CREATE")
+        return value
+
     @model_validator(mode="after")
     def validate_operation(self) -> IssueIntake:
         if self.operation is Operation.RETIRE:
@@ -78,10 +97,12 @@ class IntakeManifest(StrictModel):
 _APPROVER_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _HEADING_PATTERN = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
 _MARKDOWN_LINK_PATTERN = re.compile(r"^\s*\[([^\]]+)\]\((https://[^\s)]+)\)\s*$")
-_USER_ATTACHMENT_PATH = re.compile(
+_USER_ASSET_PATH = re.compile(
     r"^/user-attachments/assets/"
     r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
 )
+_USER_FILE_PATH = re.compile(r"^/user-attachments/files/([1-9][0-9]*)/([^/]+)$")
+_MALFORMED_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 _ASSET_STORAGE_HOST = re.compile(
     r"^github-production-user-asset-[a-z0-9-]+\.s3\.amazonaws\.com$"
 )
@@ -146,15 +167,39 @@ def _validate_attachment_transport(url: str, *, allow_query: bool):
 
 
 def _validate_user_attachment_path(path: str) -> None:
-    match = _USER_ATTACHMENT_PATH.fullmatch(path)
-    if match is None:
+    asset_match = _USER_ASSET_PATH.fullmatch(path)
+    if asset_match is not None:
+        value = asset_match.group(1)
+        try:
+            parsed = UUID(value)
+        except ValueError as error:
+            raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH") from error
+        if str(parsed) != value:
+            raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH")
+        return
+
+    file_match = _USER_FILE_PATH.fullmatch(path)
+    if file_match is None:
         raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH")
-    value = match.group(1)
+    encoded_filename = file_match.group(2)
+    if _MALFORMED_PERCENT_ESCAPE.search(encoded_filename):
+        raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH")
     try:
-        parsed = UUID(value)
-    except ValueError as error:
+        filename = unquote_to_bytes(encoded_filename).decode("utf-8")
+    except UnicodeDecodeError as error:
         raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH") from error
-    if str(parsed) != value:
+    if (
+        not filename
+        or len(filename) > 255
+        or filename in {".", ".."}
+        or filename.startswith(".")
+        or "/" in filename
+        or "\\" in filename
+        or any(
+            unicodedata.category(character) in {"Cc", "Cf", "Zl", "Zp"}
+            for character in filename
+        )
+    ):
         raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH")
 
 
