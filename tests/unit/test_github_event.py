@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from collections import UserDict
 from pathlib import Path
 
 import httpx
@@ -14,6 +15,7 @@ from ard_ossie.github_event import (
     AttachmentSecurityError,
     DownloadedAttachment,
     IntakeAttachment,
+    IssueIntake,
     authorize_label,
     download_attachment,
     parse_issue_body,
@@ -24,6 +26,10 @@ from ard_ossie.github_event import (
 ATTACHMENT_URL = (
     "https://github.com/user-attachments/assets/"
     "11111111-1111-1111-1111-111111111111"
+)
+FILE_ATTACHMENT_URL = (
+    "https://github.com/user-attachments/files/"
+    "30932953/Marketing.Insight.Data.Dictionary.xlsx"
 )
 
 
@@ -94,6 +100,49 @@ def test_initial_attachment_requires_canonical_immutable_github_upload(url: str)
         validate_attachment_url(url)
 
 
+def test_initial_attachment_accepts_canonical_github_file_upload() -> None:
+    assert validate_attachment_url(FILE_ATTACHMENT_URL) == FILE_ATTACHMENT_URL
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/user-attachments/files/030932953/dictionary.xlsx",
+        "/user-attachments/files/0/dictionary.xlsx",
+        "/user-attachments/files/30932953",
+        "/user-attachments/files/30932953/directory/dictionary.xlsx",
+        "/user-attachments/files/30932953/directory%2Fdictionary.xlsx",
+        "/user-attachments/files/30932953/directory%5Cdictionary.xlsx",
+        "/user-attachments/files/30932953/%2E%2E",
+        "/user-attachments/files/30932953/.dictionary.xlsx",
+        "/user-attachments/files/30932953/dictionary%.xlsx",
+        "/user-attachments/files/30932953/dictionary%FF.xlsx",
+        "/user-attachments/files/30932953/%C2%85dictionary.xlsx",
+        "/user-attachments/files/30932953/dictionary%E2%80%8E.xlsx",
+    ],
+)
+def test_initial_attachment_rejects_noncanonical_github_file_path(path: str) -> None:
+    with pytest.raises(AttachmentSecurityError, match="UNTRUSTED_ATTACHMENT_PATH"):
+        validate_attachment_url(f"https://github.com{path}")
+
+
+def test_initial_file_attachment_rejects_query_and_fragment() -> None:
+    with pytest.raises(AttachmentSecurityError, match="ATTACHMENT_QUERY_FORBIDDEN"):
+        validate_attachment_url(f"{FILE_ATTACHMENT_URL}?token=secret")
+    with pytest.raises(AttachmentSecurityError, match="ATTACHMENT_QUERY_FORBIDDEN"):
+        validate_attachment_url(f"{FILE_ATTACHMENT_URL}#fragment")
+
+
+def test_initial_file_attachment_enforces_decoded_filename_length_boundary() -> None:
+    prefix = "https://github.com/user-attachments/files/30932953/"
+    valid_url = f"{prefix}{'a' * 250}.xlsx"
+    invalid_url = f"{prefix}{'a' * 251}.xlsx"
+
+    assert validate_attachment_url(valid_url) == valid_url
+    with pytest.raises(AttachmentSecurityError, match="UNTRUSTED_ATTACHMENT_PATH"):
+        validate_attachment_url(invalid_url)
+
+
 def test_attachment_rejects_http_and_credentialed_url() -> None:
     with pytest.raises(AttachmentSecurityError, match="ATTACHMENT_HTTPS_REQUIRED"):
         validate_attachment_url(ATTACHMENT_URL.replace("https://", "http://"))
@@ -121,6 +170,31 @@ def test_update_requires_existing_product_id() -> None:
 
     with pytest.raises(ValueError, match="PRODUCT_ID_REQUIRED_FOR_UPDATE"):
         parse_issue_body(body)
+
+
+@pytest.mark.parametrize(
+    "product_id",
+    [
+        "Marketing Insight",
+        "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631",
+    ],
+)
+def test_create_forbids_existing_product_id_before_id_validation(product_id: str) -> None:
+    body = issue_body().replace(
+        "### Existing product ID\n_No response_",
+        f"### Existing product ID\n{product_id}",
+    )
+
+    with pytest.raises(ValueError, match="PRODUCT_ID_FORBIDDEN_FOR_CREATE"):
+        parse_issue_body(body)
+
+
+def test_create_forbids_existing_product_id_from_generic_mapping() -> None:
+    payload = parse_issue_body(issue_body()).model_dump()
+    payload["product_id"] = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
+
+    with pytest.raises(ValueError, match="PRODUCT_ID_FORBIDDEN_FOR_CREATE"):
+        IssueIntake.model_validate(UserDict(payload))
 
 
 def test_retire_is_rejected_until_tombstone_pipeline_is_implemented() -> None:
@@ -155,6 +229,34 @@ def test_download_validates_every_redirect_host(tmp_path) -> None:
         pytest.raises(AttachmentSecurityError, match="UNTRUSTED_ATTACHMENT_HOST"),
     ):
         download_attachment(attachment, tmp_path / "dictionary.xlsx", client=client)
+
+
+def test_download_accepts_canonical_github_file_upload_redirect(tmp_path: Path) -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "types")
+        archive.writestr("xl/workbook.xml", "workbook")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/user-attachments/assets/"):
+            return httpx.Response(302, headers={"location": FILE_ATTACHMENT_URL})
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=buffer.getvalue(),
+        )
+
+    attachment = IntakeAttachment(
+        role="dictionary_excel",
+        filename="dictionary.xlsx",
+        url=ATTACHMENT_URL,
+    )
+    target = tmp_path / "dictionary.xlsx"
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = download_attachment(attachment, target, client=client)
+
+    assert result.size_bytes == len(buffer.getvalue())
+    assert target.is_file()
 
 
 def test_download_rejects_declared_size_before_writing(tmp_path) -> None:
