@@ -1,0 +1,32 @@
+{
+  "files": [
+    {
+      "filename": "AX 데이터 거버넌스 포털.html",
+      "relative_path": "sources/product-info/product.html",
+      "role": "product_html",
+      "sha256": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987",
+      "size_bytes": 655626,
+      "source_url": "https://github.com/user-attachments/files/30932940/AX.html"
+    },
+    {
+      "filename": "(Marketing Insight 도메인) Data Semantics.pdf",
+      "relative_path": "sources/semantic/semantic.pdf",
+      "role": "semantic_document",
+      "sha256": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6",
+      "size_bytes": 114912,
+      "source_url": "https://github.com/user-attachments/files/30932950/Marketing.Insight.Data.Semantics.pdf"
+    },
+    {
+      "filename": "(Marketing Insight 도메인) Data Dictionary.xlsx",
+      "relative_path": "sources/dictionary/dictionary.xlsx",
+      "role": "dictionary_excel",
+      "sha256": "10310e99c8a76b4b030935c432e6f879ac4c56361ee4a6d52d6a17b2726c306a",
+      "size_bytes": 14813,
+      "source_url": "https://github.com/user-attachments/files/30932953/Marketing.Insight.Data.Dictionary.xlsx"
+    }
+  ],
+  "issue_number": 3,
+  "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+  "product_key": "500138301",
+  "version": 1
+}
