@@ -7,6 +7,9 @@ from ard_ossie.application.output import ResultWriter
 
 
 def result_writer(repository: Path, command: str) -> ResultWriter:
+    from ard_ossie.adapters.filesystem import RepositoryPaths
+
+    paths = RepositoryPaths(repository)
     output = Path(os.environ["GITHUB_OUTPUT"]) if os.environ.get("GITHUB_OUTPUT") else None
     summary = (
         Path(os.environ["GITHUB_STEP_SUMMARY"])
@@ -14,7 +17,9 @@ def result_writer(repository: Path, command: str) -> ResultWriter:
         else None
     )
     return ResultWriter(
-        result_path=repository / ".ard" / "run" / f"{command}-result.json",
+        result_path=paths.resolve_write(
+            Path(".ard") / "run" / f"{command}-result.json"
+        ),
         github_output=output,
         github_summary=summary,
     )

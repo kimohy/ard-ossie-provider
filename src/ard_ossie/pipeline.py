@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from ard_ossie.canonical import canonical_hash, schema_hash
 from ard_ossie.docling_parser import DoclingParser, ParsedDocument
@@ -26,6 +26,8 @@ from ard_ossie.llm import (
     AISuggestion,
     LLMProvider,
     MetricSuggestion,
+    ProviderExecutionError,
+    ProviderFailureKind,
     semantic_extraction_schema,
     validate_semantic_suggestions,
 )
@@ -61,10 +63,6 @@ class PipelineValidationError(ValueError):
 
 
 class PipelineSecurityError(PipelineValidationError):
-    pass
-
-
-class ProviderExecutionError(RuntimeError):
     pass
 
 
@@ -172,8 +170,26 @@ def process_product(
             suggestion_batch = _extract_suggestions(
                 provider, product_document, semantic_document, table_drafts
             )
-        except Exception as error:
-            raise ProviderExecutionError(f"LLM_PROVIDER_FAILURE: {error}") from error
+        except ProviderExecutionError as error:
+            raise ProviderExecutionError(error.code, kind=error.kind) from None
+        except ValidationError:
+            raise ProviderExecutionError(
+                "LLM_OUTPUT_VALIDATION_FAILED",
+                kind=ProviderFailureKind.OUTPUT,
+            ) from None
+        except ValueError as error:
+            code = str(error).partition(":")[0]
+            if re.fullmatch(r"LLM_[A-Z0-9_]{1,123}", code) is None:
+                code = "LLM_OUTPUT_VALIDATION_FAILED"
+            raise ProviderExecutionError(
+                code,
+                kind=ProviderFailureKind.OUTPUT,
+            ) from None
+        except Exception:
+            raise ProviderExecutionError(
+                "LLM_PROVIDER_FAILURE",
+                kind=ProviderFailureKind.TRANSIENT,
+            ) from None
         config, table_drafts = _apply_suggestions(
             config, table_drafts, suggestion_batch.suggestions
         )

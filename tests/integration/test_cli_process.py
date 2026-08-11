@@ -3,13 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 from docx import Document
 from openpyxl import Workbook
 from typer.testing import CliRunner
 
 from ard_ossie.cli import app
-from ard_ossie.pipeline import process_product
+from ard_ossie.pipeline import (
+    ProviderExecutionError,
+    ProviderFailureKind,
+    process_product,
+)
 
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
@@ -144,6 +149,32 @@ def test_pipeline_applies_and_audits_evidence_backed_llm_semantics(tmp_path: Pat
     assert model["datasets"][0]["description"] == "Confirmed orders"
     suggestions = json.loads((product / "quality" / "llm-suggestions.json").read_text())
     assert suggestions["suggestions"][0]["status"] == "ai_suggested"
+
+
+class PhysicalFieldProvider(FakeSemanticProvider):
+    def generate_structured(self, *, schema, messages):
+        response = super().generate_structured(schema=schema, messages=messages)
+        response["suggestions"][0]["field_path"] = (
+            f"tables.{TABLE_ID}.columns.order_id.data_type"
+        )
+        return response
+
+
+def test_pipeline_classifies_semantic_output_validation_without_leaking_value(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+
+    with pytest.raises(ProviderExecutionError) as captured:
+        process_product(
+            product,
+            registry_root=tmp_path / "registry",
+            provider=PhysicalFieldProvider(),
+        )
+
+    assert captured.value.code == "LLM_PHYSICAL_FIELD_FORBIDDEN"
+    assert captured.value.kind is ProviderFailureKind.OUTPUT
+    assert "data_type" not in str(captured.value)
 
 
 class FakeMetricProvider:

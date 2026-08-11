@@ -77,6 +77,16 @@ def test_result_writer_skips_absent_github_files(tmp_path: Path) -> None:
     assert json.loads(result_path.read_text(encoding="utf-8"))["status"] == "success"
 
 
+def test_result_writer_prepare_invalidates_prior_envelope(tmp_path: Path) -> None:
+    result_path = tmp_path / "result.json"
+    result_path.write_text("stale-envelope\n", encoding="utf-8")
+    writer = ResultWriter(result_path=result_path)
+
+    writer.prepare()
+
+    assert not result_path.exists()
+
+
 def test_result_writer_validates_all_outputs_before_publishing_success(tmp_path: Path) -> None:
     """An invalid Actions output must not replace the last trustworthy result envelope."""
     result_path = tmp_path / "result.json"
