@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ard_ossie.docling_parser import Evidence
+from ard_ossie.excel_adapter import DictionaryColumn, DictionaryTable, ParsedDictionary
 from ard_ossie.impact import build_changeset
+from ard_ossie.ingestion import SourceRole
 from ard_ossie.models import ProductRecord, ProductTableRef, TableLocator, TableRecord
-from ard_ossie.pipeline import ProductConfig, _shared_table_findings
+from ard_ossie.pipeline import ProductConfig, _resolve_tables, _shared_table_findings
 from ard_ossie.registry import Registry
 from ard_ossie.versioning import plan_version
 
@@ -117,3 +120,34 @@ def test_valid_changeset_covers_shared_table_product_and_pr(tmp_path: Path) -> N
     )
 
     assert findings == []
+
+
+def test_dictionary_table_description_seeds_pipeline_draft(tmp_path: Path) -> None:
+    dictionary = ParsedDictionary(
+        source_hash="a" * 64,
+        tables=[
+            DictionaryTable(
+                locator="unspecified|synthetic_workspace|marketing_insight|marketing_campaign",
+                description="가상 캠페인 합성 테이블",
+                columns=[
+                    DictionaryColumn(
+                        ordinal=1,
+                        name="campaign_id",
+                        data_type="STRING",
+                        nullable=False,
+                        primary_key=True,
+                        evidence=Evidence(
+                            source_hash="a" * 64,
+                            role=SourceRole.DICTIONARY_EXCEL,
+                            locator={"sheet": "marketing_campaign", "range": "B14:J14"},
+                            excerpt="campaign_id",
+                        ),
+                    )
+                ],
+            )
+        ],
+    )
+
+    drafts = _resolve_tables(config(), dictionary, Registry(tmp_path / "registry"))
+
+    assert drafts[0].description == "가상 캠페인 합성 테이블"

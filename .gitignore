@@ -30,3 +30,6 @@ Thumbs.db
 
 # Brainstorming workspace
 .superpowers/
+
+# Local Git worktrees
+.worktrees/
