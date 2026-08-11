@@ -45,9 +45,10 @@ Issue intake continues to call the same local reusable processor from a default-
 
 - scheme `https`, no credentials, fragment, query, or non-443 port;
 - host exactly `github.com`;
-- path exactly `/user-attachments/assets/<UUID>` with a canonical UUID.
+- path exactly `/user-attachments/assets/<UUID>` with a canonical UUID, or
+  `/user-attachments/files/<positive decimal ID>/<safe filename>` with one canonical path segment.
 
-Redirect validation is a separate internal function. It accepts another canonical user-attachment URL or a signed asset URL on `objects.githubusercontent.com` or `github-production-user-asset-<suffix>.s3.amazonaws.com`. Queries are allowed only on storage-host redirects. Broad `github.com/*`, `raw.githubusercontent.com`, avatars, and arbitrary `*.githubusercontent.com` URLs are rejected.
+Redirect validation is a separate internal function. It accepts another canonical user-attachment URL in either form or a signed asset URL on `objects.githubusercontent.com` or `github-production-user-asset-<suffix>.s3.amazonaws.com`. Queries are allowed only on storage-host redirects. Broad `github.com/*`, `raw.githubusercontent.com`, avatars, and arbitrary `*.githubusercontent.com` URLs are rejected.
 
 ## Documentation contract
 
