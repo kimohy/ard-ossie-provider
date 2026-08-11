@@ -130,7 +130,14 @@ downstream은 `(product_id, version, tag, commit)`을 중복 제거 키로 사�
 5. 변환 결과와 보고서를 검토하고 누락 경고를 보완합니다.
 6. hard error가 0이고 두 required status가 성공한 뒤 병합합니다.
 
-Issue 첨부에는 외부 URL을 쓰지 않습니다. 최초 링크는 정확히 `https://github.com/user-attachments/assets/<UUID>` 형태의 GitHub Issue 직접 업로드만 허용됩니다. raw branch, repository raw route, avatar, 임의 `*.githubusercontent.com`과 asset storage 직접 링크는 거부합니다. 다운로드 redirect는 검증된 GitHub asset storage host만 허용하고 매 hop을 다시 검사합니다.
+Issue 첨부에는 외부 URL을 쓰지 않습니다. GitHub Issue에 직접 업로드했을 때 생성되는 다음 두 형태만 최초 링크로 허용합니다.
+
+- `https://github.com/user-attachments/assets/<UUID>`
+- `https://github.com/user-attachments/files/<양의 숫자 ID>/<파일명>`
+
+두 형식 모두 query와 fragment를 허용하지 않으며, `files` 형식은 정확히 한 개의 안전한 파일명 경로만 허용합니다. raw branch, repository raw route, avatar, 임의 `*.githubusercontent.com`과 asset storage 직접 링크는 거부합니다. 다운로드 redirect는 검증된 GitHub asset storage host만 허용하고 매 hop을 다시 검사합니다.
+
+`create` Issue의 Existing product ID는 반드시 비워 두며 `update`에서만 기존 `prd_<uuidv7>` 값을 입력합니다. XLSX는 1행 영문 정규 헤더 형식과, 테이블별 시트에 `저장 플랫폼 및 세부 위치`, `테이블 명`, `테이블 설명`, `컬럼명`, `Type`, `Key 여부`, `Null 허용`을 갖는 한국어 Data Dictionary 형식을 지원합니다. 한국어 형식의 위치가 `catalog.schema` 두 부분이면 platform은 추론하지 않고 `unspecified`로 기록합니다. 대상 테이블과 컬럼이 없는 `FK` 표시는 관계로 생성하지 않습니다.
 
 ## 7. Shared table changeset
 
