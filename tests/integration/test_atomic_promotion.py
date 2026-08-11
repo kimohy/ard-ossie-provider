@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 import ard_ossie.pipeline as pipeline_module
 from ard_ossie.cli import app
-from ard_ossie.pipeline import PipelineValidationError, process_product
+from ard_ossie.pipeline import PipelineSecurityError, PipelineValidationError, process_product
 from tests.integration.test_cli_process import create_product_fixture
 
 
@@ -157,6 +157,42 @@ def test_existing_registry_is_not_dereferenced_again_after_snapshot(
     result = process_product(product, registry_root=registry)
 
     assert result.product_version == 2
+
+
+def test_registry_snapshot_uses_portable_path_when_nofollow_flags_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows-compatible processing must support both absent and existing registries."""
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    monkeypatch.setattr(pipeline_module.os, "O_DIRECTORY", 0, raising=False)
+    monkeypatch.setattr(pipeline_module.os, "O_NOFOLLOW", 0, raising=False)
+
+    first = process_product(product, registry_root=registry)
+    second = process_product(product, registry_root=registry)
+
+    assert first.product_version == 1
+    assert second.product_version == 1
+    assert (registry / "products" / f"{first.product_id}.json").is_file()
+
+
+def test_portable_registry_snapshot_rejects_nested_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Windows-compatible fallback must retain the registry symlink boundary."""
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    process_product(product, registry_root=registry)
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    (registry / "linked.json").symlink_to(outside)
+    monkeypatch.setattr(pipeline_module.os, "O_DIRECTORY", 0, raising=False)
+    monkeypatch.setattr(pipeline_module.os, "O_NOFOLLOW", 0, raising=False)
+
+    with pytest.raises(PipelineSecurityError, match="SYMLINK_NOT_ALLOWED"):
+        process_product(product, registry_root=registry)
 
 
 def test_cli_preserves_detailed_hard_failure_report(tmp_path: Path) -> None:

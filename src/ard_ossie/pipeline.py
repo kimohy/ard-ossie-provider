@@ -368,14 +368,14 @@ def _validated_registry_path(value: str | Path) -> Path:
 
 def _require_registry_state(path: Path, *, expected_exists: bool | None) -> None:
     try:
-        mode = path.lstat().st_mode
+        path_stat = path.lstat()
     except FileNotFoundError:
         exists = False
     else:
         exists = True
-        if stat.S_ISLNK(mode):
+        if _is_link_or_reparse_point(path_stat):
             raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
-        if not stat.S_ISDIR(mode):
+        if not stat.S_ISDIR(path_stat.st_mode):
             raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
     if expected_exists is not None and exists is not expected_exists:
         raise PipelineSecurityError("REGISTRY_PATH_CHANGED")
@@ -385,7 +385,7 @@ def _snapshot_registry(path: Path) -> tuple[bool, dict[Path, bytes]]:
     directory_flag = getattr(os, "O_DIRECTORY", 0)
     nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
     if not directory_flag or not nofollow_flag:
-        raise PipelineSecurityError("REGISTRY_NOFOLLOW_UNSUPPORTED")
+        return _snapshot_registry_portable(path)
     try:
         descriptor = os.open(path, os.O_RDONLY | directory_flag | nofollow_flag)
     except FileNotFoundError:
@@ -440,14 +440,123 @@ def _read_registry_directory(
 
 def _raise_registry_snapshot_error(path: Path, error: OSError) -> None:
     try:
-        mode = path.lstat().st_mode
+        path_stat = path.lstat()
     except OSError:
         raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
-    if stat.S_ISLNK(mode):
+    if _is_link_or_reparse_point(path_stat):
         raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
-    if not stat.S_ISDIR(mode):
+    if not stat.S_ISDIR(path_stat.st_mode):
         raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
     raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+
+
+def _snapshot_registry_portable(path: Path) -> tuple[bool, dict[Path, bytes]]:
+    """Snapshot safely on platforms without directory-relative no-follow opens."""
+    try:
+        root_stat = path.lstat()
+    except FileNotFoundError:
+        return False, {}
+    except OSError as error:
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+    _require_portable_path_type(root_stat, directory=True)
+    try:
+        snapshot = _read_registry_directory_portable(path, Path(), root_stat)
+        _require_same_path_identity(path, root_stat)
+    except PipelineSecurityError:
+        raise
+    except OSError as error:
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED") from error
+    return True, snapshot
+
+
+def _read_registry_directory_portable(
+    path: Path,
+    prefix: Path,
+    expected_stat: os.stat_result,
+) -> dict[Path, bytes]:
+    _require_same_path_identity(path, expected_stat)
+    with os.scandir(path) as iterator:
+        entries = sorted(iterator, key=lambda item: item.name)
+    _require_same_path_identity(path, expected_stat)
+    snapshot: dict[Path, bytes] = {}
+    for entry in entries:
+        _require_same_path_identity(path, expected_stat)
+        child_path = path / entry.name
+        child_stat = child_path.lstat()
+        relative = prefix / entry.name
+        if _is_link_or_reparse_point(child_stat):
+            raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+        if stat.S_ISDIR(child_stat.st_mode):
+            snapshot.update(
+                _read_registry_directory_portable(child_path, relative, child_stat)
+            )
+            continue
+        _require_portable_path_type(child_stat, directory=False)
+        snapshot[relative] = _read_registry_file_portable(child_path, child_stat)
+    _require_same_path_identity(path, expected_stat)
+    return snapshot
+
+
+def _read_registry_file_portable(path: Path, expected_stat: os.stat_result) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened_stat = os.fstat(descriptor)
+        _require_same_identity(opened_stat, expected_stat)
+        _require_portable_path_type(opened_stat, directory=False)
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read()
+        _require_same_identity(os.fstat(descriptor), expected_stat)
+    finally:
+        os.close(descriptor)
+    _require_same_path_identity(path, expected_stat)
+    return payload
+
+
+def _require_portable_path_type(
+    path_stat: os.stat_result,
+    *,
+    directory: bool,
+) -> None:
+    if _is_link_or_reparse_point(path_stat):
+        raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+    predicate = stat.S_ISDIR if directory else stat.S_ISREG
+    if not predicate(path_stat.st_mode):
+        raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+
+
+def _require_same_path_identity(path: Path, expected_stat: os.stat_result) -> None:
+    current_stat = path.lstat()
+    if _is_link_or_reparse_point(current_stat):
+        raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+    _require_same_identity(current_stat, expected_stat)
+
+
+def _require_same_identity(
+    current_stat: os.stat_result,
+    expected_stat: os.stat_result,
+) -> None:
+    if _path_identity(current_stat) != _path_identity(expected_stat):
+        raise PipelineSecurityError("REGISTRY_PATH_CHANGED")
+
+
+def _path_identity(path_stat: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        stat.S_IFMT(path_stat.st_mode),
+        path_stat.st_dev,
+        path_stat.st_ino,
+        path_stat.st_size,
+        path_stat.st_mtime_ns,
+        path_stat.st_ctime_ns,
+    )
+
+
+def _is_link_or_reparse_point(path_stat: os.stat_result) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    file_attributes = getattr(path_stat, "st_file_attributes", 0)
+    return stat.S_ISLNK(path_stat.st_mode) or bool(
+        reparse_flag and file_attributes & reparse_flag
+    )
 
 
 def _load_registry_snapshot(snapshot: dict[Path, bytes]) -> Registry:
