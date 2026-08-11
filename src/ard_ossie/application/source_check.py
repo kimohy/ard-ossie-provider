@@ -128,13 +128,12 @@ class SourceCheckService:
                 "source-check must run without LLM credentials",
             )
         product = self.paths.resolve_read(Path("products") / product_key)
-        registry = self.paths.resolve_read("registry")
         changeset_id = validate_changeset_binding(self.paths, product, product_key)
         try:
             manifest = scan_sources(product / "sources")
         except SourceValidationError as error:
             raise WorkflowValidationError(_error_code(error), "source validation failed") from error
-        validation = ModelingService(self.paths).validate(product, registry)
+        validation = ModelingService(self.paths).validate(product, "registry")
         if not validation.passed:
             code = validation.findings[0].code if validation.findings else "MODEL_VALIDATION_FAILED"
             raise WorkflowValidationError(code, "staged product validation failed")

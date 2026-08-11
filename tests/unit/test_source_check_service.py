@@ -145,6 +145,18 @@ def test_source_check_is_read_only_and_secret_free(
         SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
 
 
+def test_source_check_treats_absent_registry_as_empty_without_creating_it(
+    tmp_path: Path,
+) -> None:
+    """The first product validates against temporary empty state only."""
+    create_product_fixture(tmp_path)
+
+    result = SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+
+    assert result.status is WorkflowStatus.SUCCESS
+    assert not (tmp_path / "registry").exists()
+
+
 def test_source_check_requires_marker_and_product_config_binding(tmp_path: Path) -> None:
     product = create_product_fixture(tmp_path)
     (tmp_path / "registry").mkdir()

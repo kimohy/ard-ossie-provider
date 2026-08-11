@@ -29,6 +29,25 @@ class RepositoryPaths:
             raise PathPolicyError("READ_PATH_TYPE_NOT_ALLOWED", "read path has an invalid type")
         return resolved
 
+    def resolve_directory(
+        self,
+        path: str | Path,
+        *,
+        allow_missing: bool = False,
+    ) -> Path:
+        try:
+            resolved = self.resolve_read(path)
+        except PathPolicyError as error:
+            if not allow_missing or error.code != "READ_PATH_NOT_FOUND":
+                raise
+            resolved = self.resolve_write(path)
+        if resolved.exists() and not resolved.is_dir():
+            raise PathPolicyError(
+                "READ_PATH_TYPE_NOT_ALLOWED",
+                "read path has an invalid type",
+            )
+        return resolved
+
     def resolve_write(self, path: str | Path) -> Path:
         candidate = self._lexical_candidate(path)
         relative = candidate.relative_to(self.root)

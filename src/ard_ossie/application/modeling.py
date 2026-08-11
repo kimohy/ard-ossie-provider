@@ -43,7 +43,7 @@ class ModelingService:
         staging_output: str | Path,
     ) -> ModelingResult:
         product = self.paths.resolve_read(product_path)
-        registry = self.paths.resolve_read(registry_path)
+        registry = self.paths.resolve_directory(registry_path)
         output = self.paths.resolve_write(staging_output)
         self._validate_roots(product, registry, output)
         try:
@@ -72,8 +72,8 @@ class ModelingService:
         registry_path: str | Path,
     ) -> ValidationResult:
         product = self.paths.resolve_read(product_path)
-        registry = self.paths.resolve_read(registry_path)
-        self._validate_roots(product, registry)
+        registry = self.paths.resolve_directory(registry_path, allow_missing=True)
+        self._validate_roots(product, registry, allow_missing_registry=True)
         try:
             with self._staged_state(product, registry) as (staged_product, staged_registry):
                 processed = process_product(
@@ -98,14 +98,20 @@ class ModelingService:
         product: Path,
         registry: Path,
         output: Path | None = None,
+        *,
+        allow_missing_registry: bool = False,
     ) -> None:
-        if not product.is_dir() or not registry.is_dir():
+        registry_is_valid = registry.is_dir() or (
+            allow_missing_registry and not registry.exists()
+        )
+        if not product.is_dir() or not registry_is_valid:
             raise WorkflowSecurityError(
                 "MODEL_INPUT_NOT_DIRECTORY",
                 "product and registry must be directories",
             )
         _reject_tree_symlinks(product)
-        _reject_tree_symlinks(registry)
+        if registry.exists():
+            _reject_tree_symlinks(registry)
         if output is not None:
             preview_root = self.paths.root / ".ard" / "previews"
             if output.parent != preview_root:
@@ -127,7 +133,10 @@ class ModelingService:
         staged_product = root / "product"
         staged_registry = root / "registry"
         shutil.copytree(product, staged_product)
-        shutil.copytree(registry, staged_registry)
+        if registry.exists():
+            shutil.copytree(registry, staged_registry)
+        else:
+            staged_registry.mkdir()
 
         class StagedState:
             def __enter__(self):

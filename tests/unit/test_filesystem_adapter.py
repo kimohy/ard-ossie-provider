@@ -63,6 +63,50 @@ def test_repository_paths_requires_existing_regular_read_target(tmp_path: Path) 
         RepositoryPaths(root).resolve_read(Path("missing"))
 
 
+def test_resolve_directory_allows_safe_missing_path_only_when_requested(
+    tmp_path: Path,
+) -> None:
+    """Bootstrap callers may inspect an absent directory without creating it."""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    resolved = RepositoryPaths(root).resolve_directory("registry", allow_missing=True)
+
+    assert resolved == root / "registry"
+    assert not resolved.exists()
+
+
+def test_resolve_directory_requires_explicit_missing_path_opt_in(tmp_path: Path) -> None:
+    """All existing callers retain fail-closed missing-directory behavior."""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    with pytest.raises(PathPolicyError, match="READ_PATH_NOT_FOUND"):
+        RepositoryPaths(root).resolve_directory("registry")
+
+
+def test_resolve_directory_rejects_existing_regular_file(tmp_path: Path) -> None:
+    """A file must never be interpreted as an empty registry directory."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "registry").write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(PathPolicyError, match="READ_PATH_TYPE_NOT_ALLOWED"):
+        RepositoryPaths(root).resolve_directory("registry", allow_missing=True)
+
+
+def test_resolve_directory_rejects_symlink(tmp_path: Path) -> None:
+    """Bootstrap support must retain the repository symlink boundary."""
+    root = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "registry").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PathPolicyError, match="SYMLINK_NOT_ALLOWED"):
+        RepositoryPaths(root).resolve_directory("registry", allow_missing=True)
+
+
 @pytest.mark.parametrize(
     "candidate,allowed",
     [

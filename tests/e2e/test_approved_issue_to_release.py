@@ -387,7 +387,6 @@ def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
     intake_head = str(intake_result.outputs["expected_head"])
     pr_number = int(intake_result.outputs["pr_number"])
     product_root = repository / "products" / product_key
-    (repository / "registry").mkdir()
 
     processing_result = ProcessingService(
         RepositoryPaths(repository),
