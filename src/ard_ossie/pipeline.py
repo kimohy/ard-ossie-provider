@@ -449,6 +449,7 @@ def _resolve_tables(
                 dictionary=table,
                 table_id=table_id,
                 locator=locator,
+                description=table.description,
                 columns=columns,
                 column_records=column_records,
             )
