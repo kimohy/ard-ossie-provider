@@ -95,6 +95,7 @@ jobs:
       pull-requests: write
       statuses: write
     uses: ./.github/workflows/ard-process.yml
+    secrets: inherit
     with:
       branch: ${{ needs.intake.outputs.branch }}
       product_key: ${{ needs.intake.outputs.product_key }}
