@@ -64,11 +64,22 @@ def _collect_evidence(document: Any, source: SourceFile) -> list[Evidence]:
     for item_index, (item, level) in enumerate(document.iterate_items()):
         text = getattr(item, "text", None)
         provenance_items = getattr(item, "prov", None) or []
+        base_locator: dict[str, JsonValue] = {
+            "document": source.relative_path,
+            "item_index": item_index,
+            "level": level,
+        }
+        if not provenance_items and text:
+            collected.append(
+                Evidence(
+                    source_hash=source.sha256,
+                    role=source.role,
+                    locator=base_locator,
+                    excerpt=str(text)[:500],
+                )
+            )
         for provenance in provenance_items:
-            locator: dict[str, JsonValue] = {
-                "item_index": item_index,
-                "level": level,
-            }
+            locator = dict(base_locator)
             page_no = getattr(provenance, "page_no", None)
             if page_no is not None:
                 locator["page"] = page_no

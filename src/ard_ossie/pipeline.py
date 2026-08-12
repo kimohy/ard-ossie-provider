@@ -21,11 +21,19 @@ from ard_ossie.identity import DuplicateDecision, DuplicateReport, classify_prod
 from ard_ossie.ids import new_id
 from ard_ossie.impact import analyze_table_change
 from ard_ossie.ingestion import SourceManifest, SourceRole, scan_sources
-from ard_ossie.ir import ColumnIR, MetricIR, ProductIR, RelationshipIR, TableIR
+from ard_ossie.ir import (
+    ColumnIR,
+    MetricIR,
+    ProductFactIR,
+    ProductIR,
+    RelationshipIR,
+    TableIR,
+)
 from ard_ossie.llm import (
     AISuggestion,
     LLMProvider,
     MetricSuggestion,
+    ProductFactSuggestion,
     ProviderExecutionError,
     ProviderFailureKind,
     semantic_extraction_schema,
@@ -131,6 +139,7 @@ class ProductConfig(StrictModel):
 class SuggestionBatch(StrictModel):
     suggestions: list[AISuggestion] = Field(default_factory=list)
     metrics: list[MetricSuggestion] = Field(default_factory=list)
+    product_facts: list[ProductFactSuggestion] = Field(default_factory=list)
 
 
 class ProcessResult(StrictModel):
@@ -164,11 +173,22 @@ def process_product(
     existing_product = _resolve_existing_product(config, registry)
     product_id = config.product_id
     table_drafts = _resolve_tables(config, dictionary, registry)
+    configured_description = config.description
     suggestion_batch = SuggestionBatch()
+    product_facts = _validate_product_facts(
+        [],
+        product_document,
+        configured_description=configured_description,
+    )
     if provider is not None:
         try:
             suggestion_batch = _extract_suggestions(
                 provider, product_document, semantic_document, table_drafts
+            )
+            product_facts = _validate_product_facts(
+                suggestion_batch.product_facts,
+                product_document,
+                configured_description=configured_description,
             )
         except ProviderExecutionError as error:
             raise ProviderExecutionError(error.code, kind=error.kind) from None
@@ -295,8 +315,8 @@ def process_product(
         product_key=config.product_key,
         version=config.version,
         display_name=config.display_name,
-        description=config.description or product_document.markdown.strip(),
-        product_document_markdown=product_document.markdown.strip(),
+        description=config.description,
+        product_facts=product_facts,
         synonyms=config.synonyms,
         instructions=semantic_document.markdown.strip(),
         source_hashes=source_hashes,
@@ -959,9 +979,14 @@ def _extract_suggestions(
             {
                 "role": "system",
                 "content": (
-                    "Extract semantic suggestions only. "
+                    "Extract semantic suggestions and evidence-backed product facts. "
                     "Extract business metrics as ANSI SQL expressions when explicitly supported. "
-                    "Every suggestion and metric must cite supplied evidence. "
+                    "Every suggestion, metric, and product fact must cite supplied evidence. "
+                    "Product facts must use only explicit values submitted in the product HTML. "
+                    "Ignore navigation, search, menus, buttons, attachment actions and sizes, "
+                    "privacy notices, authoring hints, review-only empty fields, fields labeled "
+                    "as AI-generated summaries, next or previous links, footer text, and chatbot "
+                    "content. Return no product fact when product HTML evidence is absent. "
                     "Return every required JSON property; use null for unavailable locator values. "
                     f"Allowed field_path values: {json.dumps(allowed_paths)}"
                 ),
@@ -992,6 +1017,102 @@ def _extract_suggestions(
             raise ValueError(f"LLM_EVIDENCE_SOURCE_UNKNOWN: metric.{metric.name}")
         _validate_metric_expression(metric, drafts)
     return batch.model_copy(update={"suggestions": suggestions})
+
+
+_PRODUCT_FACT_KIND_ORDER = (
+    "description",
+    "purpose",
+    "domain",
+    "data_type",
+    "storage_location",
+    "source_system",
+    "source_name",
+    "tag",
+    "access",
+    "security_classification",
+    "owner",
+    "contact",
+    "consumer",
+    "refresh_schedule",
+    "freshness",
+    "sla",
+    "ai_readiness",
+    "quality",
+    "constraint",
+    "related_link",
+)
+_PRODUCT_FACT_SINGLETONS = frozenset(
+    {
+        "description",
+        "purpose",
+        "domain",
+        "data_type",
+        "storage_location",
+        "access",
+        "security_classification",
+        "refresh_schedule",
+        "freshness",
+        "sla",
+        "ai_readiness",
+    }
+)
+_PRODUCT_FACT_POSITION = {
+    kind: position for position, kind in enumerate(_PRODUCT_FACT_KIND_ORDER)
+}
+
+
+def _validate_product_facts(
+    facts: list[ProductFactSuggestion],
+    product_document: ParsedDocument,
+    *,
+    configured_description: str | None,
+) -> list[ProductFactIR]:
+    accepted: dict[tuple[str, str], ProductFactIR] = {}
+    singleton_values: dict[str, str] = {}
+    for fact in facts:
+        if fact.confidence < 0.7:
+            continue
+        for evidence in fact.evidence:
+            if evidence.role is not SourceRole.PRODUCT_HTML:
+                raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_ROLE_INVALID")
+            if evidence.source_hash != product_document.source_hash:
+                raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_SOURCE_UNKNOWN")
+            if not evidence.excerpt or not evidence.excerpt.strip():
+                raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_EXCERPT_REQUIRED")
+        normalized_key = fact.value.casefold()
+        key = (fact.kind, normalized_key)
+        if key in accepted:
+            continue
+        existing = singleton_values.get(fact.kind)
+        if fact.kind in _PRODUCT_FACT_SINGLETONS and existing not in {None, normalized_key}:
+            raise ValueError("LLM_PRODUCT_FACT_SINGLETON_CONFLICT")
+        singleton_values[fact.kind] = normalized_key
+        accepted[key] = ProductFactIR(
+            kind=fact.kind,
+            value=fact.value,
+            evidence=fact.evidence,
+        )
+
+    normalized_description = (
+        " ".join(configured_description.split()) if configured_description else ""
+    )
+    if normalized_description:
+        accepted = {
+            key: fact for key, fact in accepted.items() if fact.kind != "description"
+        }
+        accepted[("description", normalized_description.casefold())] = ProductFactIR(
+            kind="description",
+            value=normalized_description,
+        )
+
+    return sorted(
+        accepted.values(),
+        key=lambda fact: (
+            _PRODUCT_FACT_POSITION[fact.kind],
+            fact.value.casefold(),
+            fact.value,
+        ),
+    )
 
 
 def _apply_suggestions(

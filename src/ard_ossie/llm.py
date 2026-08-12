@@ -22,9 +22,10 @@ from openai import (
     RateLimitError,
     UnprocessableEntityError,
 )
-from pydantic import Field, JsonValue, SecretStr
+from pydantic import Field, JsonValue, SecretStr, field_validator
 
 from ard_ossie.docling_parser import Evidence
+from ard_ossie.ir import ProductFactKind
 from ard_ossie.models import StrictModel
 
 _ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -83,6 +84,21 @@ class MetricSuggestion(StrictModel):
     confidence: float = Field(ge=0, le=1)
     evidence: list[Evidence] = Field(min_length=1)
     status: Literal["ai_suggested"] = "ai_suggested"
+
+
+class ProductFactSuggestion(StrictModel):
+    kind: ProductFactKind
+    value: str
+    confidence: float = Field(ge=0, le=1)
+    evidence: list[Evidence] = Field(min_length=1)
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def normalize_value(cls, value: object) -> str:
+        normalized = " ".join(str(value).split())
+        if not normalized:
+            raise ValueError("product fact value must be non-empty")
+        return normalized
 
 
 def semantic_extraction_schema() -> dict[str, object]:
@@ -182,13 +198,49 @@ def semantic_extraction_schema() -> dict[str, object]:
         ],
         "additionalProperties": False,
     }
+    product_fact = {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": [
+                    "description",
+                    "purpose",
+                    "domain",
+                    "data_type",
+                    "storage_location",
+                    "source_system",
+                    "source_name",
+                    "tag",
+                    "access",
+                    "security_classification",
+                    "owner",
+                    "contact",
+                    "consumer",
+                    "refresh_schedule",
+                    "freshness",
+                    "sla",
+                    "ai_readiness",
+                    "quality",
+                    "constraint",
+                    "related_link",
+                ],
+            },
+            "value": {"type": "string", "minLength": 1},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "evidence": evidence_list,
+        },
+        "required": ["kind", "value", "confidence", "evidence"],
+        "additionalProperties": False,
+    }
     return {
         "type": "object",
         "properties": {
             "suggestions": {"type": "array", "items": suggestion},
             "metrics": {"type": "array", "items": metric},
+            "product_facts": {"type": "array", "items": product_fact},
         },
-        "required": ["suggestions", "metrics"],
+        "required": ["suggestions", "metrics", "product_facts"],
         "additionalProperties": False,
     }
 

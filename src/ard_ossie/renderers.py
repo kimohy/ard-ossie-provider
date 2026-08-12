@@ -20,6 +20,47 @@ _ENVIRONMENT = Environment(
     trim_blocks=True,
     lstrip_blocks=True,
 )
+_PRODUCT_SECTIONS = (
+    (
+        "Overview",
+        (("description", "Description"), ("purpose", "Purpose")),
+    ),
+    (
+        "Data source",
+        (
+            ("domain", "Domain"),
+            ("data_type", "Data type"),
+            ("storage_location", "Storage location"),
+            ("source_system", "Source system"),
+            ("source_name", "Source name"),
+        ),
+    ),
+    ("Tags", (("tag", "Tag"),)),
+    (
+        "Access and security",
+        (("access", "Access"), ("security_classification", "Security classification")),
+    ),
+    (
+        "Ownership",
+        (("owner", "Owner"), ("contact", "Contact"), ("consumer", "Consumer")),
+    ),
+    (
+        "Freshness and SLA",
+        (
+            ("refresh_schedule", "Refresh schedule"),
+            ("freshness", "Freshness"),
+            ("sla", "SLA"),
+        ),
+    ),
+    (
+        "AI readiness and quality",
+        (("ai_readiness", "AI readiness"), ("quality", "Quality")),
+    ),
+    (
+        "Constraints and notes",
+        (("constraint", "Constraint"), ("related_link", "Related link")),
+    ),
+)
 
 
 def render_product_markdown(product: ProductIR) -> str:
@@ -27,10 +68,31 @@ def render_product_markdown(product: ProductIR) -> str:
     return (
         template.render(
             product=product,
+            sections=_product_sections(product),
             tables=sorted(product.tables, key=lambda item: item.table_id),
         ).strip()
         + "\n"
     )
+
+
+def _product_sections(product: ProductIR) -> list[dict[str, object]]:
+    by_kind: dict[str, list[str]] = {}
+    for fact in product.product_facts:
+        by_kind.setdefault(fact.kind, []).append(fact.value)
+
+    sections: list[dict[str, object]] = []
+    for heading, fields in _PRODUCT_SECTIONS:
+        facts = [
+            {"label": label, "value": value}
+            for kind, label in fields
+            for value in sorted(
+                by_kind.get(kind, []),
+                key=lambda item: (item.casefold(), item),
+            )
+        ]
+        if facts:
+            sections.append({"heading": heading, "facts": facts})
+    return sections
 
 
 def render_semantic_markdown(product: ProductIR) -> str:

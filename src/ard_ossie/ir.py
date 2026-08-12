@@ -17,6 +17,35 @@ from ard_ossie.models import (
     Version,
 )
 
+ProductFactKind = Literal[
+    "description",
+    "purpose",
+    "domain",
+    "data_type",
+    "storage_location",
+    "source_system",
+    "source_name",
+    "tag",
+    "access",
+    "security_classification",
+    "owner",
+    "contact",
+    "consumer",
+    "refresh_schedule",
+    "freshness",
+    "sla",
+    "ai_readiness",
+    "quality",
+    "constraint",
+    "related_link",
+]
+
+
+class ProductFactIR(StrictModel):
+    kind: ProductFactKind
+    value: str
+    evidence: list[Evidence] = Field(default_factory=list)
+
 
 class ColumnIR(StrictModel):
     column_id: ColumnId
@@ -75,7 +104,7 @@ class ProductIR(StrictModel):
     version: Version
     display_name: str
     description: str | None = None
-    product_document_markdown: str | None = None
+    product_facts: list[ProductFactIR] = Field(default_factory=list)
     synonyms: list[str] = Field(default_factory=list)
     instructions: str | None = None
     examples: list[str] = Field(default_factory=list)

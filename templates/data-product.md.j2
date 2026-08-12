@@ -3,16 +3,14 @@
 - Product ID: `{{ product.product_id }}`
 - Product key: `{{ product.product_key }}`
 - Version: `v{{ product.version }}`
+{% for section in sections %}
 
-## Description
+## {{ section.heading }}
 
-{{ product.description or "" }}
-{% if product.product_document_markdown %}
-
-## Parsed source
-
-{{ product.product_document_markdown }}
-{% endif %}
+{% for fact in section.facts -%}
+- **{{ fact.label }}:** {{ fact.value }}
+{% endfor -%}
+{% endfor %}
 
 ## Datasets
 
