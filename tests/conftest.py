@@ -86,6 +86,7 @@ def resolved_sales_order_ir() -> ProductIR:
         version=12,
         display_name="Sales Order",
         description="Order analytics product.",
+        instructions="# Sales Order semantics\n\nNet revenue excludes tax.",
         product_facts=[
             ProductFactIR(kind="description", value="Order analytics product."),
             ProductFactIR(kind="purpose", value="Analyze customer purchase orders."),
