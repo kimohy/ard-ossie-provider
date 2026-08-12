@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 import ard_ossie.pipeline as pipeline_module
 from ard_ossie.cli import app
-from ard_ossie.pipeline import PipelineValidationError, process_product
+from ard_ossie.pipeline import PipelineSecurityError, PipelineValidationError, process_product
 from tests.integration.test_cli_process import create_product_fixture
 
 
@@ -85,6 +85,114 @@ def test_promotion_failure_rolls_back_registry_generated_and_quality(
     assert tree_hash(registry) == before["registry"]
     assert tree_hash(product / "generated") == before["generated"]
     assert tree_hash(product / "quality") == before["quality"]
+
+
+def test_first_registry_promotion_failure_restores_absent_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later promotion failure must remove a newly installed first registry."""
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    real_replace = pipeline_module.os.replace
+    failed = False
+
+    def fail_generated_install(source, destination):
+        nonlocal failed
+        source_path = Path(source)
+        if (
+            not failed
+            and source_path.name == "generated"
+            and source_path.parent.name == "candidate"
+        ):
+            failed = True
+            raise OSError("simulated first promotion failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(pipeline_module.os, "replace", fail_generated_install)
+
+    with pytest.raises(OSError, match="simulated first promotion failure"):
+        process_product(product, registry_root=registry)
+
+    assert not registry.exists()
+    assert not (product / "generated").exists()
+    assert not (product / "quality").exists()
+
+
+def test_existing_registry_is_not_dereferenced_again_after_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate construction must use a stable snapshot, not the authoritative path."""
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    process_product(product, registry_root=registry)
+    config_path = product / "product.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["operation"] = "update"
+    config["base_version"] = 1
+    config["version"] = 2
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    product_html = product / "sources" / "product-info" / "product.html"
+    product_html.write_text(
+        product_html.read_text(encoding="utf-8").replace(
+            "Order analytics",
+            "Order snapshot analytics",
+        ),
+        encoding="utf-8",
+    )
+    real_copytree = pipeline_module.shutil.copytree
+
+    def reject_authoritative_registry_copy(source, destination, *args, **kwargs):
+        if Path(source) == registry:
+            raise AssertionError("authoritative registry was dereferenced after validation")
+        return real_copytree(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(
+        pipeline_module.shutil,
+        "copytree",
+        reject_authoritative_registry_copy,
+    )
+
+    result = process_product(product, registry_root=registry)
+
+    assert result.product_version == 2
+
+
+def test_registry_snapshot_uses_portable_path_when_nofollow_flags_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows-compatible processing must support both absent and existing registries."""
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    monkeypatch.setattr(pipeline_module.os, "O_DIRECTORY", 0, raising=False)
+    monkeypatch.setattr(pipeline_module.os, "O_NOFOLLOW", 0, raising=False)
+
+    first = process_product(product, registry_root=registry)
+    second = process_product(product, registry_root=registry)
+
+    assert first.product_version == 1
+    assert second.product_version == 1
+    assert (registry / "products" / f"{first.product_id}.json").is_file()
+
+
+def test_portable_registry_snapshot_rejects_nested_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Windows-compatible fallback must retain the registry symlink boundary."""
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    process_product(product, registry_root=registry)
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    (registry / "linked.json").symlink_to(outside)
+    monkeypatch.setattr(pipeline_module.os, "O_DIRECTORY", 0, raising=False)
+    monkeypatch.setattr(pipeline_module.os, "O_NOFOLLOW", 0, raising=False)
+
+    with pytest.raises(PipelineSecurityError, match="SYMLINK_NOT_ALLOWED"):
+        process_product(product, registry_root=registry)
 
 
 def test_cli_preserves_detailed_hard_failure_report(tmp_path: Path) -> None:

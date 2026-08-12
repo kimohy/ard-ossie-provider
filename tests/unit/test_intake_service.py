@@ -201,7 +201,15 @@ def test_issue_authorize_rejects_actor_that_does_not_match_event(tmp_path: Path)
 
 
 def test_issue_intake_reuses_equivalent_branch_and_pr(tmp_path: Path) -> None:
-    workflow_context = context(tmp_path)
+    workflow_context = context(
+        tmp_path,
+        body=(
+            issue_body()
+            .replace("[product.html]", "[Original Product.html]")
+            .replace("[semantic.docx]", "[Domain Semantics.docx]")
+            .replace("[dictionary.xlsx]", "[Business Dictionary.xlsx]")
+        ),
+    )
     git = FakeGit()
     github = FakeGitHub()
     prepare_count = 0
@@ -220,6 +228,11 @@ def test_issue_intake_reuses_equivalent_branch_and_pr(tmp_path: Path) -> None:
             "semantic_document": "https://github.com/user-attachments/assets/22222222-2222-2222-2222-222222222222",
             "dictionary_excel": "https://github.com/user-attachments/assets/33333333-3333-3333-3333-333333333333",
         }
+        original_filenames = {
+            "product_html": "Original Product.html",
+            "semantic_document": "Domain Semantics.docx",
+            "dictionary_excel": "Business Dictionary.xlsx",
+        }
         files = []
         for role, path in sources.items():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +241,7 @@ def test_issue_intake_reuses_equivalent_branch_and_pr(tmp_path: Path) -> None:
             files.append(
                 DownloadedAttachment(
                     role=role,
-                    filename=path.name,
+                    filename=original_filenames[role],
                     relative_path=path.relative_to(product).as_posix(),
                     sha256=hashlib.sha256(content).hexdigest(),
                     size_bytes=len(content),
@@ -281,10 +294,38 @@ def test_issue_intake_reuses_equivalent_branch_and_pr(tmp_path: Path) -> None:
     ]
     assert github.labels == {"ard:approved", "ard:processing", "ard:pr-created"}
 
-    tampered = b"unapproved attachment bytes"
-    source = tmp_path / "products" / "sales-order" / "sources" / "product" / "product.html"
-    source.write_bytes(tampered)
     manifest_path = tmp_path / "products" / "sales-order" / "intake-manifest.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    product_file = next(
+        item for item in manifest_payload["files"] if item["role"] == "product_html"
+    )
+    product_file["filename"] = "Unapproved Rename.html"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    with pytest.raises(WorkflowSecurityError, match="ISSUE_EXISTING_SOURCE_MISMATCH"):
+        service.run(workflow_context)
+
+    product_file["filename"] = "Original Product.html"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    source = tmp_path / "products" / "sales-order" / "sources" / "product" / "product.html"
+    relocated = (
+        tmp_path / "products" / "sales-order" / "sources" / "relocated" / "product.html"
+    )
+    relocated.parent.mkdir()
+    source.replace(relocated)
+    product_file["relative_path"] = "sources/relocated/product.html"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    with pytest.raises(WorkflowSecurityError, match="ISSUE_EXISTING_SOURCE_MISMATCH"):
+        service.run(workflow_context)
+
+    relocated.replace(source)
+    product_file["relative_path"] = "sources/product/product.html"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    tampered = b"unapproved attachment bytes"
+    source.write_bytes(tampered)
     manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     product_file = next(
         item for item in manifest_payload["files"] if item["role"] == "product_html"

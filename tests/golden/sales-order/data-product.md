@@ -4,9 +4,49 @@
 - Product key: `sales-order`
 - Version: `v12`
 
-## Description
+## Overview
 
-Order analytics product.
+- **Description:** Order analytics product.
+- **Purpose:** Analyze customer purchase orders.
+
+## Data source
+
+- **Domain:** Sales
+- **Data type:** Transactional
+- **Storage location:** BigQuery analytics.sales
+- **Source system:** ERP
+- **Source name:** Order Management
+
+## Tags
+
+- **Tag:** Orders
+
+## Access and security
+
+- **Access:** Approved analysts
+- **Security classification:** Internal
+
+## Ownership
+
+- **Owner:** Sales Data Office
+- **Contact:** sales-data@example.com
+- **Consumer:** Sales analysts
+
+## Freshness and SLA
+
+- **Refresh schedule:** Daily at 02:00 UTC
+- **Freshness:** Within 24 hours
+- **SLA:** 99.9% monthly availability
+
+## AI readiness and quality
+
+- **AI readiness:** Documented semantics and stable identifiers
+- **Quality:** Primary keys are validated
+
+## Constraints and notes
+
+- **Constraint:** Tax is excluded from net revenue
+- **Related link:** https://example.com/orders
 
 ## Datasets
 

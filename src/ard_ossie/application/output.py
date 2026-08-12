@@ -24,6 +24,10 @@ class ResultWriter:
         self.github_output = github_output
         self.github_summary = github_summary
 
+    def prepare(self) -> None:
+        """Invalidate any result left by an earlier command invocation."""
+        self.result_path.unlink(missing_ok=True)
+
     def write(self, result: WorkflowResult) -> None:
         output_text = _render_outputs(result.outputs) if self.github_output is not None else None
         summary_text = _render_summary(result) if self.github_summary is not None else None

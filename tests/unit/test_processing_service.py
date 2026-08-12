@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import json
+import traceback
 from pathlib import Path
 
 import pytest
 
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.application.contracts import (
+    ExitCode,
     MutationRecord,
+    WorkflowConfigurationError,
+    WorkflowError,
     WorkflowPartialError,
     WorkflowResult,
     WorkflowSecurityError,
     WorkflowStatus,
     WorkflowTransientError,
+    WorkflowValidationError,
 )
 from ard_ossie.application.processing import (
     ProcessingReconcileRequest,
@@ -23,16 +28,19 @@ from ard_ossie.application.processing import (
 from ard_ossie.pipeline import (
     ProcessResult,
     ProviderExecutionError,
+    ProviderFailureKind,
     QualityReport,
     QualityStatus,
 )
 from ard_ossie.ports.git import ChangedPaths, CommitResult, GitTransientError
 from ard_ossie.ports.github import GitHubTransientError, PullRequestState
+from tests.integration.test_cli_process import create_product_fixture
 
 OLD_SHA = "a" * 40
 NEW_SHA = "b" * 40
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 CHANGESET_ID = "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2"
+INVOCATION_ID = "31543231017-1"
 
 
 class FakeGit:
@@ -252,6 +260,53 @@ def test_processing_promotes_commits_and_sets_exact_head_status(tmp_path: Path) 
     assert git.pushes == [("ard/example", True)]
 
 
+def test_processing_creates_first_registry_through_atomic_promotion(
+    tmp_path: Path,
+) -> None:
+    """Trusted processing owns creation of the first authoritative registry."""
+    create_product_fixture(tmp_path)
+    git = FakeGit()
+
+    result = ProcessingService(
+        RepositoryPaths(tmp_path),
+        git,
+        FakeGitHub(git),
+        provider_factory=lambda: None,
+    ).run(request(tmp_path))
+
+    assert result.status is WorkflowStatus.SUCCESS
+    assert (tmp_path / "registry" / "products" / f"{PRODUCT_ID}.json").is_file()
+
+
+def test_processing_rejects_registry_symlink_inserted_before_processor(
+    tmp_path: Path,
+) -> None:
+    """Provider setup must not reopen the vetted registry path outside the repository."""
+    create_product_fixture(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("preserve\n", encoding="utf-8")
+    git = FakeGit()
+
+    def swap_registry_for_symlink():
+        (tmp_path / "registry").symlink_to(outside, target_is_directory=True)
+        return None
+
+    with pytest.raises(WorkflowSecurityError, match="SYMLINK_NOT_ALLOWED"):
+        ProcessingService(
+            RepositoryPaths(tmp_path),
+            git,
+            FakeGitHub(git),
+            provider_factory=swap_registry_for_symlink,
+        ).run(request(tmp_path))
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve\n"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    assert git.sha == OLD_SHA
+    assert git.pushes == []
+
+
 def test_processing_rejects_stale_head_before_loading_provider(tmp_path: Path) -> None:
     repository(tmp_path)
     git = FakeGit()
@@ -302,14 +357,48 @@ def test_processing_rejects_unbound_changeset_marker_before_provider(
     assert provider_loaded is False
 
 
-def test_processing_classifies_provider_failure_as_transient(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("kind", "expected_error", "expected_exit_code"),
+    [
+        pytest.param(
+            ProviderFailureKind.CONFIGURATION,
+            WorkflowConfigurationError,
+            20,
+            id="configuration",
+        ),
+        pytest.param(
+            ProviderFailureKind.TRANSIENT,
+            WorkflowTransientError,
+            30,
+            id="transient",
+        ),
+        pytest.param(
+            ProviderFailureKind.OUTPUT,
+            WorkflowValidationError,
+            10,
+            id="output",
+        ),
+    ],
+)
+def test_processing_maps_provider_failure_kind_to_workflow_exit_contract(
+    tmp_path: Path,
+    kind: ProviderFailureKind,
+    expected_error: type[Exception],
+    expected_exit_code: int,
+) -> None:
     repository(tmp_path)
     git = FakeGit()
 
     def fail_provider(*args, **kwargs):
-        raise ProviderExecutionError("LLM_PROVIDER_FAILURE: timeout")
+        try:
+            raise RuntimeError("sentinel-provider-response")
+        except RuntimeError as error:
+            raise ProviderExecutionError(
+                "LLM_PROVIDER_SAFE_CODE",
+                kind=kind,
+            ) from error
 
-    with pytest.raises(WorkflowTransientError, match="LLM_PROVIDER_FAILURE"):
+    with pytest.raises(expected_error, match="LLM_PROVIDER_SAFE_CODE") as captured:
         ProcessingService(
             RepositoryPaths(tmp_path),
             git,
@@ -317,6 +406,11 @@ def test_processing_classifies_provider_failure_as_transient(tmp_path: Path) -> 
             processor=fail_provider,
             provider_factory=lambda: object(),
         ).run(request(tmp_path))
+
+    assert captured.value.exit_code == expected_exit_code
+    assert "sentinel-provider-response" not in "".join(
+        traceback.format_exception(captured.value)
+    )
 
 
 def test_processing_status_failure_after_push_is_partial(tmp_path: Path) -> None:
@@ -423,6 +517,8 @@ def test_processing_reconcile_uses_same_job_partial_envelope(tmp_path: Path) -> 
             command="workflow.process",
             status=WorkflowStatus.FAILURE,
             outputs={
+                "invocation_id": INVOCATION_ID,
+                "failure_exit_code": 70,
                 "current_head": NEW_SHA,
                 "expected_head": OLD_SHA,
                 "product_id": PRODUCT_ID,
@@ -453,6 +549,7 @@ def test_processing_reconcile_uses_same_job_partial_envelope(tmp_path: Path) -> 
             result_path=result_path,
             branch="ard/example",
             pr_number=7,
+            invocation_id=INVOCATION_ID,
         )
     )
 
@@ -461,6 +558,314 @@ def test_processing_reconcile_uses_same_job_partial_envelope(tmp_path: Path) -> 
         (NEW_SHA, "ard/changeset", "success"),
         (NEW_SHA, "ard/quality-gate", "success"),
     ]
+
+
+def test_processing_reconcile_replays_safe_non_partial_failure(tmp_path: Path) -> None:
+    repository(tmp_path)
+    result_path = tmp_path / ".ard" / "run" / "workflow.process-result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        WorkflowResult(
+            command="workflow.process",
+            status=WorkflowStatus.FAILURE,
+            outputs={
+                "invocation_id": INVOCATION_ID,
+                "failure_exit_code": 20,
+            },
+            findings=[
+                {
+                    "code": "LLM_PROVIDER_AUTHENTICATION_FAILED",
+                    "message": "LLM_PROVIDER_AUTHENTICATION_FAILED",
+                }
+            ],
+            retryable=False,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    git = FakeGit()
+
+    with pytest.raises(
+        WorkflowError,
+        match="LLM_PROVIDER_AUTHENTICATION_FAILED",
+    ) as captured:
+        ProcessingReconcileService(
+            RepositoryPaths(tmp_path),
+            git,
+            FakeGitHub(git),
+        ).run(
+            ProcessingReconcileRequest(
+                repository=tmp_path,
+                result_path=result_path,
+                branch="ard/example",
+                pr_number=7,
+                invocation_id=INVOCATION_ID,
+            )
+        )
+
+    assert captured.value.code == "LLM_PROVIDER_AUTHENTICATION_FAILED"
+    assert captured.value.exit_code is ExitCode.CONFIGURATION
+    assert captured.value.retryable is False
+
+
+def test_processing_reconcile_rejects_result_from_another_invocation(
+    tmp_path: Path,
+) -> None:
+    repository(tmp_path)
+    result_path = tmp_path / ".ard" / "run" / "workflow.process-result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        WorkflowResult(
+            command="workflow.process",
+            status=WorkflowStatus.FAILURE,
+            outputs={
+                "invocation_id": "31543231017-0",
+                "failure_exit_code": 20,
+            },
+            findings=[
+                {
+                    "code": "LLM_PROVIDER_AUTHENTICATION_FAILED",
+                    "message": "LLM_PROVIDER_AUTHENTICATION_FAILED",
+                }
+            ],
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        WorkflowSecurityError,
+        match="PROCESSING_RECONCILE_INVOCATION_MISMATCH",
+    ):
+        ProcessingReconcileService(
+            RepositoryPaths(tmp_path),
+            FakeGit(),
+            FakeGitHub(FakeGit()),
+        ).run(
+            ProcessingReconcileRequest(
+                repository=tmp_path,
+                result_path=result_path,
+                branch="ard/example",
+                pr_number=7,
+                invocation_id=INVOCATION_ID,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("failure_exit_code", "findings"),
+    [
+        pytest.param(
+            30,
+            [
+                {
+                    "code": "PROCESSING_POST_COMMIT_FAILED",
+                    "message": "PROCESSING_POST_COMMIT_FAILED",
+                }
+            ],
+            id="wrong-partial-exit-code",
+        ),
+        pytest.param(
+            70,
+            [
+                {
+                    "code": "PROCESSING_POST_COMMIT_FAILED",
+                    "message": "PROCESSING_POST_COMMIT_FAILED",
+                },
+                {"code": "EXTRA_FINDING", "message": "EXTRA_FINDING"},
+            ],
+            id="extra-partial-finding",
+        ),
+    ],
+)
+def test_processing_reconcile_rejects_malformed_partial_envelope(
+    tmp_path: Path,
+    failure_exit_code: int,
+    findings: list[dict[str, str]],
+) -> None:
+    repository(tmp_path)
+    result_path = tmp_path / ".ard" / "run" / "workflow.process-result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        WorkflowResult(
+            command="workflow.process",
+            status=WorkflowStatus.FAILURE,
+            outputs={
+                "invocation_id": INVOCATION_ID,
+                "failure_exit_code": failure_exit_code,
+                "current_head": NEW_SHA,
+                "expected_head": OLD_SHA,
+                "product_id": PRODUCT_ID,
+                "product_key": "sales-order",
+                "version": 1,
+            },
+            findings=findings,
+            mutations=[
+                MutationRecord(resource="commit", target=NEW_SHA, action="create")
+            ],
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    git = FakeGit()
+    git.sha = git.remote_sha = NEW_SHA
+
+    with pytest.raises(
+        WorkflowSecurityError,
+        match="PROCESSING_RECONCILE_RESULT_INVALID",
+    ):
+        ProcessingReconcileService(
+            RepositoryPaths(tmp_path),
+            git,
+            FakeGitHub(git),
+        ).run(
+            ProcessingReconcileRequest(
+                repository=tmp_path,
+                result_path=result_path,
+                branch="ard/example",
+                pr_number=7,
+                invocation_id=INVOCATION_ID,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(
+            WorkflowResult(
+                command="workflow.process",
+                status=WorkflowStatus.FAILURE,
+                outputs={"invocation_id": INVOCATION_ID},
+                findings=[{"code": "LLM_PROVIDER_FAILURE", "message": "safe"}],
+            ),
+            id="missing-exit-code",
+        ),
+        pytest.param(
+            WorkflowResult(
+                command="workflow.process",
+                status=WorkflowStatus.FAILURE,
+                outputs={
+                    "invocation_id": INVOCATION_ID,
+                    "failure_exit_code": 20,
+                },
+                findings=[{"code": "unsafe code", "message": "safe"}],
+            ),
+            id="invalid-finding-code",
+        ),
+        pytest.param(
+            WorkflowResult(
+                command="workflow.process",
+                status=WorkflowStatus.FAILURE,
+                outputs={
+                    "invocation_id": INVOCATION_ID,
+                    "failure_exit_code": 99,
+                },
+                findings=[{"code": "LLM_PROVIDER_FAILURE", "message": "safe"}],
+            ),
+            id="unknown-exit-code",
+        ),
+        pytest.param(
+            WorkflowResult(
+                command="workflow.process",
+                status=WorkflowStatus.FAILURE,
+                outputs={
+                    "invocation_id": INVOCATION_ID,
+                    "failure_exit_code": 70,
+                },
+                findings=[{"code": "LLM_PROVIDER_FAILURE", "message": "safe"}],
+            ),
+            id="partial-exit-for-non-partial-failure",
+        ),
+        pytest.param(
+            WorkflowResult(
+                command="workflow.process",
+                status=WorkflowStatus.FAILURE,
+                outputs={
+                    "invocation_id": INVOCATION_ID,
+                    "failure_exit_code": 30,
+                },
+                findings=[{"code": "LLM_PROVIDER_FAILURE", "message": "safe"}],
+                retryable=False,
+            ),
+            id="retryability-mismatch",
+        ),
+    ],
+)
+def test_processing_reconcile_rejects_invalid_recorded_failure(
+    tmp_path: Path,
+    result: WorkflowResult,
+) -> None:
+    repository(tmp_path)
+    result_path = tmp_path / ".ard" / "run" / "workflow.process-result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(result.model_dump_json(), encoding="utf-8")
+    git = FakeGit()
+
+    with pytest.raises(
+        WorkflowSecurityError,
+        match="PROCESSING_RECONCILE_RESULT_INVALID",
+    ):
+        ProcessingReconcileService(
+            RepositoryPaths(tmp_path),
+            git,
+            FakeGitHub(git),
+        ).run(
+            ProcessingReconcileRequest(
+                repository=tmp_path,
+                result_path=result_path,
+                branch="ard/example",
+                pr_number=7,
+                invocation_id=INVOCATION_ID,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(
+            WorkflowResult(
+                command="workflow.process-reconcile",
+                status=WorkflowStatus.FAILURE,
+                outputs={"invocation_id": INVOCATION_ID},
+            ),
+            id="wrong-command",
+        ),
+        pytest.param(
+            WorkflowResult(
+                command="workflow.process",
+                status=WorkflowStatus.SUCCESS,
+                outputs={"invocation_id": INVOCATION_ID},
+            ),
+            id="successful-process-result",
+        ),
+    ],
+)
+def test_processing_reconcile_rejects_non_failure_process_envelope(
+    tmp_path: Path,
+    result: WorkflowResult,
+) -> None:
+    repository(tmp_path)
+    result_path = tmp_path / ".ard" / "run" / "workflow.process-result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(result.model_dump_json(), encoding="utf-8")
+
+    with pytest.raises(
+        WorkflowSecurityError,
+        match="PROCESSING_RECONCILE_RESULT_NOT_PARTIAL",
+    ):
+        git = FakeGit()
+        ProcessingReconcileService(
+            RepositoryPaths(tmp_path),
+            git,
+            FakeGitHub(git),
+        ).run(
+            ProcessingReconcileRequest(
+                repository=tmp_path,
+                result_path=result_path,
+                branch="ard/example",
+                pr_number=7,
+                invocation_id=INVOCATION_ID,
+            )
+        )
 
 
 def test_processing_reconcile_retries_consecutive_transient_failures(
@@ -476,6 +881,8 @@ def test_processing_reconcile_retries_consecutive_transient_failures(
             command="workflow.process",
             status=WorkflowStatus.FAILURE,
             outputs={
+                "invocation_id": INVOCATION_ID,
+                "failure_exit_code": 70,
                 "current_head": NEW_SHA,
                 "expected_head": OLD_SHA,
                 "product_id": PRODUCT_ID,
@@ -510,6 +917,7 @@ def test_processing_reconcile_retries_consecutive_transient_failures(
             result_path=result_path,
             branch="ard/example",
             pr_number=7,
+            invocation_id=INVOCATION_ID,
         )
     )
 
