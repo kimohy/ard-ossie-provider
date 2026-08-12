@@ -97,19 +97,7 @@ def _product_sections(product: ProductIR) -> list[dict[str, object]]:
 
 def render_semantic_markdown(product: ProductIR) -> str:
     template = _ENVIRONMENT.get_template("data-semantic.md.j2")
-    table_names = {table.table_id: table.dataset_name for table in product.tables}
-    return (
-        template.render(
-            product=product,
-            metrics=sorted(product.metrics, key=lambda item: item.metric_id),
-            relationships=sorted(
-                product.relationships,
-                key=lambda item: item.relationship_id,
-            ),
-            table_names=table_names,
-        ).strip()
-        + "\n"
-    )
+    return template.render(product=product).strip() + "\n"
 
 
 def render_dictionary_json(product: ProductIR) -> str:

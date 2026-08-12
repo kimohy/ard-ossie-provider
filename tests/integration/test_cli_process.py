@@ -143,6 +143,15 @@ class FakeSemanticProvider:
 
     def generate_structured(self, *, schema, messages):
         source = json.loads(messages[1]["content"])["semantic"]
+        allowed_paths = json.loads(
+            messages[0]["content"].split("Allowed field_path values: ", maxsplit=1)[1]
+        )
+        column_description_path = next(
+            path
+            for path in allowed_paths
+            if path.startswith(f"tables.{TABLE_ID}.columns.")
+            and path.endswith(".description")
+        )
         evidence = [
             {
                 "source_hash": source["source_hash"],
@@ -163,6 +172,13 @@ class FakeSemanticProvider:
                 {
                     "field_path": f"tables.{TABLE_ID}.description",
                     "value": "Confirmed orders",
+                    "confidence": 0.9,
+                    "evidence": evidence,
+                    "status": "ai_suggested",
+                },
+                {
+                    "field_path": column_description_path,
+                    "value": "LLM-only order identifier",
                     "confidence": 0.9,
                     "evidence": evidence,
                     "status": "ai_suggested",
@@ -276,7 +292,9 @@ def test_pipeline_normalizes_user_facts_and_excludes_portal_boilerplate(
     assert all("evidence_ids" not in fact for fact in audit["product_facts"])
 
 
-def test_pipeline_applies_and_audits_evidence_backed_llm_semantics(tmp_path: Path) -> None:
+def test_pipeline_audits_table_and_column_suggestions_without_publishing_them(
+    tmp_path: Path,
+) -> None:
     product = create_product_fixture(tmp_path)
 
     process_product(
@@ -288,9 +306,25 @@ def test_pipeline_applies_and_audits_evidence_backed_llm_semantics(tmp_path: Pat
     ossie = json.loads((product / "generated" / "ossie-model.json").read_text())
     model = ossie["semantic_model"][0]
     assert model["ai_context"]["synonyms"] == ["purchase orders"]
-    assert model["datasets"][0]["description"] == "Confirmed orders"
-    suggestions = json.loads((product / "quality" / "llm-suggestions.json").read_text())
-    assert suggestions["suggestions"][0]["status"] == "ai_suggested"
+    assert "description" not in model["datasets"][0]
+
+    dictionary = json.loads(
+        (product / "generated" / "data-dictionary.json").read_text(encoding="utf-8")
+    )
+    assert dictionary["tables"][0]["description"] is None
+    assert dictionary["tables"][0]["columns"][0]["description"] is None
+
+    audit = json.loads(
+        (product / "quality" / "llm-suggestions.json").read_text(encoding="utf-8")
+    )
+    assert {
+        item["value"]
+        for item in audit["suggestions"]
+        if isinstance(item["value"], str)
+    } >= {
+        "Confirmed orders",
+        "LLM-only order identifier",
+    }
 
 
 class PhysicalFieldProvider(FakeSemanticProvider):
@@ -557,7 +591,8 @@ def test_pipeline_qualifies_single_dataset_metric_and_excludes_cross_dataset_met
     ]
     assert model["relationships"] == []
     semantic_markdown = (product / "generated" / "data-semantic.md").read_text()
-    assert "Campaign Count" in semantic_markdown
+    assert "confirmed customer purchase" in semantic_markdown
+    assert "Campaign Count" not in semantic_markdown
     assert "Modeled Efficiency" not in semantic_markdown
 
     product_record = json.loads(

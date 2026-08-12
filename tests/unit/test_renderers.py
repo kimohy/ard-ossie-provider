@@ -22,6 +22,18 @@ def test_renderers_match_hand_authored_golden_files(resolved_sales_order_ir: Pro
     assert render_dictionary_json(resolved_sales_order_ir) == golden("data-dictionary.json")
 
 
+def test_semantic_renderer_does_not_append_generated_semantics(
+    resolved_sales_order_ir: ProductIR,
+) -> None:
+    rendered = render_semantic_markdown(resolved_sales_order_ir)
+
+    assert rendered == "# Sales Order semantics\n\nNet revenue excludes tax.\n"
+    assert "net_revenue" not in rendered
+    assert "orders_customer" not in rendered
+    assert "## Metrics" not in rendered
+    assert "## Relationships" not in rendered
+
+
 def test_renderer_output_is_stable_when_input_lists_are_reversed(
     resolved_sales_order_ir: ProductIR,
 ) -> None:
