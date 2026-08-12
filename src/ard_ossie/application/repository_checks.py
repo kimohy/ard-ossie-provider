@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import tarfile
 import tempfile
 import zipfile
@@ -17,6 +18,7 @@ from jsonschema import Draft202012Validator, SchemaError
 from pydantic import Field
 
 from ard_ossie.application.contracts import (
+    WorkflowConfigurationError,
     WorkflowError,
     WorkflowResult,
     WorkflowSecurityError,
@@ -24,18 +26,14 @@ from ard_ossie.application.contracts import (
     WorkflowTransientError,
     WorkflowValidationError,
 )
-from ard_ossie.identity import DuplicateReport
-from ard_ossie.impact import ChangeSetRecord, ImpactReport
-from ard_ossie.ingestion import SourceManifest
-from ard_ossie.ir import ProductIR
-from ard_ossie.models import CandidateChange, StrictModel
-from ard_ossie.pipeline import QualityReport
-from ard_ossie.ports.filesystem import FileSystemPort
+from ard_ossie.application.model_schema_verification import MODEL_SCHEMA_CATALOG
+from ard_ossie.models import StrictModel
+from ard_ossie.ports.filesystem import FileSystemPort, PathPolicyError
 from ard_ossie.ports.git import GitPort
 from ard_ossie.ports.process import CommandRequest, CommandRunner
-from ard_ossie.versioning import VersionDecision
 
 _VERIFIERS = (
+    "model-schemas",
     "pytest",
     "ruff",
     "actionlint",
@@ -46,6 +44,7 @@ _VERIFIERS = (
 )
 _VERIFIER_GROUPS = {
     "static": ("ruff", "actionlint", "schemas", "ossie-checksum", "secret-scan"),
+    "model-schemas": ("model-schemas",),
     "pytest": ("pytest",),
     "wheel": ("wheel",),
 }
@@ -55,6 +54,7 @@ _ACTIONLINT_CHECKSUMS = f"actionlint_{_ACTIONLINT_VERSION}_checksums.txt"
 _ACTIONLINT_RELEASE_ROOT = (
     f"https://github.com/rhysd/actionlint/releases/download/v{_ACTIONLINT_VERSION}"
 )
+_MODEL_SCHEMA_HELPER = Path(__file__).with_name("model_schema_verification.py").resolve()
 _SECRET_PATTERNS = (
     re.compile(rb"gh[pousr]_[A-Za-z0-9]{36,255}"),
     re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
@@ -63,24 +63,12 @@ _SECRET_PATTERNS = (
 )
 _SECRET_SCAN_CHUNK_BYTES = 1024 * 1024
 _SECRET_SCAN_OVERLAP_BYTES = 512
-_MODEL_SCHEMAS: tuple[tuple[Path, type[StrictModel]], ...] = (
-    (Path("candidate-change.schema.json"), CandidateChange),
-    (Path("changeset.schema.json"), ChangeSetRecord),
-    (Path("ir/product-ir.schema.json"), ProductIR),
-    (Path("reports/duplicate-report.schema.json"), DuplicateReport),
-    (Path("reports/impact-report.schema.json"), ImpactReport),
-    (Path("reports/quality-report.schema.json"), QualityReport),
-    (Path("reports/version-report.schema.json"), VersionDecision),
-    (Path("source-manifest.schema.json"), SourceManifest),
-)
-
-
 class RepositoryCheckRequest(StrictModel):
     repository: Path
     base_ref: str = Field(pattern=r"^[0-9a-f]{40}$")
     head_ref: str = Field(pattern=r"^[0-9a-f]{40}$")
     head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
-    verification_group: Literal["static", "pytest", "wheel"]
+    verification_group: Literal["static", "model-schemas", "pytest", "wheel"]
 
 
 class RepositoryToolsPort(Protocol):
@@ -215,6 +203,88 @@ class RepositoryVerificationTools:
             credential_free=True,
         )
 
+    def _run_model_schemas(self) -> None:
+        helper = _MODEL_SCHEMA_HELPER
+        try:
+            trusted_digest = _sha256(helper.read_bytes())
+        except OSError as error:
+            raise WorkflowSecurityError(
+                "TRUSTED_MODEL_SCHEMA_HELPER_INVALID",
+                "trusted model schema helper is unavailable",
+            ) from error
+        staging = self.paths.resolve_write(".ard/staging")
+        staging.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="repository-model-schemas-",
+            dir=staging,
+        ) as value:
+            result_path = Path(value) / "receipt.json"
+            nonce = secrets.token_hex(32)
+            try:
+                self._command(
+                    "model-schemas",
+                    "uv",
+                    "run",
+                    "--frozen",
+                    "python",
+                    "-I",
+                    str(helper),
+                    "--repository",
+                    str(self.paths.root),
+                    "--result",
+                    str(result_path),
+                    "--nonce",
+                    nonce,
+                    timeout=600,
+                    credential_free=True,
+                    include_failure_evidence=False,
+                )
+            finally:
+                self._require_unchanged_model_schema_helper(helper, trusted_digest)
+            self._require_model_schema_receipt(result_path, nonce)
+
+    def _require_unchanged_model_schema_helper(
+        self,
+        helper: Path,
+        trusted_digest: str,
+    ) -> None:
+        try:
+            current_digest = _sha256(helper.read_bytes())
+        except OSError as error:
+            raise WorkflowSecurityError(
+                "TRUSTED_MODEL_SCHEMA_HELPER_CHANGED",
+                "trusted model schema helper changed during candidate execution",
+            ) from error
+        if current_digest != trusted_digest:
+            raise WorkflowSecurityError(
+                "TRUSTED_MODEL_SCHEMA_HELPER_CHANGED",
+                "trusted model schema helper changed during candidate execution",
+            )
+
+    def _require_model_schema_receipt(self, result_path: Path, nonce: str) -> None:
+        expected = {
+            "nonce": nonce,
+            "schemas": [
+                reference.schema_path.as_posix()
+                for reference in MODEL_SCHEMA_CATALOG
+            ],
+            "status": "success",
+        }
+        try:
+            receipt = json.loads(
+                self.paths.resolve_read(result_path).read_text(encoding="utf-8")
+            )
+        except (OSError, PathPolicyError, TypeError, ValueError) as error:
+            raise WorkflowValidationError(
+                "REPOSITORY_MODEL_SCHEMAS_RECEIPT_INVALID",
+                "model schema verifier did not produce a valid completion receipt",
+            ) from error
+        if receipt != expected:
+            raise WorkflowValidationError(
+                "REPOSITORY_MODEL_SCHEMAS_RECEIPT_INVALID",
+                "model schema verifier did not complete the trusted catalog",
+            )
+
     def _run_ruff(self) -> None:
         self._command(
             "ruff",
@@ -257,18 +327,12 @@ class RepositoryVerificationTools:
             synchronized = {
                 path for path in parsed if not path.parts or path.parts[0] != "ossie"
             }
-            expected_paths = {path for path, _model in _MODEL_SCHEMAS}
+            expected_paths = {entry.schema_path for entry in MODEL_SCHEMA_CATALOG}
             if synchronized != expected_paths:
                 raise WorkflowValidationError(
                     "SCHEMA_CATALOG_MISMATCH",
                     "checked-in model schema catalog differs from the verifier catalog",
                 )
-            for relative, model in _MODEL_SCHEMAS:
-                if parsed[relative] != model.model_json_schema():
-                    raise WorkflowValidationError(
-                        "SCHEMA_SYNCHRONIZATION_FAILED",
-                        f"checked-in schema differs from model: {relative}",
-                    )
         except WorkflowValidationError:
             raise
         except (OSError, TypeError, ValueError, SchemaError) as error:
@@ -313,6 +377,7 @@ class RepositoryVerificationTools:
                     for path in (self.paths.root / "schemas").rglob("*")
                     if path.is_file()
                 ),
+                "ard_ossie/application/model_schema_verification.py",
                 "ard_ossie/application/release_detection.py",
                 "ard_ossie/application/release_publication.py",
                 "ard_ossie/application/release_dispatch.py",
@@ -407,35 +472,55 @@ class RepositoryVerificationTools:
         *argv: str,
         timeout: int,
         credential_free: bool = False,
+        include_failure_evidence: bool = True,
     ) -> None:
-        if credential_free:
-            staging = self.paths.resolve_write(".ard/staging")
-            staging.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(
-                prefix="repository-command-",
-                dir=staging,
-            ) as value:
+        try:
+            if credential_free:
+                staging = self.paths.resolve_write(".ard/staging")
+                staging.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(
+                    prefix="repository-command-",
+                    dir=staging,
+                ) as value:
+                    result = self.runner.run(
+                        CommandRequest(
+                            argv=tuple(argv),
+                            cwd=self.paths.root,
+                            env=_credential_free_environment(
+                                Path(value),
+                                self.paths.resolve_write(".ard/cache/uv"),
+                            ),
+                            timeout_seconds=timeout,
+                        )
+                    )
+            else:
                 result = self.runner.run(
                     CommandRequest(
                         argv=tuple(argv),
                         cwd=self.paths.root,
-                        env=_credential_free_environment(
-                            Path(value),
-                            self.paths.resolve_write(".ard/cache/uv"),
-                        ),
                         timeout_seconds=timeout,
                     )
                 )
-        else:
-            result = self.runner.run(
-                CommandRequest(
-                    argv=tuple(argv),
-                    cwd=self.paths.root,
-                    timeout_seconds=timeout,
-                )
-            )
+        except WorkflowTransientError as error:
+            if include_failure_evidence:
+                raise
+            raise WorkflowTransientError(
+                error.code,
+                f"{name} verifier failed",
+            ) from None
+        except WorkflowConfigurationError as error:
+            if include_failure_evidence:
+                raise
+            raise WorkflowConfigurationError(
+                error.code,
+                f"{name} verifier failed",
+            ) from None
         if result.returncode != 0:
-            evidence = (result.stderr or result.stdout).strip()[:400]
+            evidence = (
+                (result.stderr or result.stdout).strip()[:400]
+                if include_failure_evidence
+                else ""
+            )
             raise WorkflowValidationError(
                 f"REPOSITORY_{name.upper().replace('-', '_')}_FAILED",
                 evidence or f"{name} verifier failed",

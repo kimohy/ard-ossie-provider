@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        verification_group: [pytest, wheel]
+        verification_group: [model-schemas, pytest, wheel]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
