@@ -11,7 +11,11 @@ from typer.testing import CliRunner
 import ard_ossie.pipeline as pipeline_module
 from ard_ossie.cli import app
 from ard_ossie.pipeline import PipelineSecurityError, PipelineValidationError, process_product
-from tests.integration.test_cli_process import create_product_fixture
+from tests.integration.test_cli_process import (
+    DatasetSafetyProvider,
+    configure_metric_safety_fixture,
+    create_product_fixture,
+)
 
 
 def tree_hash(directory: Path) -> str:
@@ -237,3 +241,48 @@ def test_warnings_as_errors_blocks_promotion_but_preserves_quality_evidence(
     assert not (registry / "products").exists()
     report = json.loads((product / "quality" / "quality-report.json").read_text())
     assert report["hard_errors"][0]["code"] == "WARNINGS_AS_ERRORS"
+
+
+def test_metric_exclusion_warning_blocks_update_promotion_in_strict_mode(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    configure_metric_safety_fixture(product)
+    registry = tmp_path / "registry"
+    process_product(
+        product,
+        registry_root=registry,
+        provider=DatasetSafetyProvider(),
+    )
+    before = {
+        "registry": tree_hash(registry),
+        "generated": tree_hash(product / "generated"),
+    }
+    config_path = product / "product.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["operation"] = "update"
+    config["base_version"] = 1
+    config["version"] = 2
+    config["description"] = "Updated campaign and sales performance product."
+    config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PipelineValidationError, match="WARNINGS_AS_ERRORS"):
+        process_product(
+            product,
+            registry_root=registry,
+            provider=DatasetSafetyProvider(),
+            warnings_as_errors=True,
+        )
+
+    assert tree_hash(registry) == before["registry"]
+    assert tree_hash(product / "generated") == before["generated"]
+    report = json.loads((product / "quality" / "quality-report.json").read_text())
+    assert [finding["code"] for finding in report["hard_errors"]] == [
+        "WARNINGS_AS_ERRORS"
+    ]
+    assert "METRIC_MULTI_DATASET_UNSUPPORTED" in {
+        finding["code"] for finding in report["warnings"]
+    }

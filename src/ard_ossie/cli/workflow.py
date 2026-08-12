@@ -7,6 +7,7 @@ from typing import Annotated, Any
 
 import typer
 
+from ard_ossie.application.base_sync import IssueBaseSyncService, IssueRouteService
 from ard_ossie.application.changesets import ChangesetRequest, ChangesetService
 from ard_ossie.application.contracts import (
     WorkflowContext,
@@ -79,6 +80,23 @@ def issue_authorize(
     _publish(paths.root, command, run)
 
 
+@app.command("issue-route")
+def issue_route(
+    event: Annotated[Path, typer.Option("--event")],
+    repository_name: Annotated[str, typer.Option("--repository-name")],
+    actor: Annotated[str, typer.Option("--actor")],
+    repository: Annotated[Path, typer.Option("--repository")] = Path("."),
+) -> None:
+    command = "workflow.issue-route"
+    paths = _repository_paths(repository)
+
+    def run() -> WorkflowResult:
+        context = _context(paths.root, event, repository_name, actor)
+        return _issue_route_service(repository_name, paths).run(context)
+
+    _publish(paths.root, command, run)
+
+
 @app.command("process-reconcile")
 def process_reconcile_workflow(
     result_path: Annotated[Path, typer.Option("--result-path")],
@@ -120,6 +138,27 @@ def issue_intake(
     def run() -> WorkflowResult:
         context = _context(paths.root, event, repository_name, actor)
         return _issue_intake_service(repository_name, paths).run(context)
+
+    _publish(paths.root, command, run)
+
+
+@app.command("issue-base-sync")
+def issue_base_sync(
+    event: Annotated[Path, typer.Option("--event")],
+    base_sha: Annotated[str, typer.Option("--base-sha")],
+    repository_name: Annotated[str, typer.Option("--repository-name")],
+    actor: Annotated[str, typer.Option("--actor")],
+    repository: Annotated[Path, typer.Option("--repository")] = Path("."),
+) -> None:
+    command = "workflow.issue-base-sync"
+    paths = _repository_paths(repository)
+
+    def run() -> WorkflowResult:
+        context = _context(paths.root, event, repository_name, actor)
+        return _issue_base_sync_service(repository_name, paths).run(
+            context,
+            base_sha=base_sha,
+        )
 
     _publish(paths.root, command, run)
 
@@ -481,6 +520,17 @@ def _issue_authorization_service(repository_name: str, paths):
     return IssueAuthorizationService(github)
 
 
+def _issue_route_service(repository_name: str, paths):
+    from ard_ossie.adapters.git_cli import GitCli
+    from ard_ossie.adapters.github_cli import GitHubCli
+    from ard_ossie.adapters.subprocess import SubprocessRunner
+
+    runner = SubprocessRunner()
+    git = GitCli(paths.root, runner, paths=paths)
+    github = GitHubCli(repository_name, runner, paths=paths)
+    return IssueRouteService(git, github)
+
+
 def _issue_intake_service(repository_name: str, paths):
     from ard_ossie.adapters.git_cli import GitCli
     from ard_ossie.adapters.github_cli import GitHubCli
@@ -490,6 +540,17 @@ def _issue_intake_service(repository_name: str, paths):
     git = GitCli(paths.root, runner, paths=paths)
     github = GitHubCli(repository_name, runner, paths=paths)
     return IssueIntakeService(paths, git, github)
+
+
+def _issue_base_sync_service(repository_name: str, paths):
+    from ard_ossie.adapters.git_cli import GitCli
+    from ard_ossie.adapters.github_cli import GitHubCli
+    from ard_ossie.adapters.subprocess import SubprocessRunner
+
+    runner = SubprocessRunner()
+    git = GitCli(paths.root, runner, paths=paths)
+    github = GitHubCli(repository_name, runner, paths=paths)
+    return IssueBaseSyncService(paths, git, github)
 
 
 def _detect_product_service(paths):

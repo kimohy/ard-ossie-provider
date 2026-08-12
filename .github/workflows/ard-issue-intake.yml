@@ -44,9 +44,56 @@ jobs:
           --actor "$ACTOR"
           --label "$LABEL"
 
-  intake:
+  route:
     needs: authorize
     if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+      base_sha: ${{ steps.route.outputs.base_sha }}
+      branch: ${{ steps.route.outputs.branch }}
+      product_key: ${{ steps.route.outputs.product_key }}
+      pr_number: ${{ steps.route.outputs.pr_number }}
+      expected_head: ${{ steps.route.outputs.expected_head }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      ACTOR: ${{ github.actor }}
+      TRUSTED_REPOSITORY: ${{ github.workspace }}/trusted
+    steps:
+      - name: Checkout exact trusted default branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: true
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Route approved Issue with trusted code
+        id: route
+        working-directory: trusted
+        env:
+          PYTHONSAFEPATH: '1'
+        run: >-
+          uv run --frozen ard workflow issue-route
+          --event "$GITHUB_EVENT_PATH"
+          --repository-name "$REPOSITORY_NAME"
+          --actor "$ACTOR"
+          --repository "$TRUSTED_REPOSITORY"
+
+  intake:
+    needs: route
+    if: needs.route.outputs.mode == 'intake'
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -87,8 +134,69 @@ jobs:
           --repository-name "$REPOSITORY_NAME"
           --actor "$ACTOR"
 
+  base_sync:
+    needs: route
+    if: needs.route.outputs.mode == 'base_sync'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: read
+      pull-requests: read
+    outputs:
+      branch: ${{ steps.base_sync.outputs.branch }}
+      product_key: ${{ steps.base_sync.outputs.product_key }}
+      pr_number: ${{ steps.base_sync.outputs.pr_number }}
+      expected_head: ${{ steps.base_sync.outputs.expected_head }}
+      product_id: ${{ steps.base_sync.outputs.product_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARD_MAX_ATTACHMENT_BYTES: ${{ vars.ARD_MAX_ATTACHMENT_BYTES || '52428800' }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      ACTOR: ${{ github.actor }}
+      BASE_SHA: ${{ needs.route.outputs.base_sha }}
+      CANDIDATE_REPOSITORY: ${{ github.workspace }}/candidate
+    steps:
+      - name: Checkout exact trusted base without credentials
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.route.outputs.base_sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout exact managed Draft head with LFS
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.route.outputs.expected_head }}
+          fetch-depth: 0
+          lfs: true
+          path: candidate
+          persist-credentials: true
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Synchronize exact Draft head with trusted base
+        id: base_sync
+        working-directory: trusted
+        env:
+          PYTHONSAFEPATH: '1'
+        run: >-
+          uv run --frozen ard workflow issue-base-sync
+          --event "$GITHUB_EVENT_PATH"
+          --base-sha "$BASE_SHA"
+          --repository-name "$REPOSITORY_NAME"
+          --actor "$ACTOR"
+          --repository "$CANDIDATE_REPOSITORY"
+
   process:
-    needs: intake
+    needs: [route, intake, base_sync]
+    if: >-
+      always() &&
+      needs.route.result == 'success' &&
+      (needs.intake.result == 'success' || needs.base_sync.result == 'success')
     permissions:
       actions: write
       contents: write
@@ -97,14 +205,14 @@ jobs:
     uses: ./.github/workflows/ard-process.yml
     secrets: inherit
     with:
-      branch: ${{ needs.intake.outputs.branch }}
-      product_key: ${{ needs.intake.outputs.product_key }}
-      pr_number: ${{ fromJSON(needs.intake.outputs.pr_number) }}
-      expected_head: ${{ needs.intake.outputs.expected_head }}
+      branch: ${{ needs.intake.outputs.branch || needs.base_sync.outputs.branch }}
+      product_key: ${{ needs.intake.outputs.product_key || needs.base_sync.outputs.product_key }}
+      pr_number: ${{ fromJSON(needs.intake.outputs.pr_number || needs.base_sync.outputs.pr_number) }}
+      expected_head: ${{ needs.intake.outputs.expected_head || needs.base_sync.outputs.expected_head }}
       allow_writeback: true
 
   finalize:
-    needs: [authorize, intake, process]
+    needs: [authorize, route, intake, base_sync, process]
     if: always() && needs.authorize.result == 'success'
     runs-on: ubuntu-24.04
     permissions:

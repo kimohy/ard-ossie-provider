@@ -100,6 +100,51 @@ class GitCli:
             return
         self._run_required("BRANCH_CREATE_FAILED", "switch", "--create", branch, base_ref)
 
+    def merge_revision(self, revision: str, message: str) -> CommitResult:
+        _validate_revision(revision)
+        previous = self.current_sha()
+        self._run_required("GIT_IDENTITY_FAILED", "config", "user.name", _BOT_NAME)
+        self._run_required("GIT_IDENTITY_FAILED", "config", "user.email", _BOT_EMAIL)
+        result = self._git(
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "--message",
+            message,
+            revision,
+        )
+        if result.returncode != 0:
+            abort = self._git("merge", "--abort")
+            if abort.returncode != 0:
+                raise GitTransientError(
+                    "BASE_SYNC_ABORT_FAILED",
+                    abort.stderr or abort.stdout or "merge abort failed",
+                )
+            raise GitConflict(
+                "BASE_SYNC_MERGE_CONFLICT",
+                result.stderr or result.stdout or "base merge failed",
+            )
+        current = self.current_sha()
+        return CommitResult(sha=current, created=current != previous)
+
+    def restore_paths(self, revision: str, paths: Sequence[Path]) -> None:
+        _validate_revision(revision)
+        relative = sorted(
+            {self._repository_relative(path) for path in paths},
+            key=lambda path: path.as_posix(),
+        )
+        if not relative:
+            return
+        self._run_required(
+            "BASE_SYNC_RESTORE_FAILED",
+            "restore",
+            "--source",
+            revision,
+            "--worktree",
+            "--",
+            *(path.as_posix() for path in relative),
+        )
+
     def commit_allowed_paths(self, product_key: str, message: str) -> CommitResult:
         return self._commit_product_paths(product_key, message, intake=False)
 
