@@ -1,0 +1,696 @@
+{
+  "metrics": [
+    {
+      "confidence": 0.98,
+      "dataset_names": [
+        "marketing_campaign"
+      ],
+      "description": "Count of distinct synthetic campaigns.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 16,
+            "level": 1,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "COUNT(DISTINCT campaign_id)",
+      "name": "Campaign Count",
+      "status": "ai_suggested",
+      "synonyms": [
+        "캠페인 수"
+      ]
+    },
+    {
+      "confidence": 0.98,
+      "dataset_names": [
+        "marketing_campaign"
+      ],
+      "description": "Count of distinct campaigns with Active status.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 16,
+            "level": 1,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "COUNT(DISTINCT CASE WHEN campaign_status = 'Active' THEN campaign_id END)",
+      "name": "Active Campaign Count",
+      "status": "ai_suggested",
+      "synonyms": [
+        "활성 캠페인 수"
+      ]
+    },
+    {
+      "confidence": 0.98,
+      "dataset_names": [
+        "marketing_creative"
+      ],
+      "description": "Count of distinct synthetic advertising creatives.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 16,
+            "level": 1,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "COUNT(DISTINCT creative_id)",
+      "name": "Creative Count",
+      "status": "ai_suggested",
+      "synonyms": [
+        "소재 수"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Total synthetic advertising impressions.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 16,
+            "level": 1,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(impression_count)",
+      "name": "Impressions",
+      "status": "ai_suggested",
+      "synonyms": [
+        "노출 수",
+        "Impression Count"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Total synthetic advertising engagements.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 16,
+            "level": 1,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(engagement_count)",
+      "name": "Engagements",
+      "status": "ai_suggested",
+      "synonyms": [
+        "반응 수",
+        "Engagement Count"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Ratio of total engagements to total impressions; returns NULL when impressions are zero.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 16,
+            "level": 1,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(engagement_count) / NULLIF(SUM(impression_count), 0)",
+      "name": "Engagement Rate",
+      "status": "ai_suggested",
+      "synonyms": [
+        "반응률"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Total simulated spend units.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서 (계속)",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 18,
+            "level": 1,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(spend_units)",
+      "name": "Spend Units",
+      "status": "ai_suggested",
+      "synonyms": [
+        "집행 비용 단위"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Simulated spend units per engagement; returns NULL when engagement count is zero.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서 (계속)",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 18,
+            "level": 1,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(spend_units) / NULLIF(SUM(engagement_count), 0)",
+      "name": "Cost per Engagement",
+      "status": "ai_suggested",
+      "synonyms": [
+        "반응당 비용 단위"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_outcome"
+      ],
+      "description": "Total synthetic interest signals.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서 (계속)",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 18,
+            "level": 1,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(interest_signal_count)",
+      "name": "Interest Signals",
+      "status": "ai_suggested",
+      "synonyms": [
+        "관심 신호 수"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_outcome"
+      ],
+      "description": "Total synthetic action signals.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서 (계속)",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 18,
+            "level": 1,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(action_signal_count)",
+      "name": "Action Signals",
+      "status": "ai_suggested",
+      "synonyms": [
+        "행동 신호 수"
+      ]
+    },
+    {
+      "confidence": 0.98,
+      "dataset_names": [
+        "marketing_outcome"
+      ],
+      "description": "Total synthetic modeled value units.",
+      "evidence": [
+        {
+          "excerpt": "6. 지표 정의서 (계속)",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 18,
+            "level": 1,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(modeled_value_units)",
+      "name": "Modeled Value Units",
+      "status": "ai_suggested",
+      "synonyms": [
+        "가상 가치 단위"
+      ]
+    }
+  ],
+  "product_facts": [
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "실제 운영 데이터 없이 캠페인, 소재, 집행, 성과 구조를 설명하는 가상 마케팅 광고 합성 데이터",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 60,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "description",
+      "value": "실제 운영 데이터 없이 캠페인, 소재, 집행, 성과 구조를 설명하는 가상 마케팅 광고 합성 데이터"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "Marketing Insight",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 51,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "source_name",
+      "value": "Marketing Insight"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "정형",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 53,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "data_type",
+      "value": "정형"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 분석 저장소",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 55,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "storage_location",
+      "value": "가상 분석 저장소"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "가상 캠페인"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "광고 소재"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "집행 신호"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "성과 신호"
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "Level 4 (Gold)",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 83,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "ai_readiness",
+      "value": "Level 4 (Gold)"
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "Synthetic Lab",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 86,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "owner",
+      "value": "Synthetic Lab"
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "가상 담당자/HE Lab(Synthetic Lab)",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 88,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "contact",
+      "value": "가상 담당자/HE Lab(Synthetic Lab)"
+    },
+    {
+      "confidence": 0.97,
+      "evidence": [
+        {
+          "excerpt": "손님 이상",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 35,
+            "level": 6
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "access",
+      "value": "손님 이상"
+    },
+    {
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "excerpt": "Y",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 116,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        },
+        {
+          "excerpt": "Y",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 118,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        },
+        {
+          "excerpt": "Y",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 120,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "quality",
+      "value": "접근 권한 관리, 운영 관리 및 메타 데이터 보유 여부: Y"
+    }
+  ],
+  "suggestions": [
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "2. 테이블 리스트",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 6,
+            "level": 1,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ff5e4-8e51-7536-ba2b-7d8455e56ce6.description",
+      "status": "ai_suggested",
+      "value": "Virtual campaign planning and status data."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "3. 핵심 업무 용어",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 8,
+            "level": 1,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ff5e4-8e51-7536-ba2b-7d8455e56ce6.columns.col_019ff5e4-8e51-76e9-ab94-35a251f7bf7c.description",
+      "status": "ai_suggested",
+      "value": "Identifier for a virtual campaign."
+    },
+    {
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "excerpt": "3. 핵심 업무 용어",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 8,
+            "level": 1,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ff5e4-8e51-7f41-b2a5-ee01837a3dbc.description",
+      "status": "ai_suggested",
+      "value": "Virtual advertising creative metadata."
+    },
+    {
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "excerpt": "3. 핵심 업무 용어",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 8,
+            "level": 1,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ff5e4-8e51-728d-b295-8d3bff439d34.description",
+      "status": "ai_suggested",
+      "value": "Virtual delivery data aggregated by event date, campaign, and creative."
+    },
+    {
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "excerpt": "3. 핵심 업무 용어 (계속)",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": 10,
+            "level": 1,
+            "page": 3,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ff5e4-8e51-72ab-bfb2-6f3227becace.description",
+      "status": "ai_suggested",
+      "value": "Virtual performance-signal data aggregated by event date and campaign."
+    }
+  ]
+}
