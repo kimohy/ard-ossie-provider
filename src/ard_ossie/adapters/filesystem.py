@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Collection
 from pathlib import Path
 
 from ard_ossie.ports.filesystem import PathPolicyError
@@ -87,6 +88,33 @@ class RepositoryPaths:
         if len(parts) == 3:
             return parts[2] in {"product.yaml", "intake-manifest.json"}
         return parts[2] == "sources"
+
+    def is_base_sync_reset_allowed(
+        self,
+        path: str | Path,
+        product_key: str,
+        product_id: str,
+        table_ids: Collection[str],
+    ) -> bool:
+        if not _PRODUCT_KEY.fullmatch(product_key):
+            raise PathPolicyError("INVALID_PRODUCT_KEY", "product key is not canonical")
+        resolved = self.resolve_write(path)
+        parts = resolved.relative_to(self.root).parts
+        if (
+            len(parts) >= 4
+            and parts[:2] == ("products", product_key)
+            and parts[2] in {"generated", "quality"}
+        ):
+            return True
+        if len(parts) != 3 or parts[0] != "registry":
+            return False
+        if parts[:2] == ("registry", "indexes"):
+            return parts[2] in {"product-keys.json", "table-locators.json"}
+        if parts[:2] in {("registry", "products"), ("registry", "mappings")}:
+            return parts[2] == f"{product_id}.json"
+        if parts[:2] == ("registry", "tables"):
+            return parts[2].endswith(".json") and parts[2][:-5] in table_ids
+        return False
 
     def is_changeset_write_allowed(
         self,

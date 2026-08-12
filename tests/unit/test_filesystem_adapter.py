@@ -7,6 +7,9 @@ import pytest
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.ports.filesystem import PathPolicyError
 
+PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
+TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
+
 
 def test_repository_paths_resolves_existing_read_below_root(tmp_path: Path) -> None:
     """A trusted source path should resolve to one canonical repository path."""
@@ -179,3 +182,76 @@ def test_changeset_scope_allows_only_central_or_one_tracking_marker(
         "cst_example",
         product_key,
     ) is allowed
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "products/sales-order/generated/ossie-model.json",
+        "products/sales-order/quality/quality-report.json",
+        "registry/indexes/product-keys.json",
+        "registry/indexes/table-locators.json",
+        f"registry/products/{PRODUCT_ID}.json",
+        f"registry/mappings/{PRODUCT_ID}.json",
+        f"registry/tables/{TABLE_ID}.json",
+    ],
+)
+def test_base_sync_reset_scope_accepts_only_same_product_output(
+    tmp_path: Path,
+    candidate: str,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    assert RepositoryPaths(root).is_base_sync_reset_allowed(
+        candidate,
+        "sales-order",
+        PRODUCT_ID,
+        {TABLE_ID},
+    )
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "README.md",
+        ".github/workflows/ard-process.yml",
+        "products/other/generated/ossie-model.json",
+        "products/sales-order/sources/product.html",
+        "registry/indexes/other.json",
+        "registry/products/prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632.json",
+        "registry/mappings/prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632.json",
+        "registry/tables/tbl_0198f6ca-2a11-78d1-8672-67d49e69f14d.json",
+        "registry/changesets/cst_example.json",
+    ],
+)
+def test_base_sync_reset_scope_rejects_unrelated_paths(
+    tmp_path: Path,
+    candidate: str,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    assert not RepositoryPaths(root).is_base_sync_reset_allowed(
+        candidate,
+        "sales-order",
+        PRODUCT_ID,
+        {TABLE_ID},
+    )
+
+
+def test_base_sync_reset_scope_rejects_a_symlinked_output_tree(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    product = root / "products" / "sales-order"
+    product.mkdir(parents=True)
+    outside.mkdir()
+    (product / "generated").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PathPolicyError, match="SYMLINK_NOT_ALLOWED"):
+        RepositoryPaths(root).is_base_sync_reset_allowed(
+            "products/sales-order/generated/ossie-model.json",
+            "sales-order",
+            PRODUCT_ID,
+            {TABLE_ID},
+        )
