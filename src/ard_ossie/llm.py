@@ -244,7 +244,6 @@ class OpenAICompatibleProvider:
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0,
                 response_format={
                     "type": "json_schema",
                     "json_schema": {

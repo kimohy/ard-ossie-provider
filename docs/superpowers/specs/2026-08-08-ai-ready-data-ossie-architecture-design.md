@@ -405,13 +405,16 @@ profiles:
       supports_seed: false
       supports_usage: true
     generation:
-      temperature: 0
+      sampling_parameters: omitted
       max_output_tokens: 8192
     retry:
       max_attempts: 3
 ```
 
 API key는 환경변수 또는 CI secret으로만 주입한다. config, manifest, 로그, cache, Git에는 저장하지 않는다.
+
+`temperature`, `top_p` 같은 sampling 파라미터는 기본 요청에서 생략한다. provider capability가
+명시적으로 확인된 profile에서만 opt-in으로 사용한다.
 
 ### 9.3 구조화 출력
 
