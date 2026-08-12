@@ -99,6 +99,8 @@ def metric_drafts(
                         ("campaign_id", "STRING"),
                         ("status", "STRING"),
                         ("revenue", "NUMERIC"),
+                        ("engagement_count", "INTEGER"),
+                        ("impression_count", "INTEGER"),
                     ),
                     start=1,
                 )
@@ -251,6 +253,23 @@ def test_prepare_metrics_qualifies_single_dataset_columns_without_mutating_raw(
     assert [item.expression for item in prepared.suggestions] == [expected]
     assert prepared.findings == []
     assert raw.expression == expression
+
+
+def test_prepare_metrics_casts_integral_division_numerator(tmp_path: Path) -> None:
+    raw = metric_suggestion(
+        "SUM(engagement_count) / NULLIF(SUM(impression_count), 0)",
+        name="Engagement Rate",
+    )
+
+    prepared = pipeline._prepare_metrics([raw], metric_drafts(tmp_path))
+
+    assert prepared.suggestions[0].expression == (
+        "CAST(SUM(marketing_campaign.engagement_count) AS DECIMAL(38, 12)) / "
+        "NULLIF(SUM(marketing_campaign.impression_count), 0)"
+    )
+    assert raw.expression == (
+        "SUM(engagement_count) / NULLIF(SUM(impression_count), 0)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -723,7 +742,13 @@ def test_product_prompt_assigns_ids_only_to_accepted_evidence(tmp_path: Path) ->
     assert provider.payload["datasets"] == [
         {
             "dataset_name": "marketing_campaign",
-            "columns": ["campaign_id", "status", "revenue"],
+            "columns": [
+                "campaign_id",
+                "status",
+                "revenue",
+                "engagement_count",
+                "impression_count",
+            ],
         }
     ]
     assert provider.system_message is not None
