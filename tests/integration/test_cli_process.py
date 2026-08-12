@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from ard_ossie.pipeline import (
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
 CUSTOMERS_TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14d"
+process_cli = import_module("ard_ossie.cli.process")
 
 
 def create_product_fixture(root: Path, *, valid_dictionary: bool = True) -> Path:
@@ -97,6 +99,39 @@ def test_process_emits_required_artifacts_and_reuses_column_ids(tmp_path: Path) 
     assert table_record["columns"][0]["column_id"] == column_id
     quality = json.loads((product / "quality" / "quality-report.json").read_text())
     assert quality["status"] in {"PASS", "WARN"}
+
+
+def test_process_cli_passes_warnings_as_errors_before_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    captured: dict[str, object] = {}
+    real_process_product = process_cli.process_product
+
+    def capture_process_product(*args, **kwargs):
+        captured.update(kwargs)
+        return real_process_product(*args, **kwargs)
+
+    monkeypatch.setattr(process_cli, "process_product", capture_process_product)
+    monkeypatch.setattr(process_cli, "_provider_from_environment", lambda: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "process",
+            str(product),
+            "--registry",
+            str(registry),
+            "--warnings-as-errors",
+        ],
+    )
+
+    assert captured["warnings_as_errors"] is True
+    assert result.exit_code == 2
+    assert not (product / "generated").exists()
+    assert not (registry / "products").exists()
 
 
 class FakeSemanticProvider:
@@ -307,6 +342,7 @@ class FakeMetricProvider:
                 {
                     "name": "order_count",
                     "expression": "COUNT(orders.order_id)",
+                    "dataset_names": ["orders"],
                     "description": "Number of orders",
                     "synonyms": ["orders"],
                     "confidence": 0.96,
@@ -316,6 +352,321 @@ class FakeMetricProvider:
             ],
             "product_facts": [],
         }
+
+
+class DatasetSafetyProvider:
+    def health_check(self) -> bool:
+        return True
+
+    def capabilities(self) -> dict[str, str]:
+        return {"structured_output": "json_schema"}
+
+    def generate_structured(self, *, schema, messages):
+        source = json.loads(messages[1]["content"])["semantic"]
+        evidence = [
+            {
+                "source_hash": source["source_hash"],
+                "role": "semantic_document",
+                "locator": {"document": "semantic/semantic.docx"},
+                "excerpt": "Campaign count and modeled efficiency definitions",
+            }
+        ]
+        return {
+            "suggestions": [],
+            "metrics": [
+                {
+                    "name": "Campaign Count",
+                    "expression": "COUNT(DISTINCT campaign_id)",
+                    "dataset_names": ["marketing_campaign"],
+                    "description": "Distinct campaigns",
+                    "synonyms": [],
+                    "confidence": 0.98,
+                    "evidence": evidence,
+                    "status": "ai_suggested",
+                },
+                {
+                    "name": "Modeled Efficiency",
+                    "expression": (
+                        "SUM(marketing_campaign.revenue) / SUM(sales_order.cost)"
+                    ),
+                    "dataset_names": ["marketing_campaign", "sales_order"],
+                    "description": "Revenue divided by sales cost",
+                    "synonyms": [],
+                    "confidence": 0.95,
+                    "evidence": evidence,
+                    "status": "ai_suggested",
+                },
+            ],
+            "product_facts": [],
+        }
+
+
+class UnsafeMetricProvider(DatasetSafetyProvider):
+    def generate_structured(self, *, schema, messages):
+        response = super().generate_structured(schema=schema, messages=messages)
+        response["metrics"][0]["expression"] = "DELETE FROM marketing_campaign"
+        response["metrics"][0]["confidence"] = 0.1
+        return response
+
+
+class DuplicateMetricProvider(DatasetSafetyProvider):
+    def generate_structured(self, *, schema, messages):
+        response = super().generate_structured(schema=schema, messages=messages)
+        response["metrics"].append(dict(response["metrics"][0]))
+        return response
+
+
+class InitiallyAcceptedMetricsProvider(DatasetSafetyProvider):
+    def generate_structured(self, *, schema, messages):
+        response = super().generate_structured(schema=schema, messages=messages)
+        response["metrics"][1]["expression"] = "SUM(marketing_campaign.revenue)"
+        response["metrics"][1]["dataset_names"] = ["marketing_campaign"]
+        return response
+
+
+def configure_metric_safety_fixture(product: Path) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(
+        [
+            "platform",
+            "catalog",
+            "schema",
+            "table",
+            "column",
+            "data_type",
+            "nullable",
+            "pk",
+            "description",
+        ]
+    )
+    sheet.append(
+        [
+            "warehouse",
+            "analytics",
+            "marketing",
+            "marketing_campaign",
+            "campaign_id",
+            "STRING",
+            False,
+            True,
+            "Campaign identifier",
+        ]
+    )
+    sheet.append(
+        [
+            "warehouse",
+            "analytics",
+            "marketing",
+            "marketing_campaign",
+            "revenue",
+            "NUMERIC",
+            False,
+            False,
+            "Attributed revenue",
+        ]
+    )
+    sheet.append(
+        [
+            "warehouse",
+            "analytics",
+            "sales",
+            "sales_order",
+            "order_id",
+            "STRING",
+            False,
+            True,
+            "Order identifier",
+        ]
+    )
+    sheet.append(
+        [
+            "warehouse",
+            "analytics",
+            "sales",
+            "sales_order",
+            "campaign_id",
+            "STRING",
+            False,
+            False,
+            "Campaign identifier",
+        ]
+    )
+    sheet.append(
+        [
+            "warehouse",
+            "analytics",
+            "sales",
+            "sales_order",
+            "cost",
+            "NUMERIC",
+            False,
+            False,
+            "Sales cost",
+        ]
+    )
+    workbook.save(product / "sources" / "dictionary" / "dictionary.xlsx")
+    config = yaml.safe_load((product / "product.yaml").read_text(encoding="utf-8"))
+    config["tables"] = [
+        {
+            "locator": "warehouse|analytics|marketing|marketing_campaign",
+            "table_id": CUSTOMERS_TABLE_ID,
+            "version": 1,
+            "usage": "SOURCE",
+        },
+        {
+            "locator": "warehouse|analytics|sales|sales_order",
+            "table_id": TABLE_ID,
+            "version": 1,
+            "usage": "SOURCE",
+        },
+    ]
+    (product / "product.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def test_pipeline_qualifies_single_dataset_metric_and_excludes_cross_dataset_metric(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    configure_metric_safety_fixture(product)
+    registry = tmp_path / "registry"
+
+    result = process_product(
+        product,
+        registry_root=registry,
+        provider=DatasetSafetyProvider(),
+    )
+
+    ossie = json.loads((product / "generated" / "ossie-model.json").read_text())
+    model = ossie["semantic_model"][0]
+    published_metrics = [
+        (
+            metric["name"],
+            metric["expression"]["dialects"][0]["expression"],
+        )
+        for metric in model["metrics"]
+    ]
+    assert published_metrics == [
+        (
+            "Campaign Count",
+            "COUNT(DISTINCT marketing_campaign.campaign_id)",
+        )
+    ]
+    assert model["relationships"] == []
+    semantic_markdown = (product / "generated" / "data-semantic.md").read_text()
+    assert "Campaign Count" in semantic_markdown
+    assert "Modeled Efficiency" not in semantic_markdown
+
+    product_record = json.loads(
+        (registry / "products" / f"{PRODUCT_ID}.json").read_text()
+    )
+    assert [metric["name"] for metric in product_record["metrics"]] == [
+        "Campaign Count"
+    ]
+    metric_findings = [
+        finding
+        for finding in result.quality_report.warnings
+        if finding.code == "METRIC_MULTI_DATASET_UNSUPPORTED"
+    ]
+    assert result.quality_report.status == "WARN"
+    assert len(metric_findings) == 1
+    assert metric_findings[0].path == "metrics.Modeled Efficiency"
+
+    audit = json.loads(
+        (product / "quality" / "llm-suggestions.json").read_text(encoding="utf-8")
+    )
+    assert [metric["name"] for metric in audit["metrics"]] == [
+        "Campaign Count",
+        "Modeled Efficiency",
+    ]
+    assert [metric["expression"] for metric in audit["metrics"]] == [
+        "COUNT(DISTINCT campaign_id)",
+        "SUM(marketing_campaign.revenue) / SUM(sales_order.cost)",
+    ]
+    assert [metric["dataset_names"] for metric in audit["metrics"]] == [
+        ["marketing_campaign"],
+        ["marketing_campaign", "sales_order"],
+    ]
+
+
+def test_pipeline_rejects_unsafe_metric_before_confidence_filter_or_promotion(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    configure_metric_safety_fixture(product)
+    registry = tmp_path / "registry"
+
+    with pytest.raises(ProviderExecutionError) as captured:
+        process_product(
+            product,
+            registry_root=registry,
+            provider=UnsafeMetricProvider(),
+        )
+
+    assert captured.value.code == "LLM_METRIC_SQL_UNSAFE"
+    assert captured.value.kind is ProviderFailureKind.OUTPUT
+    assert "DELETE" not in str(captured.value)
+    assert not (product / "generated").exists()
+    assert not registry.exists()
+
+
+def test_pipeline_classifies_duplicate_metric_names_as_provider_output(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    configure_metric_safety_fixture(product)
+    registry = tmp_path / "registry"
+
+    with pytest.raises(ProviderExecutionError) as captured:
+        process_product(
+            product,
+            registry_root=registry,
+            provider=DuplicateMetricProvider(),
+        )
+
+    assert captured.value.code == "LLM_METRIC_NAME_DUPLICATE"
+    assert captured.value.kind is ProviderFailureKind.OUTPUT
+    assert not (product / "generated").exists()
+    assert not registry.exists()
+
+
+def test_reprocessing_removes_newly_unsupported_metric_from_current_registry(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    configure_metric_safety_fixture(product)
+    registry = tmp_path / "registry"
+    process_product(
+        product,
+        registry_root=registry,
+        provider=InitiallyAcceptedMetricsProvider(),
+    )
+    config_path = product / "product.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["operation"] = "update"
+    config["base_version"] = 1
+    config["version"] = 2
+    config["description"] = "Updated campaign and sales performance product."
+    config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    process_product(
+        product,
+        registry_root=registry,
+        provider=DatasetSafetyProvider(),
+    )
+
+    product_record = json.loads(
+        (registry / "products" / f"{PRODUCT_ID}.json").read_text()
+    )
+    assert [metric["name"] for metric in product_record["metrics"]] == [
+        "Campaign Count"
+    ]
 
 
 def test_pipeline_builds_stable_metric_and_fk_relationship_ids(tmp_path: Path) -> None:

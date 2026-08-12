@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,14 @@ from ard_ossie.docling_parser import Evidence, ParsedDocument
 from ard_ossie.excel_adapter import DictionaryColumn, DictionaryTable, ParsedDictionary
 from ard_ossie.impact import build_changeset
 from ard_ossie.ingestion import SourceRole
-from ard_ossie.llm import ProductFactSuggestion
-from ard_ossie.models import ProductRecord, ProductTableRef, TableLocator, TableRecord
+from ard_ossie.llm import MetricSuggestion, ProductFactSuggestion
+from ard_ossie.models import (
+    MetricRecord,
+    ProductRecord,
+    ProductTableRef,
+    TableLocator,
+    TableRecord,
+)
 from ard_ossie.pipeline import (
     ProductConfig,
     SuggestionBatch,
@@ -61,6 +68,597 @@ def product_document(
     )
 
 
+def metric_drafts(
+    root: Path,
+    *,
+    include_sales_order: bool = False,
+) -> list[pipeline._TableDraft]:
+    source_hash = "c" * 64
+    tables = [
+        DictionaryTable(
+            locator="warehouse|analytics|marketing|marketing_campaign",
+            columns=[
+                DictionaryColumn(
+                    ordinal=ordinal,
+                    name=name,
+                    data_type=data_type,
+                    nullable=False,
+                    primary_key=name == "campaign_id",
+                    evidence=Evidence(
+                        source_hash=source_hash,
+                        role=SourceRole.DICTIONARY_EXCEL,
+                        locator={
+                            "sheet": "Dictionary",
+                            "range": f"A{ordinal + 1}:H{ordinal + 1}",
+                        },
+                        excerpt=name,
+                    ),
+                )
+                for ordinal, (name, data_type) in enumerate(
+                    (
+                        ("campaign_id", "STRING"),
+                        ("status", "STRING"),
+                        ("revenue", "NUMERIC"),
+                    ),
+                    start=1,
+                )
+            ],
+        )
+    ]
+    if include_sales_order:
+        tables.append(
+            DictionaryTable(
+                locator="warehouse|analytics|sales|sales_order",
+                columns=[
+                    DictionaryColumn(
+                        ordinal=ordinal,
+                        name=name,
+                        data_type=data_type,
+                        nullable=False,
+                        primary_key=name == "order_id",
+                        evidence=Evidence(
+                            source_hash=source_hash,
+                            role=SourceRole.DICTIONARY_EXCEL,
+                            locator={
+                                "sheet": "Dictionary",
+                                "range": f"A{ordinal + 10}:H{ordinal + 10}",
+                            },
+                            excerpt=name,
+                        ),
+                    )
+                    for ordinal, (name, data_type) in enumerate(
+                        (
+                            ("order_id", "STRING"),
+                            ("campaign_id", "STRING"),
+                            ("cost", "NUMERIC"),
+                        ),
+                        start=1,
+                    )
+                ],
+            )
+        )
+    dictionary = ParsedDictionary(
+        source_hash=source_hash,
+        tables=tables,
+    )
+    return _resolve_tables(
+        ProductConfig(
+            operation="create",
+            product_id=PRODUCT_ID,
+            product_key="campaign-performance",
+            version=1,
+            display_name="Campaign Performance",
+        ),
+        dictionary,
+        Registry(root / "registry"),
+    )
+
+
+def metric_suggestion(
+    expression: str,
+    *,
+    dataset_names: list[str] | None = None,
+    name: str = "Campaign Count",
+    confidence: float = 0.9,
+) -> MetricSuggestion:
+    return MetricSuggestion(
+        name=name,
+        expression=expression,
+        dataset_names=dataset_names or ["marketing_campaign"],
+        description="Campaign performance metric",
+        synonyms=[],
+        confidence=confidence,
+        evidence=[
+            Evidence(
+                source_hash="a" * 64,
+                role=SourceRole.SEMANTIC_DOCUMENT,
+                locator={"document": "semantic/metrics.docx", "page": 1},
+                excerpt="Campaign performance metric definition",
+            )
+        ],
+    )
+
+
+def reserved_metric_drafts(root: Path) -> list[pipeline._TableDraft]:
+    draft = metric_drafts(root)[0]
+    return [
+        draft.model_copy(
+            update={
+                "locator": draft.locator.model_copy(
+                    update={"schema_name": "reserved", "table_name": "order"}
+                ),
+                "columns": [
+                    draft.columns[0].model_copy(update={"name": "select"})
+                ],
+            }
+        )
+    ]
+
+
+def duplicate_leaf_metric_drafts(root: Path) -> list[pipeline._TableDraft]:
+    first = metric_drafts(root)[0]
+    second = first.model_copy(
+        deep=True,
+        update={
+            "table_id": "tbl_0198f6ca-2a11-78d1-8672-67d49e69f15a",
+            "locator": first.locator.model_copy(update={"schema_name": "duplicate"}),
+        },
+    )
+    return [first, second]
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        pytest.param(
+            "COUNT(DISTINCT campaign_id)",
+            "COUNT(DISTINCT marketing_campaign.campaign_id)",
+            id="distinct-bare-column",
+        ),
+        pytest.param(
+            "SUM(CASE WHEN status = 'active' THEN revenue ELSE 0 END)",
+            (
+                "SUM(CASE WHEN marketing_campaign.status = 'active' "
+                "THEN marketing_campaign.revenue ELSE 0 END)"
+            ),
+            id="case-expression",
+        ),
+        pytest.param(
+            "ROUND(SUM(revenue) / NULLIF(COUNT(*), 0), 2)",
+            (
+                "ROUND(SUM(marketing_campaign.revenue) / "
+                "NULLIF(COUNT(*), 0), 2)"
+            ),
+            id="nested-functions-and-star",
+        ),
+        pytest.param(
+            "COUNT(DISTINCT MARKETING_CAMPAIGN.CAMPAIGN_ID)",
+            "COUNT(DISTINCT marketing_campaign.campaign_id)",
+            id="canonical-identifier-spelling",
+        ),
+        pytest.param("COUNT(*)", "COUNT(*)", id="star-only"),
+    ],
+)
+def test_prepare_metrics_qualifies_single_dataset_columns_without_mutating_raw(
+    tmp_path: Path,
+    expression: str,
+    expected: str,
+) -> None:
+    raw = metric_suggestion(expression)
+
+    prepared = pipeline._prepare_metrics([raw], metric_drafts(tmp_path))
+
+    assert [item.expression for item in prepared.suggestions] == [expected]
+    assert prepared.findings == []
+    assert raw.expression == expression
+
+
+@pytest.mark.parametrize(
+    ("name", "expression", "dataset_names", "expected_code"),
+    [
+        pytest.param(
+            " ",
+            "COUNT(campaign_id)",
+            ["marketing_campaign"],
+            "LLM_METRIC_NAME_OR_EXPRESSION_EMPTY",
+            id="blank-name",
+        ),
+        pytest.param(
+            "Campaign Count",
+            " ",
+            ["marketing_campaign"],
+            "LLM_METRIC_NAME_OR_EXPRESSION_EMPTY",
+            id="blank-expression",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COUNT(campaign_id)",
+            [" "],
+            "LLM_METRIC_DATASET_EMPTY",
+            id="blank-dataset",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COUNT(campaign_id)",
+            ["marketing_campaign", "MARKETING_CAMPAIGN"],
+            "LLM_METRIC_DATASET_DUPLICATE",
+            id="duplicate-dataset",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COUNT(campaign_id)",
+            ["unknown_dataset"],
+            "LLM_METRIC_DATASET_UNKNOWN",
+            id="unknown-dataset",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COUNT(missing_column)",
+            ["marketing_campaign"],
+            "LLM_METRIC_REFERENCE_UNKNOWN",
+            id="unknown-column",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COUNT(sales_order.campaign_id)",
+            ["marketing_campaign"],
+            "LLM_METRIC_REFERENCE_UNKNOWN",
+            id="undeclared-qualifier",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COUNT(marketing.marketing_campaign.campaign_id)",
+            ["marketing_campaign"],
+            "LLM_METRIC_REFERENCE_UNKNOWN",
+            id="undeclared-parent-namespace",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COUNT(campaign_id); COUNT(status)",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="multiple-statements",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "SELECT COUNT(campaign_id) FROM marketing_campaign",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="query",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "1 + (SELECT COUNT(campaign_id) FROM marketing_campaign)",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="subquery",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "DELETE FROM marketing_campaign",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="mutation",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "CREATE TABLE copied AS SELECT * FROM marketing_campaign",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="ddl",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "SHOW TABLES",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="command",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "SET x = 1",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="set-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "USE private_catalog",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="use-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "DESCRIBE private_table",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="describe-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "PRAGMA private_setting(x)",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="pragma-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "TRUNCATE TABLE marketing_campaign",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="truncate-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "ALTER TABLE marketing_campaign ADD COLUMN x INT",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="alter-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "GRANT SELECT ON marketing_campaign TO analyst",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="grant-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "BEGIN",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="begin-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "COMMIT",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="commit-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "ROLLBACK",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="rollback-statement",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "VALUES (1)",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="values-relation",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "UNNEST(ARRAY(1, 2))",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="unnest-table-function",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "EXPLODE(ARRAY(1, 2))",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="explode-table-function",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "JSON_TABLE('{\"x\":1}', '$' COLUMNS (x INT PATH '$.x'))",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_UNSAFE",
+            id="json-table-function",
+        ),
+        pytest.param(
+            "Campaign Count",
+            "SUM(",
+            ["marketing_campaign"],
+            "LLM_METRIC_SQL_INVALID",
+            id="parse-error",
+        ),
+    ],
+)
+def test_prepare_metrics_rejects_invalid_or_unsafe_provider_output(
+    tmp_path: Path,
+    name: str,
+    expression: str,
+    dataset_names: list[str],
+    expected_code: str,
+) -> None:
+    suggestion = metric_suggestion(
+        expression,
+        dataset_names=dataset_names,
+        name=name,
+        confidence=0.1,
+    )
+
+    with pytest.raises(ValueError, match=f"^{expected_code}$"):
+        pipeline._prepare_metrics([suggestion], metric_drafts(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "SUM(marketing_campaign.revenue) / SUM(sales_order.cost)",
+        "COUNT(campaign_id)",
+    ],
+    ids=["qualified-columns", "unqualified-column-in-both-datasets"],
+)
+def test_prepare_metrics_excludes_valid_multi_dataset_metric_with_one_warning(
+    tmp_path: Path,
+    expression: str,
+) -> None:
+    raw = metric_suggestion(
+        expression,
+        dataset_names=["marketing_campaign", "sales_order"],
+        name="Modeled Efficiency",
+    )
+
+    prepared = pipeline._prepare_metrics(
+        [raw],
+        metric_drafts(tmp_path, include_sales_order=True),
+    )
+
+    assert prepared.suggestions == []
+    assert prepared.excluded_names == ["Modeled Efficiency"]
+    assert prepared.findings == [
+        pipeline.QualityFinding(
+            code="METRIC_MULTI_DATASET_UNSUPPORTED",
+            path="metrics.Modeled Efficiency",
+            message=(
+                "Metric uses multiple datasets and was excluded because join path, "
+                "cardinality, and grain are not declared"
+            ),
+        )
+    ]
+    assert raw.expression == expression
+
+
+def test_prepare_metrics_rejects_unknown_reference_before_multi_dataset_exclusion(
+    tmp_path: Path,
+) -> None:
+    suggestion = metric_suggestion(
+        "SUM(marketing_campaign.revenue) / SUM(unknown_table.cost)",
+        dataset_names=["marketing_campaign", "sales_order"],
+        name="Modeled Efficiency",
+        confidence=0.1,
+    )
+
+    with pytest.raises(ValueError, match="^LLM_METRIC_REFERENCE_UNKNOWN$"):
+        pipeline._prepare_metrics(
+            [suggestion],
+            metric_drafts(tmp_path, include_sales_order=True),
+        )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["'private_token", '"private_token', "/* private_token"],
+    ids=["string", "identifier", "comment"],
+)
+def test_prepare_metrics_classifies_tokenizer_failures_as_invalid_output(
+    tmp_path: Path,
+    expression: str,
+) -> None:
+    with pytest.raises(ValueError, match="^LLM_METRIC_SQL_INVALID$"):
+        pipeline._prepare_metrics(
+            [metric_suggestion(expression)],
+            metric_drafts(tmp_path),
+        )
+
+
+def test_prepare_metrics_does_not_log_raw_command_fallback(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="sqlglot")
+
+    with pytest.raises(ValueError, match="^LLM_METRIC_SQL_UNSAFE$"):
+        pipeline._prepare_metrics(
+            [metric_suggestion("SHOW PRIVATE_PROVIDER_VALUE")],
+            metric_drafts(tmp_path),
+        )
+
+    assert "PRIVATE_PROVIDER_VALUE" not in caplog.text
+
+
+def test_prepare_metrics_quotes_canonical_reserved_identifiers(tmp_path: Path) -> None:
+    raw = metric_suggestion(
+        'COUNT("order"."select")',
+        dataset_names=["order"],
+    )
+
+    prepared = pipeline._prepare_metrics([raw], reserved_metric_drafts(tmp_path))
+
+    assert prepared.suggestions[0].expression == 'COUNT("order"."select")'
+
+
+def test_metric_dataset_catalog_rejects_duplicate_leaf_names_before_provider_call(
+    tmp_path: Path,
+) -> None:
+    class RejectCallProvider:
+        def generate_structured(self, *, schema, messages):
+            raise AssertionError("provider must not receive an ambiguous dataset catalog")
+
+    with pytest.raises(
+        pipeline.PipelineValidationError,
+        match="^METRIC_DATASET_NAME_AMBIGUOUS$",
+    ):
+        pipeline._extract_suggestions(
+            RejectCallProvider(),
+            product_document(),
+            ParsedDocument(
+                role=SourceRole.SEMANTIC_DOCUMENT,
+                source_hash="a" * 64,
+                markdown="# Semantic",
+            ),
+            duplicate_leaf_metric_drafts(tmp_path),
+        )
+
+
+def test_prepare_metrics_rejects_accepted_and_excluded_name_collision(
+    tmp_path: Path,
+) -> None:
+    suggestions = [
+        metric_suggestion(
+            "SUM(revenue)",
+            name="Modeled Efficiency",
+        ),
+        metric_suggestion(
+            "SUM(marketing_campaign.revenue) / SUM(sales_order.cost)",
+            dataset_names=["marketing_campaign", "sales_order"],
+            name="Modeled Efficiency",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="^LLM_METRIC_NAME_DUPLICATE$"):
+        pipeline._prepare_metrics(
+            suggestions,
+            metric_drafts(tmp_path, include_sales_order=True),
+        )
+
+
+def test_build_metrics_rejects_existing_alias_split_across_accepted_and_excluded(
+    tmp_path: Path,
+) -> None:
+    prepared = pipeline._prepare_metrics(
+        [
+            metric_suggestion(
+                "SUM(revenue)",
+                name="Modeled Efficiency",
+            ),
+            metric_suggestion(
+                "SUM(marketing_campaign.revenue) / SUM(sales_order.cost)",
+                dataset_names=["marketing_campaign", "sales_order"],
+                name="Legacy Efficiency",
+            ),
+        ],
+        metric_drafts(tmp_path, include_sales_order=True),
+    )
+    existing = ProductRecord(
+        product_id=PRODUCT_ID,
+        product_key="campaign-performance",
+        version=1,
+        metrics=[
+            MetricRecord(
+                metric_id="met_0198f6d2-2a11-78d1-8672-67d49e69f15a",
+                name="Legacy Efficiency",
+                aliases=["Modeled Efficiency"],
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="^LLM_METRIC_NAME_DUPLICATE$"):
+        pipeline._build_metrics(
+            prepared.suggestions,
+            existing,
+            excluded_names=prepared.excluded_names,
+        )
+
+
 def product_fact(
     kind: str,
     value: str,
@@ -87,15 +685,17 @@ def test_product_evidence_catalog_assigns_stable_request_local_ids() -> None:
     }
 
 
-def test_product_prompt_assigns_ids_only_to_accepted_evidence() -> None:
+def test_product_prompt_assigns_ids_only_to_accepted_evidence(tmp_path: Path) -> None:
     accepted = product_evidence(excerpt="사용자 설명")
     excluded = product_evidence(excerpt="(AI 자동생성) 요약", item_index=2)
 
     class CapturingProvider:
         payload: dict[str, object] | None = None
+        system_message: str | None = None
 
         def generate_structured(self, *, schema, messages):
             self.payload = json.loads(messages[1]["content"])
+            self.system_message = messages[0]["content"]
             return {"suggestions": [], "metrics": [], "product_facts": []}
 
     provider = CapturingProvider()
@@ -107,7 +707,7 @@ def test_product_prompt_assigns_ids_only_to_accepted_evidence() -> None:
             source_hash="a" * 64,
             markdown="# Semantic",
         ),
-        [],
+        metric_drafts(tmp_path),
     )
 
     assert provider.payload is not None
@@ -120,6 +720,15 @@ def test_product_prompt_assigns_ids_only_to_accepted_evidence() -> None:
         }
     ]
     assert "excluded_product_fact_evidence" not in product_payload
+    assert provider.payload["datasets"] == [
+        {
+            "dataset_name": "marketing_campaign",
+            "columns": ["campaign_id", "status", "revenue"],
+        }
+    ]
+    assert provider.system_message is not None
+    assert "exact dataset names" in provider.system_message
+    assert "dataset_names" in provider.system_message
 
 
 def test_product_facts_omit_low_confidence_and_sort_deduplicated_repeated_values() -> None:

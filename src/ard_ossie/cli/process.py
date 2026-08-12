@@ -32,6 +32,7 @@ def process(
             registry_root=registry,
             provider=_provider_from_environment(),
             pr_number=pr_number,
+            warnings_as_errors=warnings_as_errors,
         )
     except (PipelineValidationError, SourceValidationError, ValueError) as error:
         _write_failure_report(product_path, report, error)
@@ -52,10 +53,6 @@ def process(
             }
         )
     )
-    if warnings_as_errors and result.quality_report.warnings:
-        raise typer.Exit(1)
-
-
 def _provider_from_environment():
     return provider_from_environment()
 

@@ -13,6 +13,8 @@ from typing import Literal
 
 import yaml
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from sqlglot import Dialect, Parser, exp
+from sqlglot.errors import SqlglotError
 
 from ard_ossie.canonical import canonical_hash, schema_hash
 from ard_ossie.docling_parser import DoclingParser, Evidence, ParsedDocument
@@ -142,6 +144,17 @@ class SuggestionBatch(StrictModel):
     product_facts: list[ProductFactSuggestion]
 
 
+class _PreparedMetrics(StrictModel):
+    suggestions: list[MetricSuggestion]
+    findings: list[QualityFinding]
+    excluded_names: list[str]
+
+
+class _MetricSqlParser(Parser):
+    def _warn_unsupported(self) -> None:
+        """Keep rejected provider SQL out of application logs."""
+
+
 class ProcessResult(StrictModel):
     product_id: str
     product_version: Version
@@ -175,12 +188,18 @@ def process_product(
     table_drafts = _resolve_tables(config, dictionary, registry)
     configured_description = config.description
     suggestion_batch = SuggestionBatch(suggestions=[], metrics=[], product_facts=[])
+    prepared_metrics = _PreparedMetrics(
+        suggestions=[],
+        findings=[],
+        excluded_names=[],
+    )
     product_facts = _validate_product_facts(
         [],
         product_document,
         configured_description=configured_description,
     )
     if provider is not None:
+        _metric_dataset_catalog(table_drafts)
         try:
             suggestion_batch = _extract_suggestions(
                 provider, product_document, semantic_document, table_drafts
@@ -189,6 +208,15 @@ def process_product(
                 suggestion_batch.product_facts,
                 product_document,
                 configured_description=configured_description,
+            )
+            prepared_metrics = _prepare_metrics(
+                suggestion_batch.metrics,
+                table_drafts,
+            )
+            _validate_metric_name_collisions(
+                prepared_metrics.suggestions,
+                existing_product,
+                excluded_names=prepared_metrics.excluded_names,
             )
         except ProviderExecutionError as error:
             raise ProviderExecutionError(error.code, kind=error.kind) from None
@@ -221,8 +249,9 @@ def process_product(
         existing_product,
     )
     metrics, metric_records = _build_metrics(
-        suggestion_batch.metrics,
+        prepared_metrics.suggestions,
         existing_product,
+        excluded_names=prepared_metrics.excluded_names,
     )
     product_hash = canonical_hash(
         {
@@ -276,11 +305,12 @@ def process_product(
     )
     hard_errors.extend(relationship_findings)
     warnings = _completeness_findings(config, table_irs, semantic_document)
+    warnings.extend(prepared_metrics.findings)
     if warnings_as_errors and warnings:
         hard_errors.append(
             QualityFinding(
                 code="WARNINGS_AS_ERRORS",
-                message="Completeness warnings are configured as hard failures",
+                message="Quality warnings are configured as hard failures",
             )
         )
 
@@ -978,12 +1008,29 @@ def _product_prompt_payload(document: ParsedDocument) -> dict[str, object]:
     return payload
 
 
+def _metric_dataset_catalog(
+    drafts: list[_TableDraft],
+) -> dict[str, tuple[str, dict[str, str]]]:
+    catalog: dict[str, tuple[str, dict[str, str]]] = {}
+    for draft in drafts:
+        dataset_name = draft.locator.table_name
+        dataset_key = dataset_name.casefold()
+        if dataset_key in catalog:
+            raise PipelineValidationError("METRIC_DATASET_NAME_AMBIGUOUS")
+        catalog[dataset_key] = (
+            dataset_name,
+            {column.name.casefold(): column.name for column in draft.columns},
+        )
+    return catalog
+
+
 def _extract_suggestions(
     provider: LLMProvider,
     product_document: ParsedDocument,
     semantic_document: ParsedDocument,
     drafts: list[_TableDraft],
 ) -> SuggestionBatch:
+    dataset_catalog = _metric_dataset_catalog(drafts)
     allowed_paths = ["product.description", "product.synonyms"]
     for draft in drafts:
         allowed_paths.append(f"tables.{draft.table_id}.description")
@@ -999,6 +1046,8 @@ def _extract_suggestions(
                 "content": (
                     "Extract semantic suggestions and evidence-backed product facts. "
                     "Extract business metrics as ANSI SQL expressions when explicitly supported. "
+                    "For every metric, set dataset_names to every referenced dataset using the "
+                    "exact dataset names supplied in datasets. "
                     "Suggestions and metrics must cite supplied evidence objects. "
                     "Product facts must cite supplied product evidence_id values in evidence_ids; "
                     "do not reproduce product evidence objects. "
@@ -1017,6 +1066,16 @@ def _extract_suggestions(
                     {
                         "product": _product_prompt_payload(product_document),
                         "semantic": semantic_document.model_dump(mode="json"),
+                        "datasets": [
+                            {
+                                "dataset_name": dataset_name,
+                                "columns": list(columns.values()),
+                            }
+                            for dataset_name, columns in sorted(
+                                dataset_catalog.values(),
+                                key=lambda item: item[0].casefold(),
+                            )
+                        ],
                     },
                     ensure_ascii=False,
                 ),
@@ -1035,7 +1094,6 @@ def _extract_suggestions(
     for metric in batch.metrics:
         if any(evidence.source_hash not in source_hashes for evidence in metric.evidence):
             raise ValueError(f"LLM_EVIDENCE_SOURCE_UNKNOWN: metric.{metric.name}")
-        _validate_metric_expression(metric, drafts)
     return batch.model_copy(update={"suggestions": suggestions})
 
 
@@ -1222,43 +1280,190 @@ def _apply_suggestions(
     return updated_config, updated_drafts
 
 
-_SQL_MUTATION = re.compile(
-    r"\b(?:ALTER|CREATE|DELETE|DROP|INSERT|MERGE|TRUNCATE|UPDATE)\b",
-    re.IGNORECASE,
+_METRIC_SCALAR_ROOTS = (
+    exp.Binary,
+    exp.Boolean,
+    exp.Case,
+    exp.Cast,
+    exp.Column,
+    exp.Func,
+    exp.Literal,
+    exp.Null,
+    exp.Paren,
+    exp.Predicate,
+    exp.Unary,
 )
-_SQL_COLUMN_REFERENCE = re.compile(
-    r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b"
+
+_METRIC_RELATIONAL_NODES = (
+    exp.Command,
+    exp.DDL,
+    exp.DerivedTable,
+    exp.DML,
+    exp.JSONTable,
+    exp.Query,
+    exp.Selectable,
+    exp.Subquery,
+    exp.Table,
+    exp.UDTF,
 )
 
 
-def _validate_metric_expression(
-    metric: MetricSuggestion,
+def _parse_metric_scalar(expression: str) -> exp.Expr:
+    dialect = Dialect.get_or_raise(None)
+    try:
+        expressions = _MetricSqlParser(
+            dialect=dialect,
+            error_message_context=0,
+        ).parse(dialect.tokenize(expression), expression)
+    except SqlglotError:
+        raise ValueError("LLM_METRIC_SQL_INVALID") from None
+    if len(expressions) != 1 or expressions[0] is None:
+        raise ValueError("LLM_METRIC_SQL_UNSAFE")
+    normalized = expressions[0]
+    if not isinstance(normalized, _METRIC_SCALAR_ROOTS) or any(
+        isinstance(node, _METRIC_RELATIONAL_NODES) for node in normalized.walk()
+    ):
+        raise ValueError("LLM_METRIC_SQL_UNSAFE")
+    return normalized
+
+
+def _canonical_metric_identifier(
+    value: str,
+    *,
+    source: exp.Expr | None,
+) -> exp.Identifier:
+    quoted = (
+        isinstance(source, exp.Identifier) and source.args.get("quoted") is True
+    ) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is None
+    return exp.to_identifier(value, quoted=quoted)
+
+
+def _prepare_metrics(
+    suggestions: list[MetricSuggestion],
     drafts: list[_TableDraft],
-) -> None:
-    expression = metric.expression.strip()
-    if not metric.name.strip() or not expression:
-        raise ValueError("LLM_METRIC_NAME_OR_EXPRESSION_EMPTY")
-    if ";" in expression or _SQL_MUTATION.search(expression):
-        raise ValueError(f"LLM_METRIC_SQL_UNSAFE: {metric.name}")
-    columns = {
-        draft.locator.table_name.casefold(): {
-            column.name.casefold() for column in draft.columns
-        }
-        for draft in drafts
-    }
-    for table_name, column_name in _SQL_COLUMN_REFERENCE.findall(expression):
-        available = columns.get(table_name.casefold())
-        if available is None or column_name.casefold() not in available:
-            raise ValueError(
-                f"LLM_METRIC_REFERENCE_UNKNOWN: {metric.name}:{table_name}.{column_name}"
+) -> _PreparedMetrics:
+    catalog = _metric_dataset_catalog(drafts)
+    prepared: list[MetricSuggestion] = []
+    findings: list[QualityFinding] = []
+    excluded_names: list[str] = []
+    for suggestion in suggestions:
+        expression = suggestion.expression.strip()
+        if not suggestion.name.strip() or not expression:
+            raise ValueError("LLM_METRIC_NAME_OR_EXPRESSION_EMPTY")
+        dataset_keys = [name.strip().casefold() for name in suggestion.dataset_names]
+        if any(not name for name in dataset_keys):
+            raise ValueError("LLM_METRIC_DATASET_EMPTY")
+        if len(set(dataset_keys)) != len(dataset_keys):
+            raise ValueError("LLM_METRIC_DATASET_DUPLICATE")
+        if any(name not in catalog for name in dataset_keys):
+            raise ValueError("LLM_METRIC_DATASET_UNKNOWN")
+        normalized = _parse_metric_scalar(expression)
+        if any(column.db or column.catalog for column in normalized.find_all(exp.Column)):
+            raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
+        if len(dataset_keys) > 1:
+            for column in normalized.find_all(exp.Column):
+                qualifier = column.table.strip().casefold()
+                column_key = column.name.casefold()
+                if qualifier:
+                    if qualifier not in dataset_keys:
+                        raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
+                    if column_key not in catalog[qualifier][1]:
+                        raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
+                elif not any(column_key in catalog[name][1] for name in dataset_keys):
+                    raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
+            findings.append(
+                QualityFinding(
+                    code="METRIC_MULTI_DATASET_UNSUPPORTED",
+                    path=f"metrics.{suggestion.name.strip()}",
+                    message=(
+                        "Metric uses multiple datasets and was excluded because join path, "
+                        "cardinality, and grain are not declared"
+                    ),
+                )
             )
+            excluded_names.append(suggestion.name.strip())
+            continue
+        dataset_key = dataset_keys[0]
+        canonical_dataset, columns = catalog[dataset_key]
+        for column in normalized.find_all(exp.Column):
+            qualifier = column.table
+            if qualifier and qualifier.casefold() != dataset_key:
+                raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
+            canonical_column = columns.get(column.name.casefold())
+            if canonical_column is None:
+                raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
+            source_column = column.args.get("this")
+            source_table = column.args.get("table")
+            column.set(
+                "this",
+                _canonical_metric_identifier(
+                    canonical_column,
+                    source=source_column,
+                ),
+            )
+            column.set(
+                "table",
+                _canonical_metric_identifier(
+                    canonical_dataset,
+                    source=source_table,
+                ),
+            )
+        normalized_expression = normalized.sql()
+        _parse_metric_scalar(normalized_expression)
+        prepared.append(
+            suggestion.model_copy(update={"expression": normalized_expression})
+        )
+    _validate_metric_name_collisions(
+        prepared,
+        None,
+        excluded_names=excluded_names,
+    )
+    return _PreparedMetrics(
+        suggestions=prepared,
+        findings=findings,
+        excluded_names=excluded_names,
+    )
+
+
+def _validate_metric_name_collisions(
+    suggestions: list[MetricSuggestion],
+    existing_product: ProductRecord | None,
+    *,
+    excluded_names: list[str],
+) -> None:
+    accepted_names = [suggestion.name.strip().casefold() for suggestion in suggestions]
+    accepted_keys = set(accepted_names)
+    excluded_keys = {name.casefold() for name in excluded_names}
+    if len(accepted_names) != len(accepted_keys) or accepted_keys & excluded_keys:
+        raise ValueError("LLM_METRIC_NAME_DUPLICATE")
+    for record in existing_product.metrics if existing_product else []:
+        identity_keys = {
+            record.name.casefold(),
+            *(alias.casefold() for alias in record.aliases),
+        }
+        if identity_keys & accepted_keys and identity_keys & excluded_keys:
+            raise ValueError("LLM_METRIC_NAME_DUPLICATE")
 
 
 def _build_metrics(
     suggestions: list[MetricSuggestion],
     existing_product: ProductRecord | None,
+    *,
+    excluded_names: list[str],
 ) -> tuple[list[MetricIR], list[MetricRecord]]:
-    existing = existing_product.metrics if existing_product else []
+    excluded_keys = {name.casefold() for name in excluded_names}
+    _validate_metric_name_collisions(
+        suggestions,
+        existing_product,
+        excluded_names=excluded_names,
+    )
+    existing = [
+        record
+        for record in (existing_product.metrics if existing_product else [])
+        if excluded_keys.isdisjoint(
+            {record.name.casefold(), *(alias.casefold() for alias in record.aliases)}
+        )
+    ]
     records_by_id = {record.metric_id: record for record in existing}
     metrics: list[MetricIR] = []
     seen_names: set[str] = set()
