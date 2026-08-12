@@ -142,12 +142,13 @@ class NoisyPortalProductProvider(FakeSemanticProvider):
     def generate_structured(self, *, schema, messages):
         product = json.loads(messages[1]["content"])["product"]
 
-        def evidence_for(text: str) -> dict[str, object]:
-            return next(
+        def evidence_id_for(text: str) -> str:
+            item = next(
                 item
                 for item in product["evidence"]
                 if text in str(item.get("excerpt") or "")
             )
+            return str(item["evidence_id"])
 
         return {
             "suggestions": [],
@@ -157,19 +158,19 @@ class NoisyPortalProductProvider(FakeSemanticProvider):
                     "kind": "purpose",
                     "value": "주문 분석 지원",
                     "confidence": 0.98,
-                    "evidence": [evidence_for("주문 분석 지원")],
+                    "evidence_ids": [evidence_id_for("주문 분석 지원")],
                 },
                 {
                     "kind": "domain",
                     "value": "영업",
                     "confidence": 0.97,
-                    "evidence": [evidence_for("도메인: 영업")],
+                    "evidence_ids": [evidence_id_for("도메인: 영업")],
                 },
                 {
                     "kind": "tag",
                     "value": "주문",
                     "confidence": 0.96,
-                    "evidence": [evidence_for("태그: 주문")],
+                    "evidence_ids": [evidence_id_for("태그: 주문")],
                 },
             ],
         }
@@ -235,6 +236,9 @@ def test_pipeline_normalizes_user_facts_and_excludes_portal_boilerplate(
         "domain",
         "tag",
     ]
+    assert audit["product_facts"][0]["confidence"] == 0.98
+    assert audit["product_facts"][0]["evidence"][0]["excerpt"]
+    assert all("evidence_ids" not in fact for fact in audit["product_facts"])
 
 
 def test_pipeline_applies_and_audits_evidence_backed_llm_semantics(tmp_path: Path) -> None:

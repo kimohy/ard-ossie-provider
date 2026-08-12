@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -26,27 +27,36 @@ OTHER_PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
 
 
+def product_evidence(
+    *,
+    source_hash: str = "b" * 64,
+    role: SourceRole = SourceRole.PRODUCT_HTML,
+    excerpt: str | None = "사용자가 입력한 근거",
+    item_index: int = 1,
+) -> Evidence:
+    return Evidence(
+        source_hash=source_hash,
+        role=role,
+        locator={
+            "document": "product-info/product.html",
+            "item_index": item_index,
+            "level": 2,
+        },
+        excerpt=excerpt,
+    )
+
+
 def product_document(
     *,
     excerpt: str = "사용자가 입력한 근거",
+    evidence: list[Evidence] | None = None,
     excluded_evidence: list[Evidence] | None = None,
 ) -> ParsedDocument:
     return ParsedDocument(
         role=SourceRole.PRODUCT_HTML,
         source_hash="b" * 64,
         markdown="# Product",
-        evidence=[
-            Evidence(
-                source_hash="b" * 64,
-                role=SourceRole.PRODUCT_HTML,
-                locator={
-                    "document": "product-info/product.html",
-                    "item_index": 1,
-                    "level": 2,
-                },
-                excerpt=excerpt,
-            )
-        ],
+        evidence=[product_evidence(excerpt=excerpt)] if evidence is None else evidence,
         excluded_product_fact_evidence=excluded_evidence or [],
     )
 
@@ -56,27 +66,60 @@ def product_fact(
     value: str,
     *,
     confidence: float = 0.9,
-    source_hash: str = "b" * 64,
-    role: SourceRole = SourceRole.PRODUCT_HTML,
-    excerpt: str | None = "사용자가 입력한 근거",
+    evidence_ids: list[str] | None = None,
 ) -> ProductFactSuggestion:
     return ProductFactSuggestion(
         kind=kind,
         value=value,
         confidence=confidence,
-        evidence=[
-            Evidence(
-                source_hash=source_hash,
-                role=role,
-                locator={
-                    "document": "product-info/product.html",
-                    "item_index": 1,
-                    "level": 2,
-                },
-                excerpt=excerpt,
-            )
-        ],
+        evidence_ids=evidence_ids or ["product-evidence-000001"],
     )
+
+
+def test_product_evidence_catalog_assigns_stable_request_local_ids() -> None:
+    first = product_evidence(item_index=1)
+    second = product_evidence(item_index=2)
+    document = product_document(evidence=[first, second])
+
+    assert pipeline._product_evidence_catalog(document) == {
+        "product-evidence-000001": first,
+        "product-evidence-000002": second,
+    }
+
+
+def test_product_prompt_assigns_ids_only_to_accepted_evidence() -> None:
+    accepted = product_evidence(excerpt="사용자 설명")
+    excluded = product_evidence(excerpt="(AI 자동생성) 요약", item_index=2)
+
+    class CapturingProvider:
+        payload: dict[str, object] | None = None
+
+        def generate_structured(self, *, schema, messages):
+            self.payload = json.loads(messages[1]["content"])
+            return {"suggestions": [], "metrics": [], "product_facts": []}
+
+    provider = CapturingProvider()
+    pipeline._extract_suggestions(
+        provider,
+        product_document(evidence=[accepted], excluded_evidence=[excluded]),
+        ParsedDocument(
+            role=SourceRole.SEMANTIC_DOCUMENT,
+            source_hash="a" * 64,
+            markdown="# Semantic",
+        ),
+        [],
+    )
+
+    assert provider.payload is not None
+    product_payload = provider.payload["product"]
+    assert isinstance(product_payload, dict)
+    assert product_payload["evidence"] == [
+        {
+            "evidence_id": "product-evidence-000001",
+            **accepted.model_dump(mode="json"),
+        }
+    ]
+    assert "excluded_product_fact_evidence" not in product_payload
 
 
 def test_product_facts_omit_low_confidence_and_sort_deduplicated_repeated_values() -> None:
@@ -110,95 +153,99 @@ def test_product_facts_reject_conflicting_singleton_values() -> None:
 
 
 @pytest.mark.parametrize(
-    ("fact", "expected_code"),
+    ("evidence", "expected_code"),
     [
         pytest.param(
-            product_fact("purpose", "주문 분석", role=SourceRole.SEMANTIC_DOCUMENT),
+            product_evidence(role=SourceRole.SEMANTIC_DOCUMENT),
             "LLM_PRODUCT_FACT_EVIDENCE_ROLE_INVALID",
             id="role",
         ),
         pytest.param(
-            product_fact("purpose", "주문 분석", source_hash="c" * 64),
+            product_evidence(source_hash="c" * 64),
             "LLM_PRODUCT_FACT_EVIDENCE_SOURCE_UNKNOWN",
             id="source-hash",
         ),
         pytest.param(
-            product_fact("purpose", "주문 분석", excerpt=" \n "),
+            product_evidence(excerpt=" \n "),
             "LLM_PRODUCT_FACT_EVIDENCE_EXCERPT_REQUIRED",
             id="excerpt",
         ),
     ],
 )
 def test_product_facts_require_product_html_evidence(
-    fact: ProductFactSuggestion,
+    evidence: Evidence,
     expected_code: str,
 ) -> None:
     with pytest.raises(ValueError, match=f"^{expected_code}$"):
         pipeline._validate_product_facts(
-            [fact],
+            [product_fact("purpose", "주문 분석")],
+            product_document(evidence=[evidence]),
+            configured_description=None,
+        )
+
+
+def test_product_facts_reject_unknown_evidence_id() -> None:
+    with pytest.raises(ValueError, match="^LLM_PRODUCT_FACT_EVIDENCE_UNKNOWN$"):
+        pipeline._validate_product_facts(
+            [
+                product_fact(
+                    "purpose",
+                    "주문 분석",
+                    evidence_ids=["product-evidence-999999"],
+                )
+            ],
             product_document(),
             configured_description=None,
         )
 
 
-@pytest.mark.parametrize(
-    "fact",
-    [
-        pytest.param(
-            product_fact("purpose", "주문 분석", excerpt="원문에 없는 근거"),
-            id="invented-excerpt",
-        ),
-        pytest.param(
-            product_fact("purpose", "주문 분석").model_copy(
-                update={
-                    "evidence": [
-                        Evidence(
-                            source_hash="b" * 64,
-                            role=SourceRole.PRODUCT_HTML,
-                            locator={
-                                "document": "product-info/product.html",
-                                "item_index": 999,
-                                "level": 2,
-                            },
-                            excerpt="사용자가 입력한 근거",
-                        )
-                    ]
-                }
-            ),
-            id="invented-locator",
-        ),
-    ],
-)
-def test_product_facts_reject_evidence_not_collected_from_product_document(
-    fact: ProductFactSuggestion,
-) -> None:
+def test_product_facts_reject_unknown_evidence_id_below_acceptance_threshold() -> None:
     with pytest.raises(ValueError, match="^LLM_PRODUCT_FACT_EVIDENCE_UNKNOWN$"):
         pipeline._validate_product_facts(
-            [fact],
+            [
+                product_fact(
+                    "purpose",
+                    "주문 분석",
+                    confidence=0.69,
+                    evidence_ids=["product-evidence-999999"],
+                )
+            ],
+            product_document(),
+            configured_description=None,
+        )
+
+
+def test_product_facts_reject_duplicate_evidence_id() -> None:
+    with pytest.raises(
+        ValueError,
+        match="^LLM_PRODUCT_FACT_EVIDENCE_ID_DUPLICATE$",
+    ):
+        pipeline._validate_product_facts(
+            [
+                product_fact(
+                    "purpose",
+                    "주문 분석",
+                    evidence_ids=[
+                        "product-evidence-000001",
+                        "product-evidence-000001",
+                    ],
+                )
+            ],
             product_document(),
             configured_description=None,
         )
 
 
 def test_product_facts_reject_ai_generated_summary_evidence() -> None:
-    evidence = Evidence(
-        source_hash="b" * 64,
-        role=SourceRole.PRODUCT_HTML,
-        locator={
-            "document": "product-info/product.html",
-            "item_index": 63,
-            "level": 5,
-        },
+    evidence = product_evidence(
         excerpt="사용자가 작성하지 않은 자동 요약 값",
-    )
-    fact = product_fact("description", "사용자가 작성하지 않은 자동 요약 값").model_copy(
-        update={"evidence": [evidence]}
+        item_index=63,
     )
 
     with pytest.raises(ValueError, match="^LLM_PRODUCT_FACT_EVIDENCE_AI_GENERATED$"):
         pipeline._validate_product_facts(
-            [fact],
-            product_document(excluded_evidence=[evidence]),
+            [product_fact("description", "사용자가 작성하지 않은 자동 요약 값")],
+            product_document(evidence=[evidence], excluded_evidence=[evidence]),
             configured_description=None,
         )
 

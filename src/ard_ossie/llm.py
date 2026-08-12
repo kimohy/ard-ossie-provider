@@ -90,7 +90,7 @@ class ProductFactSuggestion(StrictModel):
     kind: ProductFactKind
     value: str
     confidence: float = Field(ge=0, le=1)
-    evidence: list[Evidence] = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
 
     @field_validator("value", mode="before")
     @classmethod
@@ -228,9 +228,16 @@ def semantic_extraction_schema() -> dict[str, object]:
             },
             "value": {"type": "string", "minLength": 1},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "evidence": evidence_list,
+            "evidence_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "string",
+                    "pattern": "^product-evidence-[0-9]{6}$",
+                },
+            },
         },
-        "required": ["kind", "value", "confidence", "evidence"],
+        "required": ["kind", "value", "confidence", "evidence_ids"],
         "additionalProperties": False,
     }
     return {

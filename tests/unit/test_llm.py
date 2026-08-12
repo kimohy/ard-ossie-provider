@@ -80,15 +80,6 @@ def evidence() -> Evidence:
     )
 
 
-def product_html_evidence() -> Evidence:
-    return Evidence(
-        source_hash="b" * 64,
-        role="product_html",
-        locator={"document": "product-info/product.html", "item_index": 3, "level": 2},
-        excerpt="제품 목적은 주문 분석입니다",
-    )
-
-
 def test_semantic_schema_requires_closed_product_facts() -> None:
     schema = semantic_extraction_schema()
     expected_kinds = [
@@ -117,6 +108,18 @@ def test_semantic_schema_requires_closed_product_facts() -> None:
     assert schema["required"] == ["suggestions", "metrics", "product_facts"]
     fact_schema = schema["properties"]["product_facts"]["items"]
     assert fact_schema["properties"]["kind"]["enum"] == expected_kinds
+    assert fact_schema["required"] == ["kind", "value", "confidence", "evidence_ids"]
+    assert fact_schema["properties"]["evidence_ids"] == {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "type": "string",
+            "pattern": r"^product-evidence-[0-9]{6}$",
+        },
+    }
+    assert "evidence" not in fact_schema["properties"]
+    assert "evidence" in schema["properties"]["suggestions"]["items"]["properties"]
+    assert "evidence" in schema["properties"]["metrics"]["items"]["properties"]
     assert fact_schema["additionalProperties"] is False
 
     with pytest.raises(JsonSchemaValidationError):
@@ -129,23 +132,24 @@ def test_semantic_schema_requires_closed_product_facts() -> None:
                         "kind": "portal_navigation",
                         "value": "데이터 상품 홈",
                         "confidence": 0.99,
-                        "evidence": [
-                            {
-                                "source_hash": "b" * 64,
-                                "role": "product_html",
-                                "locator": {
-                                    "document": "product-info/product.html",
-                                    "item_index": 3,
-                                    "level": 2,
-                                    "page": None,
-                                    "bbox": None,
-                                    "charspan": None,
-                                    "sheet": None,
-                                    "range": None,
-                                },
-                                "excerpt": "데이터 상품 홈",
-                            }
-                        ],
+                        "evidence_ids": ["product-evidence-000001"],
+                    }
+                ],
+            },
+            schema=schema,
+        )
+
+    with pytest.raises(JsonSchemaValidationError):
+        validate(
+            instance={
+                "suggestions": [],
+                "metrics": [],
+                "product_facts": [
+                    {
+                        "kind": "purpose",
+                        "value": "주문 분석",
+                        "confidence": 0.99,
+                        "evidence": [],
                     }
                 ],
             },
@@ -158,7 +162,7 @@ def test_product_fact_suggestion_normalizes_value_and_rejects_blank() -> None:
         kind="purpose",
         value="  주문   분석\n지원  ",
         confidence=0.95,
-        evidence=[product_html_evidence()],
+        evidence_ids=["product-evidence-000001"],
     )
 
     assert fact.value == "주문 분석 지원"
@@ -167,7 +171,14 @@ def test_product_fact_suggestion_normalizes_value_and_rejects_blank() -> None:
             kind="purpose",
             value=" \n\t ",
             confidence=0.95,
-            evidence=[product_html_evidence()],
+            evidence_ids=["product-evidence-000001"],
+        )
+    with pytest.raises(PydanticValidationError):
+        llm.ProductFactSuggestion(
+            kind="purpose",
+            value="주문 분석 지원",
+            confidence=0.95,
+            evidence_ids=[],
         )
 
 
