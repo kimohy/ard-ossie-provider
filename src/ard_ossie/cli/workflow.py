@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -23,6 +23,7 @@ from ard_ossie.application.processing import (
     ProcessingRequest,
     ProcessingService,
     provider_from_environment,
+    validate_processing_invocation_id,
 )
 from ard_ossie.application.release_detection import (
     ReleaseDetectionRequest,
@@ -83,12 +84,14 @@ def process_reconcile_workflow(
     result_path: Annotated[Path, typer.Option("--result-path")],
     branch: Annotated[str, typer.Option("--branch")],
     pr_number: Annotated[int, typer.Option("--pr-number", min=1)],
+    invocation_id: Annotated[str, typer.Option("--invocation-id")],
     repository_name: Annotated[str, typer.Option("--repository-name")],
     target_url: Annotated[str, typer.Option("--target-url")] = "",
     repository: Annotated[Path, typer.Option("--repository")] = Path("."),
 ) -> None:
     command = "workflow.process-reconcile"
     paths = _repository_paths(repository)
+    invocation_id = _validated_processing_invocation_option(invocation_id)
 
     def run() -> WorkflowResult:
         request = ProcessingReconcileRequest(
@@ -96,6 +99,7 @@ def process_reconcile_workflow(
             result_path=result_path,
             branch=branch,
             pr_number=pr_number,
+            invocation_id=invocation_id,
             target_url=target_url,
         )
         return _processing_reconcile_service(repository_name, paths).run(request)
@@ -179,6 +183,7 @@ def process_workflow(
     branch: Annotated[str, typer.Option("--branch")],
     pr_number: Annotated[int, typer.Option("--pr-number", min=1)],
     expected_head: Annotated[str, typer.Option("--expected-head")],
+    invocation_id: Annotated[str, typer.Option("--invocation-id")],
     repository_name: Annotated[str, typer.Option("--repository-name")],
     allow_writeback: Annotated[
         bool,
@@ -190,6 +195,7 @@ def process_workflow(
 ) -> None:
     command = "workflow.process"
     paths = _repository_paths(repository)
+    invocation_id = _validated_processing_invocation_option(invocation_id)
 
     def run() -> WorkflowResult:
         request = ProcessingRequest(
@@ -204,7 +210,12 @@ def process_workflow(
         )
         return _processing_service(repository_name, paths).run(request)
 
-    _publish(paths.root, command, run)
+    _publish(
+        paths.root,
+        command,
+        run,
+        trusted_outputs={"invocation_id": invocation_id},
+    )
 
 
 @app.command("changeset")
@@ -395,15 +406,26 @@ def _context(
     )
 
 
-def _publish(repository: Path, command: str, run: Callable[[], WorkflowResult]) -> None:
+def _publish(
+    repository: Path,
+    command: str,
+    run: Callable[[], WorkflowResult],
+    *,
+    trusted_outputs: dict[str, Any] | None = None,
+) -> None:
     writer = result_writer(repository, command)
+    writer.prepare()
+    envelope_outputs = trusted_outputs or {}
     try:
         result = run()
     except WorkflowError as error:
+        outputs = dict(getattr(error, "outputs", {}))
+        outputs.update(envelope_outputs)
+        outputs["failure_exit_code"] = int(error.exit_code)
         result = WorkflowResult(
             command=command,
             status=WorkflowStatus.FAILURE,
-            outputs=getattr(error, "outputs", {}),
+            outputs=outputs,
             artifacts=getattr(error, "artifacts", []),
             findings=[{"code": error.code, "message": error.code}],
             mutations=getattr(error, "mutations", []),
@@ -411,7 +433,7 @@ def _publish(repository: Path, command: str, run: Callable[[], WorkflowResult]) 
         )
         writer.write(result)
         typer.echo(error.code, err=True)
-        raise typer.Exit(int(error.exit_code)) from error
+        raise typer.Exit(int(error.exit_code)) from None
     except (ValueError, TypeError) as error:
         wrapped = WorkflowValidationError(
             str(error).partition(":")[0] or type(error).__name__,
@@ -421,11 +443,19 @@ def _publish(repository: Path, command: str, run: Callable[[], WorkflowResult]) 
             WorkflowResult(
                 command=command,
                 status=WorkflowStatus.FAILURE,
+                outputs={
+                    **envelope_outputs,
+                    "failure_exit_code": int(wrapped.exit_code),
+                },
                 findings=[{"code": wrapped.code, "message": wrapped.code}],
             )
         )
         typer.echo(wrapped.code, err=True)
-        raise typer.Exit(int(wrapped.exit_code)) from error
+        raise typer.Exit(int(wrapped.exit_code)) from None
+    if envelope_outputs:
+        result = result.model_copy(
+            update={"outputs": {**result.outputs, **envelope_outputs}}
+        )
     writer.write(result)
     typer.echo(result.model_dump_json())
 
@@ -434,6 +464,13 @@ def _repository_paths(repository: Path):
     from ard_ossie.adapters.filesystem import RepositoryPaths
 
     return RepositoryPaths(repository)
+
+
+def _validated_processing_invocation_option(value: str) -> str:
+    try:
+        return validate_processing_invocation_id(value)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--invocation-id") from None
 
 
 def _issue_authorization_service(repository_name: str, paths):

@@ -10,7 +10,9 @@ from typing import Any, TypeVar
 from pydantic import Field, ValidationError, field_validator
 
 from ard_ossie.application.contracts import (
+    ExitCode,
     MutationRecord,
+    WorkflowConfigurationError,
     WorkflowError,
     WorkflowPartialError,
     WorkflowResult,
@@ -27,6 +29,7 @@ from ard_ossie.pipeline import (
     PipelineValidationError,
     ProcessResult,
     ProviderExecutionError,
+    ProviderFailureKind,
     process_product,
 )
 from ard_ossie.ports.filesystem import FileSystemPort
@@ -35,6 +38,8 @@ from ard_ossie.ports.github import GitHubPort, PullRequestState
 
 _PRODUCT_KEY = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_INVOCATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_WORKFLOW_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _RetryResult = TypeVar("_RetryResult")
 
 
@@ -66,12 +71,18 @@ class ProcessingReconcileRequest(StrictModel):
     result_path: Path
     branch: str
     pr_number: int = Field(gt=0)
+    invocation_id: str
     target_url: str = ""
 
     @field_validator("branch")
     @classmethod
     def validate_reconcile_branch(cls, value: str) -> str:
         return _validated_branch(value)
+
+    @field_validator("invocation_id")
+    @classmethod
+    def validate_invocation_id(cls, value: str) -> str:
+        return validate_processing_invocation_id(value)
 
 
 class ProcessingService:
@@ -127,14 +138,24 @@ class ProcessingService:
             raise WorkflowSecurityError(
                 _error_code(error),
                 "registry path security validation failed",
-            ) from error
+            ) from None
         except ProviderExecutionError as error:
-            raise WorkflowTransientError(_error_code(error), "provider execution failed") from error
+            if error.kind is ProviderFailureKind.CONFIGURATION:
+                raise WorkflowConfigurationError(
+                    error.code,
+                    "provider configuration or request was rejected",
+                ) from None
+            if error.kind is ProviderFailureKind.OUTPUT:
+                raise WorkflowValidationError(
+                    error.code,
+                    "provider output failed validation",
+                ) from None
+            raise WorkflowTransientError(error.code, "provider execution failed") from None
         except (PipelineValidationError, SourceValidationError, ValueError) as error:
             raise WorkflowValidationError(
                 _error_code(error),
                 "product validation failed",
-            ) from error
+            ) from None
         except OSError as error:
             raise WorkflowTransientError("PROCESSING_IO_FAILURE", str(error)) from error
 
@@ -238,7 +259,7 @@ class ProcessingService:
                 },
                 artifacts=_artifact_paths(self.paths.root, product),
                 mutations=mutations,
-            ) from error
+            ) from None
 
         outputs: dict[str, object] = {
             "current_head": current_head,
@@ -306,7 +327,22 @@ class ProcessingReconcileService:
                 "PROCESSING_RECONCILE_REPOSITORY_MISMATCH",
                 "reconciliation repository does not match filesystem port",
             )
-        prior = _load_partial_result(self.paths, request.result_path)
+        prior = _load_process_result(self.paths, request.result_path)
+        if prior.outputs.get("invocation_id") != request.invocation_id:
+            raise WorkflowSecurityError(
+                "PROCESSING_RECONCILE_INVOCATION_MISMATCH",
+                "process result was not produced by this workflow invocation",
+            )
+        codes = [item.get("code") for item in prior.findings]
+        if "PROCESSING_POST_COMMIT_FAILED" not in codes:
+            raise _recorded_process_failure(prior)
+        if codes != ["PROCESSING_POST_COMMIT_FAILED"] or prior.outputs.get(
+            "failure_exit_code"
+        ) != int(ExitCode.PARTIAL):
+            raise WorkflowSecurityError(
+                "PROCESSING_RECONCILE_RESULT_INVALID",
+                "partial result has an invalid failure shape",
+            )
         current_head = _required_output(prior, "current_head")
         expected_head = _required_output(prior, "expected_head")
         product_id = _required_output(prior, "product_id")
@@ -391,6 +427,7 @@ class ProcessingReconcileService:
                 )
             )
         outputs = {
+            "invocation_id": request.invocation_id,
             "current_head": current_head,
             "expected_head": expected_head,
             "product_id": product_id,
@@ -445,15 +482,20 @@ def provider_from_environment():
 
     api_style = os.environ.get("ARD_LLM_API_STYLE", "chat_completions")
     if api_style != "chat_completions":
-        raise ProviderExecutionError(f"LLM_API_STYLE_UNSUPPORTED: {api_style}")
+        raise ProviderExecutionError(
+            "LLM_API_STYLE_UNSUPPORTED",
+            kind=ProviderFailureKind.CONFIGURATION,
+        )
     names = ("ARD_LLM_BASE_URL", "ARD_LLM_API_KEY", "ARD_LLM_MODEL")
     values = {name: os.environ.get(name) for name in names}
     present = [name for name, value in values.items() if value]
     if not present:
         return None
     if len(present) != len(names):
-        missing = sorted(set(names) - set(present))
-        raise ProviderExecutionError(f"LLM_PROVIDER_CONFIG_INCOMPLETE: {','.join(missing)}")
+        raise ProviderExecutionError(
+            "LLM_PROVIDER_CONFIG_INCOMPLETE",
+            kind=ProviderFailureKind.CONFIGURATION,
+        )
     return OpenAICompatibleProvider(
         base_url=values["ARD_LLM_BASE_URL"] or "",
         api_key=SecretStr(values["ARD_LLM_API_KEY"] or ""),
@@ -472,7 +514,13 @@ def _validated_branch(value: str) -> str:
     return value
 
 
-def _load_partial_result(paths: FileSystemPort, value: Path) -> WorkflowResult:
+def validate_processing_invocation_id(value: str) -> str:
+    if _INVOCATION_ID.fullmatch(value) is None:
+        raise ValueError("INVALID_PROCESSING_INVOCATION_ID")
+    return value
+
+
+def _load_process_result(paths: FileSystemPort, value: Path) -> WorkflowResult:
     supplied = value if value.is_absolute() else paths.root / value
     expected = paths.root / ".ard" / "run" / "workflow.process-result.json"
     if supplied.absolute() != expected:
@@ -484,22 +532,57 @@ def _load_partial_result(paths: FileSystemPort, value: Path) -> WorkflowResult:
         result = WorkflowResult.model_validate_json(
             paths.resolve_read(value).read_text(encoding="utf-8")
         )
-    except (OSError, ValueError, ValidationError) as error:
+    except (OSError, ValueError, ValidationError):
         raise WorkflowValidationError(
             "PROCESSING_RECONCILE_RESULT_INVALID",
             "partial process result is malformed",
-        ) from error
-    codes = {str(item.get("code")) for item in result.findings}
-    if (
-        result.command != "workflow.process"
-        or result.status is not WorkflowStatus.FAILURE
-        or "PROCESSING_POST_COMMIT_FAILED" not in codes
-    ):
+        ) from None
+    if result.command != "workflow.process" or result.status is not WorkflowStatus.FAILURE:
         raise WorkflowSecurityError(
             "PROCESSING_RECONCILE_RESULT_NOT_PARTIAL",
-            "result does not describe a partial post-commit failure",
+            "result does not describe a failed process command",
         )
     return result
+
+
+def _recorded_process_failure(result: WorkflowResult) -> WorkflowError:
+    if len(result.findings) != 1:
+        raise WorkflowSecurityError(
+            "PROCESSING_RECONCILE_RESULT_INVALID",
+            "recorded process failure must contain exactly one finding",
+        )
+    code = result.findings[0].get("code")
+    if not isinstance(code, str) or _WORKFLOW_ERROR_CODE.fullmatch(code) is None:
+        raise WorkflowSecurityError(
+            "PROCESSING_RECONCILE_RESULT_INVALID",
+            "recorded process failure has an invalid code",
+        )
+    raw_exit_code = result.outputs.get("failure_exit_code")
+    if isinstance(raw_exit_code, bool) or not isinstance(raw_exit_code, int):
+        raise WorkflowSecurityError(
+            "PROCESSING_RECONCILE_RESULT_INVALID",
+            "recorded process failure is missing its exit code",
+        )
+    try:
+        exit_code = ExitCode(raw_exit_code)
+    except ValueError:
+        raise WorkflowSecurityError(
+            "PROCESSING_RECONCILE_RESULT_INVALID",
+            "recorded process failure has an unknown exit code",
+        ) from None
+    if exit_code in {ExitCode.SUCCESS, ExitCode.PARTIAL} or (
+        result.retryable != (exit_code is ExitCode.TRANSIENT)
+    ):
+        raise WorkflowSecurityError(
+            "PROCESSING_RECONCILE_RESULT_INVALID",
+            "recorded process failure has inconsistent retry metadata",
+        )
+    return WorkflowError(
+        code,
+        "recorded process failure",
+        exit_code,
+        retryable=result.retryable,
+    )
 
 
 def _required_output(result: WorkflowResult, key: str) -> str:

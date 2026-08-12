@@ -149,6 +149,9 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert "ard workflow process" in text
     assert "ard workflow process-reconcile" in text
     assert "--expected-head" in text
+    assert job["env"]["PROCESS_INVOCATION_ID"] == (
+        "${{ github.run_id }}-${{ github.run_attempt }}"
+    )
     assert "retention-days: 30" in text
     assert "lfs: true" in text
     checkouts = [
@@ -165,6 +168,7 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     process_runs = [step for step in job["steps"] if step.get("run")]
     assert all(step["working-directory"] == "trusted" for step in process_runs)
     assert all('--repository "$CANDIDATE_REPOSITORY"' in step["run"] for step in process_runs)
+    assert all('--invocation-id "$PROCESS_INVOCATION_ID"' in step["run"] for step in process_runs)
     assert all(step["env"].get("PYTHONSAFEPATH") == "1" for step in process_runs)
     assert "candidate/products/${{ inputs.product_key }}/quality" in text
     finalizer = workflow["jobs"]["finalize"]
