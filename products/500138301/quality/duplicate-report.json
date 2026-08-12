@@ -1,0 +1,42 @@
+[
+  {
+    "candidate_ids": [],
+    "code": "PRODUCT_CREATE",
+    "decision": "CREATE",
+    "entity_type": "product",
+    "evidence": {},
+    "target_id": null
+  },
+  {
+    "candidate_ids": [],
+    "code": "TABLE_CREATE",
+    "decision": "CREATE",
+    "entity_type": "table",
+    "evidence": {},
+    "target_id": null
+  },
+  {
+    "candidate_ids": [],
+    "code": "TABLE_CREATE",
+    "decision": "CREATE",
+    "entity_type": "table",
+    "evidence": {},
+    "target_id": null
+  },
+  {
+    "candidate_ids": [],
+    "code": "TABLE_CREATE",
+    "decision": "CREATE",
+    "entity_type": "table",
+    "evidence": {},
+    "target_id": null
+  },
+  {
+    "candidate_ids": [],
+    "code": "TABLE_CREATE",
+    "decision": "CREATE",
+    "entity_type": "table",
+    "evidence": {},
+    "target_id": null
+  }
+]
