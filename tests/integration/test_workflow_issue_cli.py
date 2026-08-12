@@ -14,9 +14,11 @@ class StubService:
     def __init__(self, result: WorkflowResult) -> None:
         self.result = result
         self.contexts = []
+        self.kwargs = []
 
     def run(self, context, **kwargs):
         self.contexts.append(context)
+        self.kwargs.append(kwargs)
         return self.result
 
 
@@ -117,3 +119,125 @@ def test_issue_intake_cli_exposes_branch_pr_and_exact_head(
     )
     assert envelope["outputs"]["pr_number"] == 7
     assert envelope["outputs"]["expected_head"] == "a" * 40
+
+
+def test_issue_route_cli_writes_mode_base_and_exact_pr_head(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = StubService(
+        WorkflowResult(
+            command="workflow.issue-route",
+            status=WorkflowStatus.SUCCESS,
+            outputs={
+                "mode": "base_sync",
+                "base_sha": "a" * 40,
+                "branch": "ard/issue-3-500138301",
+                "product_key": "500138301",
+                "pr_number": 5,
+                "expected_head": "b" * 40,
+            },
+        )
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setattr(
+        workflow_cli,
+        "_issue_route_service",
+        lambda repository_name, paths: service,
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "issue-route",
+            "--event",
+            str(event_file(tmp_path)),
+            "--repository",
+            str(tmp_path),
+            "--repository-name",
+            "owner/repository",
+            "--actor",
+            "kimohy",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert github_output.read_text(encoding="utf-8") == (
+        f"base_sha={'a' * 40}\n"
+        "branch=ard/issue-3-500138301\n"
+        f"expected_head={'b' * 40}\n"
+        "mode=base_sync\n"
+        "pr_number=5\n"
+        "product_key=500138301\n"
+    )
+    envelope = json.loads(
+        (tmp_path / ".ard" / "run" / "workflow.issue-route-result.json").read_text()
+    )
+    assert envelope["outputs"]["expected_head"] == "b" * 40
+
+
+def test_issue_base_sync_cli_writes_the_synchronized_exact_head(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = StubService(
+        WorkflowResult(
+            command="workflow.issue-base-sync",
+            status=WorkflowStatus.SUCCESS,
+            outputs={
+                "branch": "ard/issue-3-500138301",
+                "product_key": "500138301",
+                "pr_number": 5,
+                "expected_head": "c" * 40,
+                "product_id": "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631",
+            },
+        )
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setattr(
+        workflow_cli,
+        "_issue_base_sync_service",
+        lambda repository_name, paths: service,
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "issue-base-sync",
+            "--event",
+            str(event_file(tmp_path)),
+            "--base-sha",
+            "a" * 40,
+            "--repository",
+            str(tmp_path),
+            "--repository-name",
+            "owner/repository",
+            "--actor",
+            "kimohy",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert service.kwargs == [{"base_sha": "a" * 40}]
+    assert github_output.read_text(encoding="utf-8") == (
+        "branch=ard/issue-3-500138301\n"
+        f"expected_head={'c' * 40}\n"
+        "pr_number=5\n"
+        "product_id=prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631\n"
+        "product_key=500138301\n"
+    )
+    envelope = json.loads(
+        (
+            tmp_path
+            / ".ard"
+            / "run"
+            / "workflow.issue-base-sync-result.json"
+        ).read_text()
+    )
+    assert envelope["outputs"]["expected_head"] == "c" * 40

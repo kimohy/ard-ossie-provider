@@ -54,7 +54,7 @@ def pull_request_payload(number: int = 3) -> dict[str, object]:
         "base": {"ref": "main"},
         "draft": True,
         "merged_at": None,
-        "merge_commit_sha": None,
+        "merge_commit_sha": "b" * 40,
     }
 
 

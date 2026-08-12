@@ -35,7 +35,9 @@ FORBIDDEN_RUN_TOKENS = (
 FORBIDDEN_SHELL_CONTROL = ("&&", "||", ";", "`", "$(`", "<(", ">(")
 APPROVED_LIFECYCLES = (
     "workflow issue-authorize",
+    "workflow issue-route",
     "workflow issue-intake",
+    "workflow issue-base-sync",
     "workflow detect-product",
     "workflow source-check",
     "workflow ensure-product-pr",
@@ -240,17 +242,105 @@ def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() ->
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-direct-change.yml")
 
 
-def test_issue_intake_calls_processor_without_waiting_for_token_event() -> None:
+def test_issue_intake_routes_existing_drafts_through_trusted_base_sync() -> None:
     workflow = load_workflow("ard-issue-intake.yml")
 
     assert workflow["on"]["issues"]["types"] == ["labeled"]
-    assert workflow["jobs"]["process"]["uses"] == "./.github/workflows/ard-process.yml"
-    assert workflow["jobs"]["process"]["needs"] == "intake"
-    assert workflow["jobs"]["process"]["with"]["expected_head"] == (
-        "${{ needs.intake.outputs.expected_head }}"
+    route = workflow["jobs"]["route"]
+    assert route["needs"] == "authorize"
+    assert route["permissions"] == {
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+    }
+    assert set(route["outputs"]) == {
+        "mode",
+        "base_sha",
+        "branch",
+        "product_key",
+        "pr_number",
+        "expected_head",
+    }
+    route_checkout = next(
+        step
+        for step in route["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
     )
-    assert "ARD_LLM_API_KEY" not in str(workflow["jobs"]["authorize"])
-    assert workflow["jobs"]["finalize"]["if"].startswith("always()")
+    assert route_checkout["with"] == {
+        "ref": "${{ github.sha }}",
+        "path": "trusted",
+        "persist-credentials": "true",
+    }
+    route_run = next(step for step in route["steps"] if step.get("run"))
+    assert route_run["working-directory"] == "trusted"
+    assert route_run["env"]["PYTHONSAFEPATH"] == "1"
+    assert '--repository "$TRUSTED_REPOSITORY"' in route_run["run"]
+
+    intake = workflow["jobs"]["intake"]
+    assert intake["needs"] == "route"
+    assert intake["if"] == "needs.route.outputs.mode == 'intake'"
+
+    base_sync = workflow["jobs"]["base_sync"]
+    assert base_sync["needs"] == "route"
+    assert base_sync["if"] == "needs.route.outputs.mode == 'base_sync'"
+    assert base_sync["permissions"] == {
+        "contents": "write",
+        "issues": "read",
+        "pull-requests": "read",
+    }
+    checkouts = [
+        step
+        for step in base_sync["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
+    assert checkouts[0]["with"] == {
+        "ref": "${{ needs.route.outputs.base_sha }}",
+        "path": "trusted",
+        "persist-credentials": "false",
+    }
+    assert checkouts[1]["with"] == {
+        "ref": "${{ needs.route.outputs.expected_head }}",
+        "fetch-depth": "0",
+        "lfs": "true",
+        "path": "candidate",
+        "persist-credentials": "true",
+    }
+    base_sync_run = next(step for step in base_sync["steps"] if step.get("run"))
+    assert base_sync_run["working-directory"] == "trusted"
+    assert base_sync_run["env"]["PYTHONSAFEPATH"] == "1"
+    assert '--repository "$CANDIDATE_REPOSITORY"' in base_sync_run["run"]
+    assert '--base-sha "$BASE_SHA"' in base_sync_run["run"]
+
+    process = workflow["jobs"]["process"]
+    assert process["uses"] == "./.github/workflows/ard-process.yml"
+    assert process["needs"] == ["route", "intake", "base_sync"]
+    assert process["if"] == (
+        "always() && needs.route.result == 'success' && "
+        "(needs.intake.result == 'success' || needs.base_sync.result == 'success')"
+    )
+    for name in ("branch", "product_key", "expected_head"):
+        assert process["with"][name] == (
+            f"${{{{ needs.intake.outputs.{name} || "
+            f"needs.base_sync.outputs.{name} }}}}"
+        )
+    assert process["with"]["pr_number"] == (
+        "${{ fromJSON(needs.intake.outputs.pr_number || "
+        "needs.base_sync.outputs.pr_number) }}"
+    )
+    assert process["secrets"] == "inherit"
+
+    finalizer = workflow["jobs"]["finalize"]
+    assert finalizer["needs"] == [
+        "authorize",
+        "route",
+        "intake",
+        "base_sync",
+        "process",
+    ]
+    assert finalizer["if"].startswith("always()")
+    assert "ARD_LLM_API_KEY" not in str(route)
+    assert "ARD_LLM_API_KEY" not in str(base_sync)
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-issue-intake.yml")
 
 

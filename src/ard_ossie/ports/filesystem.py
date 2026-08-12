@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 from typing import Protocol
 
@@ -28,6 +29,14 @@ class FileSystemPort(Protocol):
     def is_writeback_allowed(self, path: str | Path, product_key: str) -> bool: ...
 
     def is_intake_write_allowed(self, path: str | Path, product_key: str) -> bool: ...
+
+    def is_base_sync_reset_allowed(
+        self,
+        path: str | Path,
+        product_key: str,
+        product_id: str,
+        table_ids: Collection[str],
+    ) -> bool: ...
 
     def is_changeset_write_allowed(
         self,

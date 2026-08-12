@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from ard_ossie.adapters.git_cli import GitCli
-from ard_ossie.ports.git import GitConflict, GitTransientError
+from ard_ossie.ports.filesystem import PathPolicyError
+from ard_ossie.ports.git import CommitResult, GitConflict, GitTransientError
 from ard_ossie.ports.process import CommandRequest, CommandResult
 
 SHA = "a" * 40
@@ -269,6 +270,140 @@ def test_read_text_at_uses_validated_revision_and_repository_path(tmp_path: Path
     assert runner.argv == [
         ("git", "show", f"{SHA}:registry/products/prd_example.json")
     ]
+
+
+def test_merge_revision_creates_an_explicit_non_fast_forward_merge(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner(
+        [
+            ok(f"{SHA}\n"),
+            ok(),
+            ok(),
+            ok(),
+            ok(f"{NEW_SHA}\n"),
+        ]
+    )
+
+    result = GitCli(tmp_path, runner).merge_revision(NEW_SHA, "sync")
+
+    assert result == CommitResult(sha=NEW_SHA, created=True)
+    assert runner.argv == [
+        ("git", "rev-parse", "--verify", "HEAD"),
+        ("git", "config", "user.name", "github-actions[bot]"),
+        (
+            "git",
+            "config",
+            "user.email",
+            "41898282+github-actions[bot]@users.noreply.github.com",
+        ),
+        (
+            "git",
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "--message",
+            "sync",
+            NEW_SHA,
+        ),
+        ("git", "rev-parse", "--verify", "HEAD"),
+    ]
+
+
+def test_merge_revision_returns_noop_when_base_is_already_merged(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner([ok(f"{SHA}\n"), ok(), ok(), ok(), ok(f"{SHA}\n")])
+
+    result = GitCli(tmp_path, runner).merge_revision(NEW_SHA, "sync")
+
+    assert result == CommitResult(sha=SHA, created=False)
+
+
+def test_merge_revision_aborts_a_conflict(tmp_path: Path) -> None:
+    runner = RecordingRunner(
+        [
+            ok(f"{SHA}\n"),
+            ok(),
+            ok(),
+            failed(1, "CONFLICT (content)"),
+            ok(),
+        ]
+    )
+
+    with pytest.raises(GitConflict, match="BASE_SYNC_MERGE_CONFLICT"):
+        GitCli(tmp_path, runner).merge_revision(NEW_SHA, "sync")
+
+    assert runner.argv[-1] == ("git", "merge", "--abort")
+
+
+def test_merge_revision_requires_a_successful_conflict_abort(tmp_path: Path) -> None:
+    runner = RecordingRunner(
+        [
+            ok(f"{SHA}\n"),
+            ok(),
+            ok(),
+            failed(1, "CONFLICT (content)"),
+            failed(128, "no merge to abort"),
+        ]
+    )
+
+    with pytest.raises(GitTransientError, match="BASE_SYNC_ABORT_FAILED"):
+        GitCli(tmp_path, runner).merge_revision(NEW_SHA, "sync")
+
+
+def test_restore_paths_uses_source_worktree_and_sorted_explicit_paths(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner([ok()])
+
+    GitCli(tmp_path, runner).restore_paths(
+        SHA,
+        [
+            Path("products/sales-order/quality/quality-report.json"),
+            Path("products/sales-order/generated/ossie-model.json"),
+        ],
+    )
+
+    assert runner.argv == [
+        (
+            "git",
+            "restore",
+            "--source",
+            SHA,
+            "--worktree",
+            "--",
+            "products/sales-order/generated/ossie-model.json",
+            "products/sales-order/quality/quality-report.json",
+        )
+    ]
+
+
+def test_restore_paths_is_a_noop_for_an_empty_path_set(tmp_path: Path) -> None:
+    runner = RecordingRunner([])
+
+    GitCli(tmp_path, runner).restore_paths(SHA, [])
+
+    assert runner.argv == []
+
+
+def test_restore_paths_classifies_a_git_failure(tmp_path: Path) -> None:
+    runner = RecordingRunner([failed(128, "pathspec did not match")])
+
+    with pytest.raises(GitTransientError, match="BASE_SYNC_RESTORE_FAILED"):
+        GitCli(tmp_path, runner).restore_paths(
+            SHA,
+            [Path("products/sales-order/generated/ossie-model.json")],
+        )
+
+
+def test_restore_paths_rejects_a_path_outside_the_repository(tmp_path: Path) -> None:
+    runner = RecordingRunner([])
+
+    with pytest.raises(PathPolicyError, match="PATH_OUTSIDE_REPOSITORY"):
+        GitCli(tmp_path, runner).restore_paths(SHA, [Path("../secret")])
+
+    assert runner.argv == []
 
 
 def test_create_annotated_tag_reuses_exact_target(tmp_path: Path) -> None:

@@ -41,6 +41,16 @@ class _IssueEvent:
     repository_name: str
 
 
+IssueEvent = _IssueEvent
+
+
+@dataclass(frozen=True)
+class IssueRequest:
+    event: IssueEvent
+    intake: IssueIntake
+    branch: str
+
+
 class IssueAuthorizationService:
     def __init__(self, github: GitHubPort) -> None:
         self.github = github
@@ -101,20 +111,10 @@ class IssueIntakeService:
         self.prepare = prepare
 
     def run(self, context: WorkflowContext) -> WorkflowResult:
-        event = _load_issue_event(context)
-        _require_matching_context(context, event)
-        try:
-            intake = parse_issue_body(event.body)
-        except AttachmentSecurityError as error:
-            raise WorkflowSecurityError(_error_code(error), "unsafe issue attachment") from error
-        except (ValueError, TypeError) as error:
-            raise WorkflowValidationError(_error_code(error), "invalid issue intake") from error
-
-        branch = (
-            f"ard/{intake.changeset_id}-{intake.product_key}"
-            if intake.changeset_id
-            else f"ard/issue-{event.number}-{intake.product_key}"
-        )
+        request = load_issue_request(context)
+        event = request.event
+        intake = request.intake
+        branch = request.branch
         existing = self.github.find_open_pr(branch)
         branch_checked_out = False
         if existing is not None:
@@ -151,38 +151,13 @@ class IssueIntakeService:
                     "existing intake branch contains changes outside intake paths",
                 )
             if marker is None or set(changed.paths) != {marker}:
-                with tempfile.TemporaryDirectory(
-                    prefix="ard-intake-verify-",
-                    dir=context.runner_temp,
-                ) as staging_directory:
-                    staging = Path(staging_directory)
-                    if intake.operation.value == "update":
-                        staged_config = (
-                            staging
-                            / "products"
-                            / str(intake.product_key)
-                            / "product.yaml"
-                        )
-                        staged_config.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(
-                            self.paths.resolve_read(
-                                Path("products")
-                                / str(intake.product_key)
-                                / "product.yaml"
-                            ),
-                            staged_config,
-                        )
-                    canonical = self.prepare(  # type: ignore[arg-type]
-                        context.event_path,
-                        staging,
-                    )
-                    manifest = _validate_existing_intake(
-                        self.paths,
-                        event,
-                        intake,
-                        canonical,
-                        staging,
-                    )
+                manifest = prepare_existing_intake(
+                    self.paths,
+                    request,
+                    self.prepare,
+                    event_path=context.event_path,
+                    runner_temp=context.runner_temp,
+                )
                 mutations = self.github.set_issue_labels(
                     event.number,
                     add={"ard:processing", "ard:pr-created"},
@@ -322,6 +297,81 @@ def _require_equivalent_pr(
         raise WorkflowSecurityError(
             "ISSUE_PULL_REQUEST_HEAD_MISMATCH",
             "pull request head does not match the committed intake",
+        )
+
+
+def require_managed_pr(
+    pull_request: PullRequestState,
+    branch: str,
+    base_branch: str,
+) -> None:
+    if (
+        pull_request.head_branch != branch
+        or pull_request.base_branch != base_branch
+        or not pull_request.draft
+        or pull_request.merged_at is not None
+    ):
+        raise WorkflowSecurityError(
+            "ISSUE_BASE_SYNC_PULL_REQUEST_MISMATCH",
+            "existing pull request is not the managed Draft PR",
+        )
+
+
+def load_issue_request(context: WorkflowContext) -> IssueRequest:
+    event = _load_issue_event(context)
+    _require_matching_context(context, event)
+    try:
+        intake = parse_issue_body(event.body)
+    except AttachmentSecurityError as error:
+        raise WorkflowSecurityError(_error_code(error), "unsafe issue attachment") from error
+    except (ValueError, TypeError) as error:
+        raise WorkflowValidationError(_error_code(error), "invalid issue intake") from error
+    branch = (
+        f"ard/{intake.changeset_id}-{intake.product_key}"
+        if intake.changeset_id
+        else f"ard/issue-{event.number}-{intake.product_key}"
+    )
+    return IssueRequest(event=event, intake=intake, branch=branch)
+
+
+def prepare_existing_intake(
+    paths: FileSystemPort,
+    request: IssueRequest,
+    prepare: Callable[[Path, Path], IntakeManifest],
+    *,
+    event_path: Path | None,
+    runner_temp: Path | None,
+) -> IntakeManifest:
+    if event_path is None:
+        raise WorkflowValidationError("ISSUE_EVENT_REQUIRED", "issue event path is missing")
+    with tempfile.TemporaryDirectory(
+        prefix="ard-intake-verify-",
+        dir=runner_temp,
+    ) as staging_directory:
+        staging = Path(staging_directory)
+        if request.intake.operation.value == "update":
+            staged_config = (
+                staging
+                / "products"
+                / str(request.intake.product_key)
+                / "product.yaml"
+            )
+            staged_config.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(
+                paths.resolve_read(
+                    Path("products")
+                    / str(request.intake.product_key)
+                    / "product.yaml"
+                ),
+                staged_config,
+            )
+        canonical = prepare(event_path, staging)
+        return _validate_existing_intake(
+            paths,
+            request.event,
+            request.intake,
+            canonical,
+            staging,
         )
 
 
