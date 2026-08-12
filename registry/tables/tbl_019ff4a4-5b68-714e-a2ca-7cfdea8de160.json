@@ -1,0 +1,112 @@
+{
+  "aliases": [],
+  "canonical_hash": "94041eadd06b8e6aeec81c8f8f2d2829c2e971913f67dab07750224c201314f9",
+  "columns": [
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7352-b010-e2ca4e6deb4d",
+      "name": "campaign_id",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7b49-97ab-596c800b692d",
+      "name": "campaign_name",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-76ea-8d4c-9eb4782627dd",
+      "name": "objective_type",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7d3d-ba22-c1373fe1a06f",
+      "name": "channel_group",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7d95-8b34-bc2fe7c3f3dd",
+      "name": "market_zone",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-78e7-b89f-cc39a7e6ff3b",
+      "name": "budget_units",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7c12-8398-d6063f71d471",
+      "name": "start_date",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7de8-aa19-cb21614f3b5a",
+      "name": "end_date",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7b60-bc1a-3c29ab4a0de6",
+      "name": "campaign_status",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7f5e-bfc6-24e66c3dce7a",
+      "name": "priority_band",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7379-898b-f66b0d4a17f6",
+      "name": "planned_reach",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-72ec-9d34-7ca3b05322af",
+      "name": "planned_response",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-71a3-80ae-cbc959681239",
+      "name": "experiment_flag",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-71fa-afdf-4f5390566c14",
+      "name": "source_created_at",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-7497-810a-675826e488e0",
+      "name": "source_updated_at",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_019ff4a4-5b68-70a3-af65-7c6c804c4bc6",
+      "name": "loaded_at",
+      "status": "active"
+    }
+  ],
+  "locator": {
+    "catalog": "synthetic_workspace",
+    "schema_name": "marketing_insight",
+    "source_system_id": "unspecified",
+    "table_name": "marketing_campaign"
+  },
+  "schema_hash": "4d8969cefdc3de541532b7a2a7ac1cc9dd37f958dd7519c53d4871647d3e1c97",
+  "status": "active",
+  "table_id": "tbl_019ff4a4-5b68-714e-a2ca-7cfdea8de160",
+  "version": 1
+}

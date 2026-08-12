@@ -1,0 +1,38 @@
+[
+  {
+    "link_id": "lnk_019ff4a4-b980-705c-ab25-40fd24689168",
+    "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+    "required": true,
+    "semantic_dataset": null,
+    "table_id": "tbl_019ff4a4-5b68-714e-a2ca-7cfdea8de160",
+    "table_version": 1,
+    "usage": "SOURCE"
+  },
+  {
+    "link_id": "lnk_019ff4a4-b980-7310-8e03-0dd7a99cf8d0",
+    "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+    "required": true,
+    "semantic_dataset": null,
+    "table_id": "tbl_019ff4a4-5b68-7f88-9ccc-50a2d7f4d37b",
+    "table_version": 1,
+    "usage": "SOURCE"
+  },
+  {
+    "link_id": "lnk_019ff4a4-b980-757b-9118-d5235a2dbcd4",
+    "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+    "required": true,
+    "semantic_dataset": null,
+    "table_id": "tbl_019ff4a4-5b69-746b-9cbb-6a83d4511b84",
+    "table_version": 1,
+    "usage": "SOURCE"
+  },
+  {
+    "link_id": "lnk_019ff4a4-b980-76a4-b3a5-3539f08b6d24",
+    "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+    "required": true,
+    "semantic_dataset": null,
+    "table_id": "tbl_019ff4a4-5b69-7365-af6b-56241697bcc1",
+    "table_version": 1,
+    "usage": "SOURCE"
+  }
+]
