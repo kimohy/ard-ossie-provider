@@ -23,6 +23,7 @@ from ard_ossie.application.processing import (
     ProcessingRequest,
     ProcessingService,
     provider_from_environment,
+    validate_processing_invocation_id,
 )
 from ard_ossie.application.release_detection import (
     ReleaseDetectionRequest,
@@ -90,6 +91,7 @@ def process_reconcile_workflow(
 ) -> None:
     command = "workflow.process-reconcile"
     paths = _repository_paths(repository)
+    invocation_id = _validated_processing_invocation_option(invocation_id)
 
     def run() -> WorkflowResult:
         request = ProcessingReconcileRequest(
@@ -193,6 +195,7 @@ def process_workflow(
 ) -> None:
     command = "workflow.process"
     paths = _repository_paths(repository)
+    invocation_id = _validated_processing_invocation_option(invocation_id)
 
     def run() -> WorkflowResult:
         request = ProcessingRequest(
@@ -461,6 +464,13 @@ def _repository_paths(repository: Path):
     from ard_ossie.adapters.filesystem import RepositoryPaths
 
     return RepositoryPaths(repository)
+
+
+def _validated_processing_invocation_option(value: str) -> str:
+    try:
+        return validate_processing_invocation_id(value)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--invocation-id") from None
 
 
 def _issue_authorization_service(repository_name: str, paths):

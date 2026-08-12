@@ -82,9 +82,7 @@ class ProcessingReconcileRequest(StrictModel):
     @field_validator("invocation_id")
     @classmethod
     def validate_invocation_id(cls, value: str) -> str:
-        if _INVOCATION_ID.fullmatch(value) is None:
-            raise ValueError("INVALID_PROCESSING_INVOCATION_ID")
-        return value
+        return validate_processing_invocation_id(value)
 
 
 class ProcessingService:
@@ -513,6 +511,12 @@ def _validated_branch(value: str) -> str:
         or value.endswith(("/", ".", ".lock"))
     ):
         raise ValueError("INVALID_BRANCH")
+    return value
+
+
+def validate_processing_invocation_id(value: str) -> str:
+    if _INVOCATION_ID.fullmatch(value) is None:
+        raise ValueError("INVALID_PROCESSING_INVOCATION_ID")
     return value
 
 

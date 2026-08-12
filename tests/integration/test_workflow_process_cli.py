@@ -345,3 +345,45 @@ def test_workflow_process_cli_invalidates_stale_envelope_before_unhandled_failur
 
     assert result.exit_code == 1
     assert not result_path.exists()
+
+
+def test_workflow_process_cli_rejects_invalid_invocation_before_execution(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class UnexpectedService:
+        def run(self, request):
+            raise AssertionError("processor must not run")
+
+    monkeypatch.setattr(
+        workflow_cli,
+        "_processing_service",
+        lambda repository_name, paths: UnexpectedService(),
+    )
+
+    for invalid_invocation_id in ("invalid invocation", "x" * 129):
+        result = CliRunner().invoke(
+            app,
+            [
+                "workflow",
+                "process",
+                "--product-key",
+                "sales-order",
+                "--branch",
+                "ard/example",
+                "--pr-number",
+                "7",
+                "--expected-head",
+                "a" * 40,
+                "--invocation-id",
+                invalid_invocation_id,
+                "--repository-name",
+                "owner/repository",
+                "--repository",
+                str(tmp_path),
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "INVALID_PROCESSING_INVOCATION_ID" in result.output
+    assert not (tmp_path / ".ard" / "run" / "workflow.process-result.json").exists()
