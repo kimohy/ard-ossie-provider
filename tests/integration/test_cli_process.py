@@ -132,7 +132,9 @@ class FakeSemanticProvider:
                     "evidence": evidence,
                     "status": "ai_suggested",
                 },
-            ]
+            ],
+            "metrics": [],
+            "product_facts": [],
         }
 
 
@@ -308,6 +310,7 @@ class FakeMetricProvider:
                     "status": "ai_suggested",
                 }
             ],
+            "product_facts": [],
         }
 
 

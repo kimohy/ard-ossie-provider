@@ -219,6 +219,54 @@
       "title": "MetricIR",
       "type": "object"
     },
+    "ProductFactIR": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "description",
+            "purpose",
+            "domain",
+            "data_type",
+            "storage_location",
+            "source_system",
+            "source_name",
+            "tag",
+            "access",
+            "security_classification",
+            "owner",
+            "contact",
+            "consumer",
+            "refresh_schedule",
+            "freshness",
+            "sla",
+            "ai_readiness",
+            "quality",
+            "constraint",
+            "related_link"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "ProductFactIR",
+      "type": "object"
+    },
     "RelationshipIR": {
       "additionalProperties": false,
       "properties": {
@@ -407,16 +455,18 @@
       "default": null,
       "title": "Instructions"
     },
-    "product_document_markdown": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
-      "default": null,
-      "title": "Product Document Markdown"
-    },
     "metrics": {
       "items": {
         "$ref": "#/$defs/MetricIR"
       },
       "title": "Metrics",
+      "type": "array"
+    },
+    "product_facts": {
+      "items": {
+        "$ref": "#/$defs/ProductFactIR"
+      },
+      "title": "Product Facts",
       "type": "array"
     },
     "product_id": {

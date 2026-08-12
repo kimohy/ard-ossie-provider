@@ -339,6 +339,14 @@ def test_schema_verifier_rejects_valid_but_stale_checked_in_schema(
         tools.run("schemas")
 
 
+def test_checked_in_schemas_are_synchronized_with_models(tmp_path: Path) -> None:
+    source = Path(__file__).parents[2] / "schemas"
+    shutil.copytree(source, tmp_path / "schemas")
+    tools = RepositoryVerificationTools(RepositoryPaths(tmp_path), runner=None)  # type: ignore[arg-type]
+
+    tools.run("schemas")
+
+
 def test_secret_scan_streams_files_larger_than_previous_limit(tmp_path: Path) -> None:
     payload = b"x" * (6 * 1024 * 1024) + b"sk-" + b"s" * 24
     (tmp_path / "large-fixture.bin").write_bytes(payload)

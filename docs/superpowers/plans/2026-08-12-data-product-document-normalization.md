@@ -313,3 +313,21 @@ git commit -m "feat: normalize data product documentation"
 - [x] **Step 5: Re-run verification at the exact commit**
 
 Repeat pytest, Ruff, workflow parsing, and `uv build`, then assert `git status --short` is empty.
+
+### Task 7: Address pre-merge review findings
+
+**Files:**
+- Modify: `src/ard_ossie/docling_parser.py`
+- Modify: `src/ard_ossie/pipeline.py`
+- Modify: `schemas/ir/product-ir.schema.json`
+- Test: `tests/integration/test_cli_process.py`
+- Test: `tests/integration/test_docling_pipeline.py`
+- Test: `tests/unit/test_pipeline.py`
+- Test: `tests/unit/test_repository_check_service.py`
+
+- [x] Require every provider response collection at the Pydantic boundary.
+- [x] Match citations against parser-produced evidence instead of trusting a hash and excerpt.
+- [x] Partition an AI-generated label and its adjacent value out of citable product evidence.
+- [x] Make case-insensitive duplicate selection independent of provider order.
+- [x] Synchronize the checked-in ProductIR JSON Schema with the typed model.
+- [x] Add adversarial and repository-gate regression coverage for every review finding.

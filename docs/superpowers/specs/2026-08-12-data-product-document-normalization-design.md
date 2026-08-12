@@ -102,9 +102,15 @@ HTML item without page provenance, the parser records the item index, hierarchy 
 path, and a bounded text excerpt. This prevents the current document-only fallback from making
 all page text share one undifferentiated evidence reference.
 
+When Docling emits an `(AI 자동생성)` field label and its value as adjacent items, the parser
+partitions both items into an internal excluded-evidence collection. Excluded evidence is not sent
+to the provider as citable product evidence. The validator also rejects an excluded citation if a
+provider attempts to reconstruct it.
+
 Validation requires every product fact to cite the product HTML source and rejects unknown source
-hashes, absent excerpts, unknown kinds, malformed values, and conflicting singleton facts. Facts
-below the existing confidence threshold are not included in the IR.
+hashes, absent excerpts, citations that do not exactly match parser-produced evidence, explicitly
+excluded AI-generated evidence, unknown kinds, malformed values, and conflicting singleton facts.
+Facts below the existing confidence threshold are not included in the IR.
 
 ## 7. Typed IR and rendering
 

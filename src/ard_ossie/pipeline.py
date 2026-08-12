@@ -15,7 +15,7 @@ import yaml
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from ard_ossie.canonical import canonical_hash, schema_hash
-from ard_ossie.docling_parser import DoclingParser, ParsedDocument
+from ard_ossie.docling_parser import DoclingParser, Evidence, ParsedDocument
 from ard_ossie.excel_adapter import DictionaryTable, ParsedDictionary, parse_dictionary
 from ard_ossie.identity import DuplicateDecision, DuplicateReport, classify_product, classify_table
 from ard_ossie.ids import new_id
@@ -137,9 +137,9 @@ class ProductConfig(StrictModel):
 
 
 class SuggestionBatch(StrictModel):
-    suggestions: list[AISuggestion] = Field(default_factory=list)
-    metrics: list[MetricSuggestion] = Field(default_factory=list)
-    product_facts: list[ProductFactSuggestion] = Field(default_factory=list)
+    suggestions: list[AISuggestion]
+    metrics: list[MetricSuggestion]
+    product_facts: list[ProductFactSuggestion]
 
 
 class ProcessResult(StrictModel):
@@ -174,7 +174,7 @@ def process_product(
     product_id = config.product_id
     table_drafts = _resolve_tables(config, dictionary, registry)
     configured_description = config.description
-    suggestion_batch = SuggestionBatch()
+    suggestion_batch = SuggestionBatch(suggestions=[], metrics=[], product_facts=[])
     product_facts = _validate_product_facts(
         [],
         product_document,
@@ -1059,6 +1059,34 @@ _PRODUCT_FACT_SINGLETONS = frozenset(
 _PRODUCT_FACT_POSITION = {
     kind: position for position, kind in enumerate(_PRODUCT_FACT_KIND_ORDER)
 }
+_AI_GENERATED_EVIDENCE = re.compile(
+    r"(?:\(\s*)?AI\s*(?:자동\s*생성|generated)(?:\s*\))?",
+    re.IGNORECASE,
+)
+
+
+def _product_evidence_key(evidence: Evidence) -> tuple[str, str, str, str | None]:
+    locator = {key: value for key, value in evidence.locator.items() if value is not None}
+    return (
+        evidence.source_hash,
+        evidence.role.value,
+        json.dumps(locator, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        evidence.excerpt,
+    )
+
+
+def _product_fact_input_key(fact: ProductFactSuggestion) -> tuple[int, str, str, str]:
+    return (
+        _PRODUCT_FACT_POSITION[fact.kind],
+        fact.value.casefold(),
+        fact.value,
+        json.dumps(
+            fact.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
 
 
 def _validate_product_facts(
@@ -1069,7 +1097,12 @@ def _validate_product_facts(
 ) -> list[ProductFactIR]:
     accepted: dict[tuple[str, str], ProductFactIR] = {}
     singleton_values: dict[str, str] = {}
-    for fact in facts:
+    known_evidence = {_product_evidence_key(item) for item in product_document.evidence}
+    excluded_evidence = {
+        _product_evidence_key(item)
+        for item in product_document.excluded_product_fact_evidence
+    }
+    for fact in sorted(facts, key=_product_fact_input_key):
         if fact.confidence < 0.7:
             continue
         for evidence in fact.evidence:
@@ -1079,6 +1112,13 @@ def _validate_product_facts(
                 raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_SOURCE_UNKNOWN")
             if not evidence.excerpt or not evidence.excerpt.strip():
                 raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_EXCERPT_REQUIRED")
+            evidence_key = _product_evidence_key(evidence)
+            if evidence_key in excluded_evidence:
+                raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_AI_GENERATED")
+            if evidence_key not in known_evidence:
+                raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_UNKNOWN")
+            if _AI_GENERATED_EVIDENCE.search(evidence.excerpt):
+                raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_AI_GENERATED")
         normalized_key = fact.value.casefold()
         key = (fact.kind, normalized_key)
         if key in accepted:

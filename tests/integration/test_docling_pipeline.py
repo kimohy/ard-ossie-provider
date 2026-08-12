@@ -27,6 +27,19 @@ class FakeHtmlDocument:
         yield item, 2
 
 
+class FakeAiGeneratedHtmlDocument:
+    def export_to_markdown(self) -> str:
+        return "# 제품 개요\n\n(AI 자동생성) 데이터 요약\n\n자동 요약 값\n\n사용자 설명"
+
+    def iterate_items(self):
+        for text in (
+            "(AI 자동생성) 데이터 요약",
+            "자동 요약 값",
+            "사용자 설명",
+        ):
+            yield SimpleNamespace(text=text, prov=[]), 5
+
+
 class FakeConverter:
     def __init__(self, document: object | None = None) -> None:
         self.converted_path: str | None = None
@@ -89,6 +102,62 @@ def test_docling_adapter_records_item_evidence_without_page_provenance(
             },
             excerpt="사용자가 입력한 제품 목적",
         )
+    ]
+
+
+def test_docling_adapter_excludes_ai_generated_label_and_adjacent_value_from_fact_evidence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "product.html"
+    path.write_text("<html><body>AI summary fixture</body></html>", encoding="utf-8")
+    source = SourceFile(
+        role=SourceRole.PRODUCT_HTML,
+        path=path,
+        relative_path="product-info/product.html",
+        sha256="b" * 64,
+        size_bytes=path.stat().st_size,
+    )
+
+    parsed = DoclingParser(converter=FakeConverter(FakeAiGeneratedHtmlDocument())).parse(source)
+
+    assert [item.excerpt for item in parsed.evidence] == ["사용자 설명"]
+    assert [item.excerpt for item in parsed.excluded_product_fact_evidence] == [
+        "(AI 자동생성) 데이터 요약",
+        "자동 요약 값",
+    ]
+    assert "excluded_product_fact_evidence" not in parsed.model_dump(mode="json")
+
+
+def test_real_docling_excludes_ai_generated_heading_and_direct_child_value(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "product.html"
+    path.write_text(
+        """<html><body>
+        <h2>(AI 자동생성) 데이터 요약</h2>
+        <p>자동 생성된 요약 값</p>
+        <h2>사용자 설명</h2>
+        <p>사용자가 작성한 설명 값</p>
+        </body></html>""",
+        encoding="utf-8",
+    )
+    source = SourceFile(
+        role=SourceRole.PRODUCT_HTML,
+        path=path,
+        relative_path="product-info/product.html",
+        sha256="c" * 64,
+        size_bytes=path.stat().st_size,
+    )
+
+    parsed = DoclingParser().parse(source)
+
+    assert [item.excerpt for item in parsed.excluded_product_fact_evidence] == [
+        "(AI 자동생성) 데이터 요약",
+        "자동 생성된 요약 값",
+    ]
+    assert [item.excerpt for item in parsed.evidence] == [
+        "사용자 설명",
+        "사용자가 작성한 설명 값",
     ]
 
 

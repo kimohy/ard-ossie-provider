@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import Field, JsonValue
@@ -20,6 +21,7 @@ class ParsedDocument(StrictModel):
     source_hash: Sha256
     markdown: str
     evidence: list[Evidence] = Field(default_factory=list)
+    excluded_product_fact_evidence: list[Evidence] = Field(default_factory=list, exclude=True)
 
 
 class DoclingParser:
@@ -35,7 +37,11 @@ class DoclingParser:
         document = result.document
         markdown = document.export_to_markdown()
         evidence = _collect_evidence(document, source)
-        if not evidence:
+        evidence, excluded_product_fact_evidence = _partition_product_fact_evidence(
+            evidence,
+            source.role,
+        )
+        if not evidence and not excluded_product_fact_evidence:
             evidence = [
                 Evidence(
                     source_hash=source.sha256,
@@ -48,6 +54,7 @@ class DoclingParser:
             source_hash=source.sha256,
             markdown=markdown,
             evidence=evidence,
+            excluded_product_fact_evidence=excluded_product_fact_evidence,
         )
 
 
@@ -103,3 +110,45 @@ def _collect_evidence(document: Any, source: SourceFile) -> list[Evidence]:
                 )
             )
     return collected
+
+
+_AI_GENERATED_LABEL = re.compile(
+    r"(?:\(\s*)?AI\s*(?:자동\s*생성|generated)(?:\s*\))?",
+    re.IGNORECASE,
+)
+
+
+def _partition_product_fact_evidence(
+    evidence: list[Evidence],
+    role: SourceRole,
+) -> tuple[list[Evidence], list[Evidence]]:
+    if role is not SourceRole.PRODUCT_HTML:
+        return evidence, []
+
+    excluded_positions: set[int] = set()
+    for position, item in enumerate(evidence):
+        if not item.excerpt or _AI_GENERATED_LABEL.search(item.excerpt) is None:
+            continue
+        excluded_positions.add(position)
+        if position + 1 >= len(evidence):
+            continue
+        following = evidence[position + 1]
+        item_index = item.locator.get("item_index")
+        following_index = following.locator.get("item_index")
+        item_level = item.locator.get("level")
+        following_level = following.locator.get("level")
+        if (
+            isinstance(item_index, int)
+            and not isinstance(item_index, bool)
+            and isinstance(item_level, int)
+            and not isinstance(item_level, bool)
+            and following_index == item_index + 1
+            and following.locator.get("document") == item.locator.get("document")
+            and following_level in {item_level, item_level + 1}
+        ):
+            excluded_positions.add(position + 1)
+
+    return (
+        [item for position, item in enumerate(evidence) if position not in excluded_positions],
+        [item for position, item in enumerate(evidence) if position in excluded_positions],
+    )
