@@ -63,7 +63,8 @@ parse it.
 ## 5. Canonical product facts
 
 The structured response accepts only the following fact kinds. A fact contains a kind, a concise
-value, confidence, and one or more source evidence references.
+value, confidence, and one or more request-local source evidence identifiers. Trusted code
+resolves those identifiers to original evidence objects before a fact enters the IR.
 
 | Section | Fact kinds | Multiplicity |
 |---|---|---:|
@@ -85,6 +86,11 @@ are deduplicated; conflicting singleton facts fail closed instead of selecting o
 
 The existing provider call remains a single strict Structured Outputs request. Its response gains
 a required `product_facts` array in addition to the current semantic suggestions and metrics.
+Each accepted product evidence item in the prompt has a deterministic request-local
+`evidence_id`; product facts return those identifiers through `evidence_ids` instead of
+reconstructing source hashes, locators, and excerpts. Semantic suggestions and metrics retain
+their existing compound evidence objects. The complete amendment is specified in
+[`2026-08-12-product-fact-evidence-ids-design.md`](2026-08-12-product-fact-evidence-ids-design.md).
 
 The system instruction requires the provider to:
 
@@ -95,7 +101,7 @@ The system instruction requires the provider to:
 - ignore fields with no entered value;
 - ignore page fields explicitly labeled as AI-generated summaries;
 - return no fact when the source does not support it;
-- cite product-HTML evidence for every returned fact.
+- cite supplied product-HTML `evidence_id` values for every returned fact.
 
 HTML evidence must carry the product source hash and a non-empty excerpt. When Docling exposes an
 HTML item without page provenance, the parser records the item index, hierarchy level, document
@@ -107,10 +113,12 @@ partitions both items into an internal excluded-evidence collection. Excluded ev
 to the provider as citable product evidence. The validator also rejects an excluded citation if a
 provider attempts to reconstruct it.
 
-Validation requires every product fact to cite the product HTML source and rejects unknown source
-hashes, absent excerpts, citations that do not exactly match parser-produced evidence, explicitly
-excluded AI-generated evidence, unknown kinds, malformed values, and conflicting singleton facts.
-Facts below the existing confidence threshold are not included in the IR.
+Validation rejects empty, repeated, or unknown evidence identifiers and resolves known identifiers
+only through the current request catalog. It then applies the existing product-HTML role, source
+hash, excerpt, excluded AI-generated evidence, unknown-kind, malformed-value, and conflicting
+singleton checks to the original parser-produced objects. Facts below the existing confidence
+threshold are not included in the IR. Request-local IDs are not written to the IR or quality
+artifacts.
 
 ## 7. Typed IR and rendering
 
@@ -132,8 +140,8 @@ as a fallback and does not synthesize missing sections.
 1. Docling parses the HTML and captures item-level evidence excerpts.
 2. The existing LLM request returns semantic suggestions, metrics, and product facts under one
    strict schema.
-3. The pipeline validates fact kind, value, confidence, source hash, excerpt, and singleton
-   conflicts.
+3. The pipeline resolves evidence IDs and validates fact kind, value, confidence, source hash,
+   excerpt, and singleton conflicts against original parser evidence.
 4. Accepted facts become typed `ProductIR` content.
 5. Jinja renders only non-empty canonical sections and the validated dataset table.
 6. The same run compiles and writes `generated/ossie-model.json` exactly as before.
@@ -173,7 +181,8 @@ upgrade does not itself require a product version increment.
 - No portal navigation, buttons, instructional notes, attachment UI, privacy warning, empty form
   field, footer, or chatbot content is published.
 - A missing value causes its fact and, when applicable, its whole section to be absent.
-- Every LLM-derived product fact has product-HTML evidence with a non-empty excerpt.
+- Every LLM-derived product fact resolves to original product-HTML evidence with a non-empty
+  excerpt, and no request-local evidence ID is published.
 - Dataset rows remain derived from the dictionary/registry and stable by table ID.
 - `products/{product_key}/generated/ossie-model.json` continues to be written during the same
   processing run.
