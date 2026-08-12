@@ -333,6 +333,7 @@ def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
     assert executable["permissions"] == {"contents": "read"}
     assert "GH_TOKEN" not in str(executable)
     assert executable["strategy"]["matrix"]["verification_group"] == [
+        "model-schemas",
         "pytest",
         "wheel",
     ]
