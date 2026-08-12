@@ -15,6 +15,7 @@ import yaml
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from sqlglot import Dialect, Parser, exp
 from sqlglot.errors import SqlglotError
+from sqlglot.optimizer.annotate_types import annotate_types
 
 from ard_ossie.canonical import canonical_hash, schema_hash
 from ard_ossie.docling_parser import DoclingParser, Evidence, ParsedDocument
@@ -1338,6 +1339,35 @@ def _canonical_metric_identifier(
     return exp.to_identifier(value, quoted=quoted)
 
 
+_METRIC_DIVISION_TYPE = "DECIMAL(38, 12)"
+
+
+def _normalize_metric_divisions(
+    expression: exp.Expr,
+    *,
+    dataset_name: str,
+    columns: list[ColumnIR],
+) -> exp.Expr:
+    if expression.find(exp.Div) is None:
+        return expression
+    query = exp.select(expression.copy()).from_(
+        exp.Table(this=_canonical_metric_identifier(dataset_name, source=None))
+    )
+    annotate_types(
+        query,
+        schema={dataset_name: {column.name: column.data_type for column in columns}},
+    )
+    normalized = query.expressions[0]
+    for division in reversed(list(normalized.find_all(exp.Div))):
+        numerator = division.this
+        if numerator.type.is_type(*exp.DataType.INTEGER_TYPES):
+            division.set(
+                "this",
+                exp.cast(numerator.copy(), _METRIC_DIVISION_TYPE),
+            )
+    return normalized
+
+
 def _prepare_metrics(
     suggestions: list[MetricSuggestion],
     drafts: list[_TableDraft],
@@ -1408,6 +1438,16 @@ def _prepare_metrics(
                     source=source_table,
                 ),
             )
+        dataset_draft = next(
+            draft
+            for draft in drafts
+            if draft.locator.table_name.casefold() == dataset_key
+        )
+        normalized = _normalize_metric_divisions(
+            normalized,
+            dataset_name=canonical_dataset,
+            columns=dataset_draft.columns,
+        )
         normalized_expression = normalized.sql()
         _parse_metric_scalar(normalized_expression)
         prepared.append(
