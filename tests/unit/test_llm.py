@@ -100,6 +100,29 @@ def test_provider_validates_structured_response_against_local_schema() -> None:
     assert "secret-value" not in repr(provider)
 
 
+def test_provider_omits_sampling_parameters_from_structured_request() -> None:
+    client = FakeClient('{"terms":["net revenue"]}')
+    provider = OpenAICompatibleProvider(
+        base_url="https://llm.example.com/v1",
+        api_key=SecretStr("secret-value"),
+        model="example-model",
+        client=client,
+    )
+
+    provider.generate_structured(
+        schema={
+            "type": "object",
+            "properties": {"terms": {"type": "array", "items": {"type": "string"}}},
+            "required": ["terms"],
+            "additionalProperties": False,
+        },
+        messages=[{"role": "user", "content": "extract"}],
+    )
+
+    assert client.completions.last_request is not None
+    assert {"temperature", "top_p"}.isdisjoint(client.completions.last_request)
+
+
 def test_provider_rejects_schema_invalid_response() -> None:
     provider = OpenAICompatibleProvider(
         base_url="https://llm.example.com/v1",
