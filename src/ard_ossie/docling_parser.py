@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import Field, JsonValue
@@ -24,13 +25,26 @@ class ParsedDocument(StrictModel):
     excluded_product_fact_evidence: list[Evidence] = Field(default_factory=list, exclude=True)
 
 
+EmbeddedPdfParser = Callable[[SourceFile], ParsedDocument | None]
+
+
 class DoclingParser:
-    def __init__(self, *, converter: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        converter: Any | None = None,
+        embedded_pdf_parser: EmbeddedPdfParser | None = None,
+    ) -> None:
         self._converter = converter
+        self._embedded_pdf_parser = embedded_pdf_parser or _parse_embedded_pdf
 
     def parse(self, source: SourceFile) -> ParsedDocument:
         if source.role is SourceRole.DICTIONARY_EXCEL:
             raise ValueError("dictionary Excel is handled by the cell-preserving adapter")
+        if source.role is SourceRole.SEMANTIC_DOCUMENT and source.path.suffix.lower() == ".pdf":
+            embedded = self._embedded_pdf_parser(source)
+            if embedded is not None:
+                return embedded
 
         converter = self._converter or _new_converter()
         result = converter.convert(str(source.path))
@@ -116,6 +130,64 @@ _AI_GENERATED_LABEL = re.compile(
     r"(?:\(\s*)?AI\s*(?:자동\s*생성|generated)(?:\s*\))?",
     re.IGNORECASE,
 )
+
+
+def _parse_embedded_pdf(
+    source: SourceFile,
+    *,
+    pdfium: Any | None = None,
+) -> ParsedDocument | None:
+    if pdfium is None:
+        import pypdfium2
+
+        pdfium = pypdfium2
+
+    try:
+        document = pdfium.PdfDocument(source.path)
+    except pdfium.PdfiumError:
+        return None
+
+    pages: list[str] = []
+    evidence: list[Evidence] = []
+    try:
+        if len(document) == 0:
+            return None
+        for page_index in range(len(document)):
+            page = document[page_index]
+            try:
+                text_page = page.get_textpage()
+                try:
+                    text = text_page.get_text_range()
+                finally:
+                    text_page.close()
+            finally:
+                page.close()
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+            if not normalized:
+                return None
+            pages.append(normalized)
+            evidence.append(
+                Evidence(
+                    source_hash=source.sha256,
+                    role=source.role,
+                    locator={
+                        "document": source.relative_path,
+                        "page": page_index + 1,
+                    },
+                    excerpt=normalized[:500],
+                )
+            )
+    except pdfium.PdfiumError:
+        return None
+    finally:
+        document.close()
+
+    return ParsedDocument(
+        role=source.role,
+        source_hash=source.sha256,
+        markdown="\n\n".join(pages),
+        evidence=evidence,
+    )
 
 
 def _partition_product_fact_evidence(

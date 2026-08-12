@@ -1258,26 +1258,15 @@ def _apply_suggestions(
 ) -> tuple[ProductConfig, list[_TableDraft]]:
     updated_config = config.model_copy(deep=True)
     updated_drafts = [draft.model_copy(deep=True) for draft in drafts]
-    by_table = {draft.table_id: draft for draft in updated_drafts}
     for suggestion in suggestions:
         if suggestion.confidence < 0.7:
             continue
         if suggestion.field_path == "product.description" and not updated_config.description:
             updated_config.description = str(suggestion.value)
-        elif suggestion.field_path == "product.synonyms":
-            if isinstance(suggestion.value, list):
-                updated_config.synonyms = [str(item) for item in suggestion.value]
-        else:
-            parts = suggestion.field_path.split(".")
-            if len(parts) == 3 and parts[0] == "tables" and parts[2] == "description":
-                if not by_table[parts[1]].description:
-                    by_table[parts[1]].description = str(suggestion.value)
-            elif len(parts) == 5 and parts[0] == "tables" and parts[2] == "columns":
-                column = next(
-                    item for item in by_table[parts[1]].columns if item.column_id == parts[3]
-                )
-                if parts[4] == "description" and not column.description:
-                    column.description = str(suggestion.value)
+        elif suggestion.field_path == "product.synonyms" and isinstance(
+            suggestion.value, list
+        ):
+            updated_config.synonyms = [str(item) for item in suggestion.value]
     return updated_config, updated_drafts
 
 
