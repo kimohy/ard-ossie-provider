@@ -6,10 +6,12 @@ from pathlib import Path
 import pytest
 import yaml
 from docx import Document
+from jsonschema import validate
 from openpyxl import Workbook
 from typer.testing import CliRunner
 
 from ard_ossie.cli import app
+from ard_ossie.ossie_compiler import load_ossie_011_schema
 from ard_ossie.pipeline import (
     ProviderExecutionError,
     ProviderFailureKind,
@@ -130,8 +132,109 @@ class FakeSemanticProvider:
                     "evidence": evidence,
                     "status": "ai_suggested",
                 },
-            ]
+            ],
+            "metrics": [],
+            "product_facts": [],
         }
+
+
+class NoisyPortalProductProvider(FakeSemanticProvider):
+    def generate_structured(self, *, schema, messages):
+        product = json.loads(messages[1]["content"])["product"]
+
+        def evidence_for(text: str) -> dict[str, object]:
+            return next(
+                item
+                for item in product["evidence"]
+                if text in str(item.get("excerpt") or "")
+            )
+
+        return {
+            "suggestions": [],
+            "metrics": [],
+            "product_facts": [
+                {
+                    "kind": "purpose",
+                    "value": "주문 분석 지원",
+                    "confidence": 0.98,
+                    "evidence": [evidence_for("주문 분석 지원")],
+                },
+                {
+                    "kind": "domain",
+                    "value": "영업",
+                    "confidence": 0.97,
+                    "evidence": [evidence_for("도메인: 영업")],
+                },
+                {
+                    "kind": "tag",
+                    "value": "주문",
+                    "confidence": 0.96,
+                    "evidence": [evidence_for("태그: 주문")],
+                },
+            ],
+        }
+
+
+def test_pipeline_normalizes_user_facts_and_excludes_portal_boilerplate(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    portal_sentinels = (
+        "데이터 상품 홈",
+        "작성 도움말을 확인하세요",
+        "첨부파일 다운로드 12KB",
+        "개인정보를 입력하지 마세요",
+        "빈 입력 필드",
+        "AI가 만든 원문에 없는 요약",
+        "이전 다음",
+        "포털 푸터",
+        "무엇을 도와드릴까요",
+    )
+    (product / "sources" / "product-info" / "product.html").write_text(
+        """<html><body>
+          <nav>데이터 상품 홈</nav>
+          <main>
+            <h1>Sales Order</h1>
+            <p>목적: 주문 분석 지원</p>
+            <p>도메인: 영업</p>
+            <p>태그: 주문</p>
+            <p>작성 도움말을 확인하세요</p>
+            <button>첨부파일 다운로드 12KB</button>
+            <aside>개인정보를 입력하지 마세요</aside>
+            <label>빈 입력 필드</label><input value="">
+            <p>(AI 자동생성) AI가 만든 원문에 없는 요약</p>
+          </main>
+          <a>이전 다음</a><footer>포털 푸터</footer>
+          <section>무엇을 도와드릴까요</section>
+        </body></html>""",
+        encoding="utf-8",
+    )
+
+    process_product(
+        product,
+        registry_root=tmp_path / "registry",
+        provider=NoisyPortalProductProvider(),
+    )
+
+    generated = product / "generated"
+    markdown = (generated / "data-product.md").read_text(encoding="utf-8")
+    assert "**Purpose:** 주문 분석 지원" in markdown
+    assert "**Domain:** 영업" in markdown
+    assert "**Tag:** 주문" in markdown
+    assert "## Parsed source" not in markdown
+    for sentinel in portal_sentinels:
+        assert sentinel not in markdown
+
+    ossie = json.loads((generated / "ossie-model.json").read_text(encoding="utf-8"))
+    validate(instance=ossie, schema=load_ossie_011_schema())
+    audit = json.loads(
+        (product / "quality" / "llm-suggestions.json").read_text(encoding="utf-8")
+    )
+    assert [fact["kind"] for fact in audit["product_facts"]] == [
+        "purpose",
+        "domain",
+        "tag",
+    ]
 
 
 def test_pipeline_applies_and_audits_evidence_backed_llm_semantics(tmp_path: Path) -> None:
@@ -207,6 +310,7 @@ class FakeMetricProvider:
                     "status": "ai_suggested",
                 }
             ],
+            "product_facts": [],
         }
 
 
