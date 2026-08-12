@@ -1,0 +1,26 @@
+{
+  "artifact_hashes": {
+    "data-dictionary.json": "caced9ae26f3d36eaae15d8318a954617ce393c1925725096ba611339fd7c301",
+    "data-product.md": "2c8b1542397a4c0cfb6579b4debcc24d746f007f61d73c99922ea3b9b5df7cff",
+    "data-semantic.md": "168794e623d923a058e4ad2a7d8625e479041d4505ab06ab2a7f53225ccf2ddd",
+    "ossie-model.json": "af9886be9d1c3a83709a05d8b4636501d8129b775888d89202f77f3ae0862264",
+    "source-manifest.json": "d287d85ca10aa835addc1d40c62eb2b08ddcee1ef6abd52feec75419fa31084a"
+  },
+  "completeness": 1.0,
+  "hard_errors": [],
+  "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+  "product_version": 1,
+  "status": "WARN",
+  "warnings": [
+    {
+      "code": "METRIC_MULTI_DATASET_UNSUPPORTED",
+      "message": "Metric uses multiple datasets and was excluded because join path, cardinality, and grain are not declared",
+      "path": "metrics.Action Signal Rate"
+    },
+    {
+      "code": "METRIC_MULTI_DATASET_UNSUPPORTED",
+      "message": "Metric uses multiple datasets and was excluded because join path, cardinality, and grain are not declared",
+      "path": "metrics.Modeled Efficiency"
+    }
+  ]
+}
