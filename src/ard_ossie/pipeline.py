@@ -304,6 +304,7 @@ def process_product(
             product_id,
             table_records,
             suggestion_batch,
+            product_document,
         )
         raise PipelineValidationError(
             "; ".join(item.code for item in hard_errors),
@@ -372,6 +373,7 @@ def process_product(
             product_id,
             table_records,
             suggestion_batch,
+            product_document,
         )
         _require_registry_state(
             registry_path,
@@ -960,6 +962,22 @@ def _build_mappings(
     ]
 
 
+def _product_evidence_catalog(document: ParsedDocument) -> dict[str, Evidence]:
+    return {
+        f"product-evidence-{position:06d}": evidence
+        for position, evidence in enumerate(document.evidence, start=1)
+    }
+
+
+def _product_prompt_payload(document: ParsedDocument) -> dict[str, object]:
+    payload = document.model_dump(mode="json")
+    payload["evidence"] = [
+        {"evidence_id": evidence_id, **evidence.model_dump(mode="json")}
+        for evidence_id, evidence in _product_evidence_catalog(document).items()
+    ]
+    return payload
+
+
 def _extract_suggestions(
     provider: LLMProvider,
     product_document: ParsedDocument,
@@ -981,7 +999,9 @@ def _extract_suggestions(
                 "content": (
                     "Extract semantic suggestions and evidence-backed product facts. "
                     "Extract business metrics as ANSI SQL expressions when explicitly supported. "
-                    "Every suggestion, metric, and product fact must cite supplied evidence. "
+                    "Suggestions and metrics must cite supplied evidence objects. "
+                    "Product facts must cite supplied product evidence_id values in evidence_ids; "
+                    "do not reproduce product evidence objects. "
                     "Product facts must use only explicit values submitted in the product HTML. "
                     "Ignore navigation, search, menus, buttons, attachment actions and sizes, "
                     "privacy notices, authoring hints, review-only empty fields, fields labeled "
@@ -995,7 +1015,7 @@ def _extract_suggestions(
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "product": product_document.model_dump(mode="json"),
+                        "product": _product_prompt_payload(product_document),
                         "semantic": semantic_document.model_dump(mode="json"),
                     },
                     ensure_ascii=False,
@@ -1089,6 +1109,21 @@ def _product_fact_input_key(fact: ProductFactSuggestion) -> tuple[int, str, str,
     )
 
 
+def _resolve_product_fact_evidence(
+    fact: ProductFactSuggestion,
+    evidence_catalog: dict[str, Evidence],
+) -> list[Evidence]:
+    if len(fact.evidence_ids) != len(set(fact.evidence_ids)):
+        raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_ID_DUPLICATE")
+    resolved: list[Evidence] = []
+    for evidence_id in fact.evidence_ids:
+        evidence = evidence_catalog.get(evidence_id)
+        if evidence is None:
+            raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_UNKNOWN")
+        resolved.append(evidence)
+    return resolved
+
+
 def _validate_product_facts(
     facts: list[ProductFactSuggestion],
     product_document: ParsedDocument,
@@ -1097,15 +1132,15 @@ def _validate_product_facts(
 ) -> list[ProductFactIR]:
     accepted: dict[tuple[str, str], ProductFactIR] = {}
     singleton_values: dict[str, str] = {}
+    evidence_catalog = _product_evidence_catalog(product_document)
     known_evidence = {_product_evidence_key(item) for item in product_document.evidence}
     excluded_evidence = {
         _product_evidence_key(item)
         for item in product_document.excluded_product_fact_evidence
     }
     for fact in sorted(facts, key=_product_fact_input_key):
-        if fact.confidence < 0.7:
-            continue
-        for evidence in fact.evidence:
+        resolved_evidence = _resolve_product_fact_evidence(fact, evidence_catalog)
+        for evidence in resolved_evidence:
             if evidence.role is not SourceRole.PRODUCT_HTML:
                 raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_ROLE_INVALID")
             if evidence.source_hash != product_document.source_hash:
@@ -1119,6 +1154,8 @@ def _validate_product_facts(
                 raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_UNKNOWN")
             if _AI_GENERATED_EVIDENCE.search(evidence.excerpt):
                 raise ValueError("LLM_PRODUCT_FACT_EVIDENCE_AI_GENERATED")
+        if fact.confidence < 0.7:
+            continue
         normalized_key = fact.value.casefold()
         key = (fact.kind, normalized_key)
         if key in accepted:
@@ -1130,7 +1167,7 @@ def _validate_product_facts(
         accepted[key] = ProductFactIR(
             kind=fact.kind,
             value=fact.value,
-            evidence=fact.evidence,
+            evidence=resolved_evidence,
         )
 
     normalized_description = (
@@ -1427,6 +1464,7 @@ def _write_quality(
     product_id: str,
     tables: list[TableRecord],
     suggestions: SuggestionBatch,
+    product_document: ParsedDocument,
 ) -> None:
     quality = root / "quality"
     quality.mkdir(parents=True, exist_ok=True)
@@ -1450,8 +1488,22 @@ def _write_quality(
         ),
         encoding="utf-8",
     )
+    suggestion_payload = suggestions.model_dump(mode="json")
+    evidence_catalog = _product_evidence_catalog(product_document)
+    suggestion_payload["product_facts"] = [
+        {
+            "kind": fact.kind,
+            "value": fact.value,
+            "confidence": fact.confidence,
+            "evidence": [
+                evidence.model_dump(mode="json")
+                for evidence in _resolve_product_fact_evidence(fact, evidence_catalog)
+            ],
+        }
+        for fact in suggestions.product_facts
+    ]
     (quality / "llm-suggestions.json").write_text(
-        _json_text(suggestions.model_dump(mode="json")),
+        _json_text(suggestion_payload),
         encoding="utf-8",
     )
 
