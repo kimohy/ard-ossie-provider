@@ -79,6 +79,7 @@ class AISuggestion(StrictModel):
 class MetricSuggestion(StrictModel):
     name: str
     expression: str
+    dataset_names: list[str] = Field(min_length=1)
     description: str | None = None
     synonyms: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
@@ -181,6 +182,11 @@ def semantic_extraction_schema() -> dict[str, object]:
         "properties": {
             "name": {"type": "string"},
             "expression": {"type": "string"},
+            "dataset_names": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string"},
+            },
             "description": nullable_string,
             "synonyms": {"type": "array", "items": {"type": "string"}},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -190,6 +196,7 @@ def semantic_extraction_schema() -> dict[str, object]:
         "required": [
             "name",
             "expression",
+            "dataset_names",
             "description",
             "synonyms",
             "confidence",

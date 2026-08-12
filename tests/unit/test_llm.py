@@ -80,6 +80,48 @@ def evidence() -> Evidence:
     )
 
 
+def metric_payload() -> dict[str, object]:
+    return {
+        "name": "order_count",
+        "expression": "COUNT(order_id)",
+        "description": "Number of orders",
+        "synonyms": ["orders"],
+        "confidence": 0.9,
+        "evidence": [evidence().model_dump(mode="json")],
+        "status": "ai_suggested",
+    }
+
+
+def test_metric_contract_requires_non_empty_dataset_names() -> None:
+    schema = semantic_extraction_schema()
+    metric_schema = schema["properties"]["metrics"]["items"]
+
+    assert metric_schema["properties"]["dataset_names"] == {
+        "type": "array",
+        "minItems": 1,
+        "items": {"type": "string"},
+    }
+    assert "dataset_names" in metric_schema["required"]
+
+    with pytest.raises(JsonSchemaValidationError):
+        validate(
+            instance={"suggestions": [], "metrics": [metric_payload()], "product_facts": []},
+            schema=schema,
+        )
+
+    with pytest.raises(PydanticValidationError):
+        llm.MetricSuggestion.model_validate(metric_payload())
+    with pytest.raises(PydanticValidationError):
+        llm.MetricSuggestion.model_validate(
+            {**metric_payload(), "dataset_names": []}
+        )
+
+    metric = llm.MetricSuggestion.model_validate(
+        {**metric_payload(), "dataset_names": ["orders"]}
+    )
+    assert metric.dataset_names == ["orders"]
+
+
 def test_semantic_schema_requires_closed_product_facts() -> None:
     schema = semantic_extraction_schema()
     expected_kinds = [

@@ -18,6 +18,7 @@ dependencies = [
   "openpyxl>=3.1,<4",
   "pydantic>=2.12,<3",
   "pyyaml>=6.0,<7",
+  "sqlglot==30.16.0",
   "typer==0.26.8",
 ]
 
