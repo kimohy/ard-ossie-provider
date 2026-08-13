@@ -40,7 +40,9 @@ class StubBootstrapService:
         replace_secret=False,
     ):
         self.applied_api_key = (
-            api_key if api_key is not None else api_key_provider()
+            api_key
+            if api_key is not None
+            else api_key_provider()
             if api_key_provider is not None
             else None
         )
@@ -80,8 +82,8 @@ def test_github_bootstrap_dry_run_never_prompts_for_secret(
             REPOSITORY,
             "--base-url",
             "https://api.openai.com/v1",
-            "--model",
-            "gpt-example",
+            "--profile",
+            "openai-compatible-default",
             "--dry-run",
         ],
     )
@@ -110,8 +112,8 @@ def test_github_bootstrap_collects_secret_only_after_confirmation(
             REPOSITORY,
             "--base-url",
             "https://api.openai.com/v1",
-            "--model",
-            "gpt-example",
+            "--profile",
+            "openai-compatible-default",
         ],
     )
 

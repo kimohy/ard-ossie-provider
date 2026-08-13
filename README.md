@@ -109,17 +109,23 @@ uv run ard workflow issue-intake --event event.json --repository-name owner/repo
 현재 head를 보존한 채 동일 입력으로 수렴시킵니다. 강제 tag 이동이나 branch 덮어쓰기는 하지
 않습니다.
 
-OpenAI-compatible API를 사용할 때만 다음 환경 변수를 설정합니다.
+LLM 모델과 API 방식은 `config/llm-profiles.yaml`의 리뷰된 프로필로 관리합니다. 로컬에서
+기본 OpenAI-compatible 프로필을 사용하려면 다음 값만 설정합니다.
 
 ```bash
 read -s ARD_LLM_API_KEY
 export ARD_LLM_API_KEY
+export ARD_LLM_PROFILE='openai-compatible-default'
 export ARD_LLM_BASE_URL='https://api.openai.com/v1'
-export ARD_LLM_MODEL='your-model'
-export ARD_LLM_API_STYLE='chat_completions'
+uv run ard llm validate
 ```
 
-API 키는 파일에 저장하거나 로그로 출력하지 마세요.
+지원 provider는 OpenAI-compatible, Azure OpenAI, Vertex AI Gemini, Vertex AI Claude입니다.
+`uv run ard llm profiles`로 등록된 프로필을 확인하고, 운영 반영 전에는 보호된
+`ARD LLM provider smoke test` workflow로 text와 structured output을 모두 검증합니다.
+`ARD_LLM_MODEL`과 `ARD_LLM_API_STYLE`은 더 이상 runtime 입력이 아닙니다. API 키와 Vertex
+service-account JSON은 파일에 저장하거나 로그로 출력하지 마세요. 상세한 프로필 예제와
+Variable/Secret 매핑은 [GitHub Actions 설정](docs/github-actions-setup.md)을 참고하세요.
 
 ## 중복과 버전 규칙
 

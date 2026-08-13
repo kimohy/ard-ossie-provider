@@ -103,6 +103,14 @@ class TestWorkflowSecretContract(unittest.TestCase):
             "${{ secrets.ARD_LLM_API_KEY }}",
         )
         self.assertEqual(
+            env["ARD_AZURE_OPENAI_API_KEY"],
+            "${{ secrets.ARD_AZURE_OPENAI_API_KEY }}",
+        )
+        self.assertEqual(
+            env["ARD_VERTEX_CREDENTIALS_JSON"],
+            "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}",
+        )
+        self.assertEqual(
             {name for name, job in jobs.items() if tuple(_secret_references(job))},
             {"process"},
         )

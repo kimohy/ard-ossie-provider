@@ -19,6 +19,7 @@ def test_console_entrypoint_exports_all_command_groups() -> None:
         "model",
         "validate",
         "github",
+        "llm",
         "workflow",
     ):
         assert group in result.stdout

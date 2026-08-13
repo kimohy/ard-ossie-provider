@@ -34,7 +34,9 @@ from ard_ossie.ir import (
 )
 from ard_ossie.llm import (
     AISuggestion,
+    LLMMetadata,
     LLMProvider,
+    LLMResult,
     MetricSuggestion,
     ProductFactSuggestion,
     ProviderExecutionError,
@@ -110,6 +112,7 @@ class QualityReport(StrictModel):
     hard_errors: list[QualityFinding]
     warnings: list[QualityFinding]
     artifact_hashes: dict[str, Sha256]
+    llm_provenance: LLMMetadata | None = None
 
 
 class TableConfig(StrictModel):
@@ -143,6 +146,7 @@ class SuggestionBatch(StrictModel):
     suggestions: list[AISuggestion]
     metrics: list[MetricSuggestion]
     product_facts: list[ProductFactSuggestion]
+    provenance: LLMMetadata | None = Field(default=None, exclude=True)
 
 
 class _PreparedMetrics(StrictModel):
@@ -325,6 +329,7 @@ def process_product(
         hard_errors=hard_errors,
         warnings=warnings,
         artifact_hashes={},
+        llm_provenance=suggestion_batch.provenance,
     )
     if hard_errors:
         _write_quality(
@@ -556,9 +561,7 @@ def _read_registry_directory_portable(
         if _is_link_or_reparse_point(child_stat):
             raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
         if stat.S_ISDIR(child_stat.st_mode):
-            snapshot.update(
-                _read_registry_directory_portable(child_path, relative, child_stat)
-            )
+            snapshot.update(_read_registry_directory_portable(child_path, relative, child_stat))
             continue
         _require_portable_path_type(child_stat, directory=False)
         snapshot[relative] = _read_registry_file_portable(child_path, child_stat)
@@ -623,9 +626,7 @@ def _path_identity(path_stat: os.stat_result) -> tuple[int, int, int, int, int, 
 def _is_link_or_reparse_point(path_stat: os.stat_result) -> bool:
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     file_attributes = getattr(path_stat, "st_file_attributes", 0)
-    return stat.S_ISLNK(path_stat.st_mode) or bool(
-        reparse_flag and file_attributes & reparse_flag
-    )
+    return stat.S_ISLNK(path_stat.st_mode) or bool(reparse_flag and file_attributes & reparse_flag)
 
 
 def _load_registry_snapshot(snapshot: dict[Path, bytes]) -> Registry:
@@ -1083,7 +1084,8 @@ def _extract_suggestions(
             },
         ],
     )
-    batch = SuggestionBatch.model_validate(response)
+    payload = response.structured if isinstance(response, LLMResult) else response
+    batch = SuggestionBatch.model_validate(payload)
     suggestions = validate_semantic_suggestions(batch.suggestions)
     unknown = sorted({item.field_path for item in suggestions} - set(allowed_paths))
     if unknown:
@@ -1095,7 +1097,8 @@ def _extract_suggestions(
     for metric in batch.metrics:
         if any(evidence.source_hash not in source_hashes for evidence in metric.evidence):
             raise ValueError(f"LLM_EVIDENCE_SOURCE_UNKNOWN: metric.{metric.name}")
-    return batch.model_copy(update={"suggestions": suggestions})
+    provenance = response.metadata if isinstance(response, LLMResult) else None
+    return batch.model_copy(update={"suggestions": suggestions, "provenance": provenance})
 
 
 _PRODUCT_FACT_KIND_ORDER = (
@@ -1135,9 +1138,7 @@ _PRODUCT_FACT_SINGLETONS = frozenset(
         "ai_readiness",
     }
 )
-_PRODUCT_FACT_POSITION = {
-    kind: position for position, kind in enumerate(_PRODUCT_FACT_KIND_ORDER)
-}
+_PRODUCT_FACT_POSITION = {kind: position for position, kind in enumerate(_PRODUCT_FACT_KIND_ORDER)}
 _AI_GENERATED_EVIDENCE = re.compile(
     r"(?:\(\s*)?AI\s*(?:자동\s*생성|generated)(?:\s*\))?",
     re.IGNORECASE,
@@ -1194,8 +1195,7 @@ def _validate_product_facts(
     evidence_catalog = _product_evidence_catalog(product_document)
     known_evidence = {_product_evidence_key(item) for item in product_document.evidence}
     excluded_evidence = {
-        _product_evidence_key(item)
-        for item in product_document.excluded_product_fact_evidence
+        _product_evidence_key(item) for item in product_document.excluded_product_fact_evidence
     }
     for fact in sorted(facts, key=_product_fact_input_key):
         resolved_evidence = _resolve_product_fact_evidence(fact, evidence_catalog)
@@ -1233,9 +1233,7 @@ def _validate_product_facts(
         " ".join(configured_description.split()) if configured_description else ""
     )
     if normalized_description:
-        accepted = {
-            key: fact for key, fact in accepted.items() if fact.kind != "description"
-        }
+        accepted = {key: fact for key, fact in accepted.items() if fact.kind != "description"}
         accepted[("description", normalized_description.casefold())] = ProductFactIR(
             kind="description",
             value=normalized_description,
@@ -1263,9 +1261,7 @@ def _apply_suggestions(
             continue
         if suggestion.field_path == "product.description" and not updated_config.description:
             updated_config.description = str(suggestion.value)
-        elif suggestion.field_path == "product.synonyms" and isinstance(
-            suggestion.value, list
-        ):
+        elif suggestion.field_path == "product.synonyms" and isinstance(suggestion.value, list):
             updated_config.synonyms = [str(item) for item in suggestion.value]
     return updated_config, updated_drafts
 
@@ -1428,9 +1424,7 @@ def _prepare_metrics(
                 ),
             )
         dataset_draft = next(
-            draft
-            for draft in drafts
-            if draft.locator.table_name.casefold() == dataset_key
+            draft for draft in drafts if draft.locator.table_name.casefold() == dataset_key
         )
         normalized = _normalize_metric_divisions(
             normalized,
@@ -1439,9 +1433,7 @@ def _prepare_metrics(
         )
         normalized_expression = normalized.sql()
         _parse_metric_scalar(normalized_expression)
-        prepared.append(
-            suggestion.model_copy(update={"expression": normalized_expression})
-        )
+        prepared.append(suggestion.model_copy(update={"expression": normalized_expression}))
     _validate_metric_name_collisions(
         prepared,
         None,
@@ -1628,8 +1620,7 @@ def _build_relationships(
                     QualityFinding(
                         code="RETIRED_RELATIONSHIP_REUSE",
                         message=(
-                            "Retired relationship ID cannot be reused: "
-                            f"{matched.relationship_id}"
+                            f"Retired relationship ID cannot be reused: {matched.relationship_id}"
                         ),
                     )
                 )
