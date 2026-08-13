@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import stat
 from collections.abc import Iterable
 from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
+import ard_ossie.adapters.github_cli as github_cli_module
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.adapters.github_cli import GitHubCli
 from ard_ossie.application.contracts import WorkflowSecurityError
@@ -16,6 +19,8 @@ from ard_ossie.ports.github import (
     EnvironmentReviewer,
     EnvironmentState,
     GitHubConflict,
+    GitHubTransientError,
+    ReleaseAssetPayload,
 )
 from ard_ossie.ports.process import CommandRequest, CommandResult
 
@@ -30,6 +35,31 @@ def ok(payload: object = None) -> CommandResult:
 
 def not_found() -> CommandResult:
     return CommandResult(returncode=1, stdout="", stderr="HTTP 404: Not Found")
+
+
+def fail_release_stage_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_temporary_directory = github_cli_module.tempfile.TemporaryDirectory
+
+    class FailingCleanupDirectory:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self._temporary = real_temporary_directory(*args, **kwargs)
+            self.name = self._temporary.name
+
+        def __enter__(self) -> str:
+            return self.name
+
+        def __exit__(self, *args: object) -> None:
+            self.cleanup()
+
+        def cleanup(self) -> None:
+            self._temporary.cleanup()
+            raise OSError("cannot clean private upload directory")
+
+    monkeypatch.setattr(
+        github_cli_module.tempfile,
+        "TemporaryDirectory",
+        FailingCleanupDirectory,
+    )
 
 
 class RecordingRunner:
@@ -220,7 +250,7 @@ def test_matching_release_asset_is_a_noop(tmp_path: Path) -> None:
     """A release retry must not upload a second asset when GitHub reports the same digest."""
     asset = tmp_path / "bundle.zip"
     asset.write_bytes(b"bundle")
-    digest = "a" * 64
+    digest = hashlib.sha256(b"bundle").hexdigest()
     runner = RecordingRunner(
         [
             ok(
@@ -257,7 +287,7 @@ def test_missing_release_is_created_before_asset_upload(tmp_path: Path) -> None:
     """Publication must create release metadata before uploading its immutable bundle."""
     asset = tmp_path / "bundle.zip"
     asset.write_bytes(b"bundle")
-    digest = "a" * 64
+    digest = hashlib.sha256(b"bundle").hexdigest()
     runner = RecordingRunner([not_found(), ok({"id": 12}), ok()])
 
     mutation = GitHubCli(REPOSITORY, runner, paths=RepositoryPaths(tmp_path)).upsert_release(
@@ -277,11 +307,221 @@ def test_missing_release_is_created_before_asset_upload(tmp_path: Path) -> None:
     )
 
 
+def test_release_upload_consumes_private_immutable_payload(tmp_path: Path) -> None:
+    asset = tmp_path / "bundle.zip"
+    payload = b"verified release bundle"
+    asset.write_bytes(payload)
+
+    class MutatingUploadRunner(RecordingRunner):
+        uploaded = b""
+        upload_directory_mode = 0
+        upload_file_mode = 0
+
+        def run(self, request: CommandRequest) -> CommandResult:
+            if request.argv[:3] == ("gh", "release", "upload"):
+                asset.write_bytes(b"replacement after adapter snapshot")
+                upload = Path(request.argv[4])
+                self.uploaded = upload.read_bytes()
+                self.upload_directory_mode = stat.S_IMODE(upload.parent.stat().st_mode)
+                self.upload_file_mode = stat.S_IMODE(upload.stat().st_mode)
+            return super().run(request)
+
+    runner = MutatingUploadRunner([not_found(), ok({"id": 12}), ok()])
+
+    GitHubCli(REPOSITORY, runner, paths=RepositoryPaths(tmp_path)).upsert_release(
+        "product/prd_example/v1",
+        "Product v1",
+        asset,
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+    assert runner.uploaded == payload
+    assert runner.upload_directory_mode == 0o700
+    assert runner.upload_file_mode == 0o600
+
+
+def test_release_upload_staging_open_failure_precedes_remote_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"verified release bundle"
+    runner = RecordingRunner([not_found(), ok({"id": 12})])
+
+    def fail_open(*args: object, **kwargs: object) -> int:
+        raise OSError("cannot create private upload file")
+
+    monkeypatch.setattr(github_cli_module.os, "open", fail_open)
+
+    with pytest.raises(GitHubTransientError) as exc_info:
+        GitHubCli(REPOSITORY, runner).upsert_release(
+            "product/prd_example/v1",
+            "Product v1",
+            ReleaseAssetPayload(name="bundle.zip", payload=payload),
+            hashlib.sha256(payload).hexdigest(),
+        )
+
+    assert exc_info.value.code == "RELEASE_ASSET_STAGING_FAILED"
+    assert runner.requests == []
+
+
+def test_release_upload_staging_fsync_failure_precedes_remote_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"verified release bundle"
+    runner = RecordingRunner([not_found(), ok({"id": 12})])
+
+    def fail_fsync(_descriptor: int) -> None:
+        raise OSError("cannot sync private upload file")
+
+    monkeypatch.setattr(github_cli_module.os, "fsync", fail_fsync)
+
+    with pytest.raises(GitHubTransientError) as exc_info:
+        GitHubCli(REPOSITORY, runner).upsert_release(
+            "product/prd_example/v1",
+            "Product v1",
+            ReleaseAssetPayload(name="bundle.zip", payload=payload),
+            hashlib.sha256(payload).hexdigest(),
+        )
+
+    assert exc_info.value.code == "RELEASE_ASSET_STAGING_FAILED"
+    assert runner.requests == []
+
+
+def test_release_upload_staging_write_failure_precedes_remote_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"verified release bundle"
+    runner = RecordingRunner([not_found(), ok({"id": 12})])
+    real_fdopen = github_cli_module.os.fdopen
+
+    class FailingWriteStream:
+        def __init__(self, descriptor: int) -> None:
+            self._stream = real_fdopen(descriptor, "wb")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._stream.close()
+
+        def write(self, _payload: bytes) -> int:
+            raise OSError("cannot write private upload file")
+
+    def failing_fdopen(descriptor: int, _mode: str) -> FailingWriteStream:
+        return FailingWriteStream(descriptor)
+
+    monkeypatch.setattr(github_cli_module.os, "fdopen", failing_fdopen)
+
+    with pytest.raises(GitHubTransientError) as exc_info:
+        GitHubCli(REPOSITORY, runner).upsert_release(
+            "product/prd_example/v1",
+            "Product v1",
+            ReleaseAssetPayload(name="bundle.zip", payload=payload),
+            hashlib.sha256(payload).hexdigest(),
+        )
+
+    assert exc_info.value.code == "RELEASE_ASSET_STAGING_FAILED"
+    assert runner.requests == []
+
+
+def test_release_upload_cleanup_failure_is_a_deterministic_transient_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"verified release bundle"
+    runner = RecordingRunner([not_found(), ok({"id": 12}), ok()])
+    fail_release_stage_cleanup(monkeypatch)
+
+    with pytest.raises(GitHubTransientError) as exc_info:
+        GitHubCli(REPOSITORY, runner).upsert_release(
+            "product/prd_example/v1",
+            "Product v1",
+            ReleaseAssetPayload(name="bundle.zip", payload=payload),
+            hashlib.sha256(payload).hexdigest(),
+        )
+
+    assert exc_info.value.code == "RELEASE_ASSET_CLEANUP_FAILED"
+    assert runner.requests[-1].argv[:3] == ("gh", "release", "upload")
+
+
+def test_release_upload_failure_remains_primary_when_cleanup_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"verified release bundle"
+    runner = RecordingRunner(
+        [
+            not_found(),
+            ok({"id": 12}),
+            CommandResult(returncode=1, stdout="", stderr="upload unavailable"),
+        ]
+    )
+    fail_release_stage_cleanup(monkeypatch)
+
+    with pytest.raises(GitHubTransientError) as exc_info:
+        GitHubCli(REPOSITORY, runner).upsert_release(
+            "product/prd_example/v1",
+            "Product v1",
+            ReleaseAssetPayload(name="bundle.zip", payload=payload),
+            hashlib.sha256(payload).hexdigest(),
+        )
+
+    assert exc_info.value.code == "RELEASE_UPLOAD_FAILED"
+    assert any(
+        "RELEASE_ASSET_CLEANUP_FAILED" in note
+        for note in getattr(exc_info.value, "__notes__", ())
+    )
+
+
+def test_release_conflict_remains_primary_when_cleanup_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"verified release bundle"
+    digest = hashlib.sha256(payload).hexdigest()
+    runner = RecordingRunner(
+        [
+            ok(
+                {
+                    "id": 11,
+                    "tag_name": "product/prd_example/v1",
+                    "name": "Product v1",
+                    "draft": False,
+                    "prerelease": False,
+                    "assets": [
+                        {
+                            "name": "bundle.zip",
+                            "digest": f"sha256:{digest}",
+                            "browser_download_url": "https://example.invalid/one.zip",
+                        },
+                        {
+                            "name": "bundle.zip",
+                            "digest": f"sha256:{digest}",
+                            "browser_download_url": "https://example.invalid/two.zip",
+                        },
+                    ],
+                }
+            )
+        ]
+    )
+    fail_release_stage_cleanup(monkeypatch)
+
+    with pytest.raises(GitHubConflict) as exc_info:
+        GitHubCli(REPOSITORY, runner).upsert_release(
+            "product/prd_example/v1",
+            "Product v1",
+            ReleaseAssetPayload(name="bundle.zip", payload=payload),
+            digest,
+        )
+
+    assert exc_info.value.code == "MULTIPLE_RELEASE_ASSETS"
+    assert any(
+        "RELEASE_ASSET_CLEANUP_FAILED" in note
+        for note in getattr(exc_info.value, "__notes__", ())
+    )
+
+
 def test_matching_release_asset_reconciles_all_release_metadata(tmp_path: Path) -> None:
     """An asset match is a no-op only when title, draft, and prerelease also converge."""
     asset = tmp_path / "bundle.zip"
     asset.write_bytes(b"bundle")
-    digest = "a" * 64
+    digest = hashlib.sha256(b"bundle").hexdigest()
     runner = RecordingRunner(
         [
             ok(

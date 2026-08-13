@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -13,6 +15,7 @@ from ard_ossie.application.contracts import (
     ExitCode,
     MutationRecord,
     WorkflowConfigurationError,
+    WorkflowConflict,
     WorkflowError,
     WorkflowPartialError,
     WorkflowResult,
@@ -126,6 +129,12 @@ class ProcessingService:
                 "changeset processing requires the canonical tracking branch",
             )
         try:
+            base_sha = self.git.remote_branch_sha(pull_request.base_branch)
+            trusted_semantic_repair = _trusted_semantic_repair(
+                self.git,
+                base_sha=base_sha,
+                product_key=request.product_key,
+            )
             provider = self.provider_factory()
             processed = self.processor(
                 product,
@@ -133,6 +142,7 @@ class ProcessingService:
                 provider=provider,
                 pr_number=request.pr_number,
                 warnings_as_errors=request.warnings_as_errors,
+                trusted_semantic_repair=trusted_semantic_repair,
             )
         except PipelineSecurityError as error:
             raise WorkflowSecurityError(
@@ -475,32 +485,27 @@ class ProcessingReconcileService:
         raise AssertionError("retry loop exhausted without returning")
 
 
-def provider_from_environment():
-    from pydantic import SecretStr
-
-    from ard_ossie.llm import OpenAICompatibleProvider
-
-    api_style = os.environ.get("ARD_LLM_API_STYLE", "chat_completions")
-    if api_style != "chat_completions":
-        raise ProviderExecutionError(
-            "LLM_API_STYLE_UNSUPPORTED",
-            kind=ProviderFailureKind.CONFIGURATION,
-        )
-    names = ("ARD_LLM_BASE_URL", "ARD_LLM_API_KEY", "ARD_LLM_MODEL")
-    values = {name: os.environ.get(name) for name in names}
-    present = [name for name, value in values.items() if value]
-    if not present:
-        return None
-    if len(present) != len(names):
-        raise ProviderExecutionError(
-            "LLM_PROVIDER_CONFIG_INCOMPLETE",
-            kind=ProviderFailureKind.CONFIGURATION,
-        )
-    return OpenAICompatibleProvider(
-        base_url=values["ARD_LLM_BASE_URL"] or "",
-        api_key=SecretStr(values["ARD_LLM_API_KEY"] or ""),
-        model=values["ARD_LLM_MODEL"] or "",
+def provider_from_environment(
+    *,
+    registry=None,
+    environment: Mapping[str, str] | None = None,
+    factory=None,
+):
+    from ard_ossie.llm import (
+        LLMProfileRegistry,
+        LLMProviderFactory,
+        LLMService,
     )
+
+    active_environment = environment if environment is not None else os.environ
+    profile_name = active_environment.get("ARD_LLM_PROFILE")
+    if not profile_name:
+        return None
+    active_registry = registry or LLMProfileRegistry.load_packaged()
+    active_factory = factory or LLMProviderFactory()
+    profile = active_registry.resolve(profile_name)
+    provider = active_factory.create(profile_name, profile, active_environment)
+    return LLMService(provider)
 
 
 def _validated_branch(value: str) -> str:
@@ -610,6 +615,83 @@ def _artifact_paths(repository: Path, product: Path) -> list[str]:
                 if path.is_file()
             )
     return artifacts
+
+
+def _trusted_semantic_repair(
+    git: GitPort,
+    *,
+    base_sha: str | None,
+    product_key: str,
+) -> dict[str, object] | None:
+    if not isinstance(base_sha, str) or re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
+        raise _semantic_repair_trust_mismatch()
+    quality_root = Path("products") / product_key / "quality"
+    quality_bytes = _read_revision_bytes_optional(
+        git,
+        base_sha,
+        quality_root / "quality-report.json",
+    )
+    repair_bytes = _read_revision_bytes_optional(
+        git,
+        base_sha,
+        quality_root / "semantic-structure-repair.json",
+    )
+    if quality_bytes is None and repair_bytes is None:
+        return None
+    if quality_bytes is None:
+        raise _semantic_repair_trust_mismatch()
+    try:
+        quality = json.loads(quality_bytes.decode("utf-8", errors="strict"))
+    except (TypeError, UnicodeDecodeError, ValueError) as error:
+        raise _semantic_repair_trust_mismatch() from error
+    if not isinstance(quality, dict):
+        raise _semantic_repair_trust_mismatch()
+    quality_hashes = quality.get("quality_artifact_hashes", {})
+    if not isinstance(quality_hashes, dict):
+        raise _semantic_repair_trust_mismatch()
+    repair_hash_name = "semantic-structure-repair.json"
+    repair_hash_present = repair_hash_name in quality_hashes
+    expected_hash = quality_hashes.get(repair_hash_name)
+    if repair_bytes is None:
+        if not repair_hash_present:
+            return None
+        raise _semantic_repair_trust_mismatch()
+    if not isinstance(expected_hash, str) or (
+        hashlib.sha256(repair_bytes).hexdigest() != expected_hash
+    ):
+        raise _semantic_repair_trust_mismatch()
+    try:
+        repair = json.loads(repair_bytes.decode("utf-8", errors="strict"))
+    except (TypeError, UnicodeDecodeError, ValueError) as error:
+        raise _semantic_repair_trust_mismatch() from error
+    if not isinstance(repair, dict):
+        raise _semantic_repair_trust_mismatch()
+    return repair
+
+
+def _read_revision_bytes_optional(
+    git: GitPort,
+    revision: str,
+    path: Path,
+) -> bytes | None:
+    try:
+        binary_reader = getattr(git, "read_bytes_at", None)
+        if binary_reader is not None:
+            return binary_reader(revision, path)
+        # Compatibility for injected pre-binary GitPort implementations. The
+        # production GitCli always uses the raw-byte path above.
+        return git.read_text_at(revision, path).encode("utf-8")
+    except WorkflowConflict as error:
+        if error.code == "REVISION_FILE_NOT_FOUND":
+            return None
+        raise
+
+
+def _semantic_repair_trust_mismatch() -> WorkflowSecurityError:
+    return WorkflowSecurityError(
+        "SEMANTIC_REPAIR_TRUST_MISMATCH",
+        "trusted semantic repair record failed hash or JSON verification",
+    )
 
 
 def _error_code(error: Exception) -> str:

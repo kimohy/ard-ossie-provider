@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from io import BytesIO
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -49,8 +50,14 @@ _KOREAN_METADATA_LABELS = {
 }
 
 
-def parse_dictionary(path: str | Path, *, source_hash: str) -> ParsedDictionary:
-    workbook = load_workbook(Path(path), data_only=False, read_only=False)
+def parse_dictionary(
+    path: str | Path,
+    *,
+    source_hash: str,
+    source_bytes: bytes | None = None,
+) -> ParsedDictionary:
+    workbook_source = BytesIO(source_bytes) if source_bytes is not None else Path(path)
+    workbook = load_workbook(workbook_source, data_only=False, read_only=False)
     grouped: dict[str, list[DictionaryColumn]] = defaultdict(list)
     descriptions: dict[str, str | None] = {}
     parsed_sheet = False

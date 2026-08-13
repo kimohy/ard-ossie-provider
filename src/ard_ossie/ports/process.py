@@ -23,5 +23,23 @@ class CommandResult:
     stderr: str
 
 
+@dataclass(frozen=True)
+class BinaryCommandResult:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+
+
 class CommandRunner(Protocol):
     def run(self, request: CommandRequest) -> CommandResult: ...
+
+
+class BinaryCommandRunner(Protocol):
+    def run_bytes(
+        self,
+        request: CommandRequest,
+        *,
+        max_output_bytes: int,
+    ) -> BinaryCommandResult: ...

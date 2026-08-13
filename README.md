@@ -2,7 +2,7 @@
 
 AI Ready Data(ARD) 문서를 GitHub에서 공개적으로 관리하고 Apache Ossie 0.1.1 모델로 변환하는 오픈소스 컴파일러입니다.
 
-입력은 데이터 제품 HTML, 시멘틱 DOCX/PDF, 데이터 딕셔너리 XLSX의 세 종류입니다. Docling과 셀 보존 Excel 어댑터로 파싱한 뒤 다음 결과를 결정적으로 생성합니다.
+입력은 데이터 제품 HTML, 시멘틱 DOCX/PDF, 데이터 딕셔너리 XLSX의 세 종류입니다. 제품 HTML은 Docling으로, 데이터 딕셔너리는 셀 보존 Excel 어댑터로 파싱합니다. 시멘틱 DOCX/PDF는 이중 소스 권위 경로를 사용합니다. OOXML/PDFium이 추출한 원문 텍스트가 게시 문자열의 유일한 권위이며, 완전한 PDF 내장 텍스트가 없으면 문서 전체 OCR 결과가 그 실행의 권위가 됩니다. 내장 텍스트 페이지와 OCR 페이지를 섞지 않습니다. Docling 텍스트는 논리 구조와 읽기 순서를 맞추는 힌트로만 사용합니다. 그 뒤 다음 결과를 결정적으로 생성합니다.
 
 - `data-product.md`
 - `data-semantic.md`
@@ -10,6 +10,7 @@ AI Ready Data(ARD) 문서를 GitHub에서 공개적으로 관리하고 Apache Os
 - `ossie-model.json`
 - `source-manifest.json`
 - 중복·버전·영향도·완전성·LLM 제안 감사 보고서
+- 필수 `semantic-fidelity.json`과 구조 복구를 요청하거나 재사용했을 때만 생성하는 `semantic-structure-repair.json`
 
 ## 핵심 원칙
 
@@ -17,6 +18,7 @@ AI Ready Data(ARD) 문서를 GitHub에서 공개적으로 관리하고 Apache Os
 - 제품과 테이블 버전은 서로 독립적인 단순 숫자 `v1`부터 `v999`까지입니다.
 - 현재 상태만 파일로 보관하고 과거 상태는 Git commit, tag, GitHub Release로 탐색합니다.
 - LLM은 근거가 있는 시멘틱 설명·동의어·ANSI SQL metric만 제안할 수 있습니다. 물리 이름, 타입, PK/FK, 불변 ID는 결정적 코드가 관리하며 FK 관계는 Excel에서 결정적으로 생성합니다.
+- 시멘틱 문서 구조 복구 LLM은 불변 source span ID를 block 종류·순서·표 좌표에 매핑할 뿐이며 게시 텍스트를 작성하거나 수정할 수 없습니다. 구조 복구가 실패하면 원문 span을 문단 또는 lossless block으로 모두 보존하고 `SEMANTIC_STRUCTURE_DEGRADED`와 `WARN`을 기록합니다.
 - Issue, 첨부파일, 생성물과 보고서는 모두 public 저장소에 공개됩니다.
 - 승인 전 Issue와 fork PR에는 LLM Secret이나 쓰기 권한을 전달하지 않습니다.
 
@@ -42,6 +44,8 @@ products/<product-key>/
     version-report.json
     impact-report.json
     llm-suggestions.json
+    semantic-fidelity.json
+    semantic-structure-repair.json  # 구조 복구 요청 또는 재사용 시에만 존재
 
 registry/
   products/<product-id>.json
@@ -109,17 +113,64 @@ uv run ard workflow issue-intake --event event.json --repository-name owner/repo
 현재 head를 보존한 채 동일 입력으로 수렴시킵니다. 강제 tag 이동이나 branch 덮어쓰기는 하지
 않습니다.
 
-OpenAI-compatible API를 사용할 때만 다음 환경 변수를 설정합니다.
+LLM 모델과 API 방식은 `config/llm-profiles.yaml`의 리뷰된 프로필로 관리합니다. 로컬에서
+기본 OpenAI-compatible 프로필을 사용하려면 다음 값만 설정합니다.
 
 ```bash
 read -s ARD_LLM_API_KEY
 export ARD_LLM_API_KEY
+export ARD_LLM_PROFILE='openai-compatible-default'
 export ARD_LLM_BASE_URL='https://api.openai.com/v1'
-export ARD_LLM_MODEL='your-model'
-export ARD_LLM_API_STYLE='chat_completions'
+uv run ard llm validate
 ```
 
-API 키는 파일에 저장하거나 로그로 출력하지 마세요.
+지원 provider는 OpenAI-compatible, Azure OpenAI, Vertex AI Gemini, Vertex AI Claude입니다.
+`uv run ard llm profiles`로 등록된 프로필을 확인하고, 운영 반영 전에는 보호된
+`ARD LLM provider smoke test` workflow로 text와 structured output을 모두 검증합니다.
+`ARD_LLM_MODEL`과 `ARD_LLM_API_STYLE`은 더 이상 runtime 입력이 아닙니다. API 키와 Vertex
+service-account JSON은 파일에 저장하거나 로그로 출력하지 마세요. 상세한 프로필 예제와
+Variable/Secret 매핑은 [GitHub Actions 설정](docs/github-actions-setup.md)을 참고하세요.
+
+### 시멘틱 구조 충실도 acceptance
+
+워크플로가 생성한 실제 제품 디렉터리와 그에 대응하는 Registry 디렉터리를 각각
+`SEMANTIC_PRODUCT_ROOT`, `SEMANTIC_REGISTRY_ROOT`에 지정한 뒤, 먼저 LLM credential 없이
+결정적 파싱을 검증합니다. 생성물이나 Registry 파일을 직접 수정하지 마세요.
+
+```bash
+test -n "${SEMANTIC_PRODUCT_ROOT:-}" && test -d "$SEMANTIC_PRODUCT_ROOT"
+test -n "${SEMANTIC_REGISTRY_ROOT:-}" && test -d "$SEMANTIC_REGISTRY_ROOT"
+export SEMANTIC_PRODUCT_ROOT SEMANTIC_REGISTRY_ROOT
+env -u ARD_LLM_API_KEY -u ARD_LLM_BASE_URL -u ARD_LLM_MODEL -u ARD_LLM_API_STYLE \
+  UV_CACHE_DIR=/tmp/ard-semantic-structure-uv-cache \
+  uv run --frozen ard process "$SEMANTIC_PRODUCT_ROOT" --registry "$SEMANTIC_REGISTRY_ROOT"
+UV_CACHE_DIR=/tmp/ard-semantic-structure-uv-cache uv run --frozen python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+product = Path(os.environ["SEMANTIC_PRODUCT_ROOT"])
+semantic = (product / "generated" / "data-semantic.md").read_text(encoding="utf-8")
+fidelity = json.loads(
+    (product / "quality" / "semantic-fidelity.json").read_text(encoding="utf-8")
+)
+assert "개인정보" in semantic
+assert "유효성" in semantic
+assert "개 인정보" not in semantic
+assert "유 효 성" not in semantic
+assert "|" in semantic
+assert fidelity["source_text_coverage"] == 1.0
+assert fidelity["unmatched_span_count"] == 0
+assert fidelity["duplicated_span_count"] == 0
+PY
+```
+
+결정적 reconciliation 뒤에도 구조가 해결되지 않은 실제 문서는 기존의 보호된
+`ARD_LLM_*` 환경에서 다시 처리하고 `semantic-structure-repair.json`까지 검증합니다. 이때도
+원문 payload와 API key는 출력하지 않습니다. 결정적 reconciliation 또는 검증된 LLM 구조
+복구가 모든 불변식을 만족하면 시멘틱 충실도는 `PASS`입니다. 전체 문서 OCR을 사용하거나
+실패한 구조 복구를 lossless block으로 내리면 `WARN`이며, source span 손실이나 예상하지 않은
+중복은 `FAIL`입니다.
 
 ## 중복과 버전 규칙
 

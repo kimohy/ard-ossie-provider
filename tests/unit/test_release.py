@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
 
 import pytest
 
+import ard_ossie.release as release_module
 from ard_ossie.impact import ProductReadiness, build_changeset
 from ard_ossie.models import ProductRecord, TableLocator, TableRecord
+from ard_ossie.registry import Registry
 from ard_ossie.release import (
     ReleaseBlocked,
     build_release_bundle,
@@ -19,6 +22,33 @@ from ard_ossie.release import (
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 OTHER_PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
+
+
+def semantic_fidelity_payload(*, status: str = "PASS") -> dict[str, object]:
+    failed = status == "FAIL"
+    return {
+        "source_hash": "a" * 64,
+        "extraction_mode": "docx_xml",
+        "page_count": 0,
+        "parser_versions": {"semantic": "test"},
+        "status": status,
+        "heading_count": 0,
+        "paragraph_count": 1,
+        "list_item_count": 0,
+        "table_count": 0,
+        "row_count": 0,
+        "cell_count": 0,
+        "source_span_count": 1,
+        "preserved_span_count": 0 if failed else 1,
+        "excluded_span_count": 0,
+        "unmatched_span_count": 1 if failed else 0,
+        "duplicated_span_count": 0,
+        "degraded_block_count": 0,
+        "source_text_coverage": 0.0 if failed else 1.0,
+        "removed_elements": [],
+        "degraded_blocks": [],
+        "table_results": [],
+    }
 
 
 def product(version: int = 12) -> ProductRecord:
@@ -36,6 +66,69 @@ def table(version: int = 7) -> TableRecord:
         ),
         version=version,
     )
+
+
+def release_product_root(tmp_path: Path, *, include_repair: bool = True) -> Path:
+    registry = Registry.load(tmp_path / "registry")
+    registry.write_product(product())
+    product_root = tmp_path / "products" / "sales-order"
+    generated = product_root / "generated"
+    quality = product_root / "quality"
+    generated.mkdir(parents=True)
+    quality.mkdir()
+    generated_hashes: dict[str, str] = {}
+    for name in (
+        "data-product.md",
+        "data-semantic.md",
+        "data-dictionary.json",
+        "ossie-model.json",
+        "source-manifest.json",
+    ):
+        payload = f"generated:{name}".encode()
+        (generated / name).write_bytes(payload)
+        generated_hashes[name] = hashlib.sha256(payload).hexdigest()
+    quality_names = [
+        "duplicate-report.json",
+        "version-report.json",
+        "impact-report.json",
+        "llm-suggestions.json",
+        "semantic-fidelity.json",
+    ]
+    if include_repair:
+        quality_names.append("semantic-structure-repair.json")
+    quality_hashes: dict[str, str] = {}
+    for name in quality_names:
+        value = semantic_fidelity_payload() if name == "semantic-fidelity.json" else {"name": name}
+        payload = (json.dumps(value) + "\n").encode()
+        (quality / name).write_bytes(payload)
+        quality_hashes[name] = hashlib.sha256(payload).hexdigest()
+    (quality / "quality-report.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "product_id": PRODUCT_ID,
+                "product_version": 12,
+                "completeness": 1,
+                "hard_errors": [],
+                "warnings": [],
+                "artifact_hashes": generated_hashes,
+                "quality_artifact_hashes": quality_hashes,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (product_root / "product.yaml").write_text("changeset_id:\n", encoding="utf-8")
+    return product_root
+
+
+def replace_quality_sibling(product_root: Path, name: str, value: object) -> None:
+    quality = product_root / "quality"
+    payload = (json.dumps(value) + "\n").encode()
+    (quality / name).write_bytes(payload)
+    report_path = quality / "quality-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["quality_artifact_hashes"][name] = hashlib.sha256(payload).hexdigest()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
 
 
 def test_release_tags_use_immutable_ids_and_numeric_versions() -> None:
@@ -73,27 +166,7 @@ def test_existing_tag_must_point_to_merged_commit() -> None:
 
 
 def test_release_bundle_contains_public_artifacts_manifest_and_reports(tmp_path: Path) -> None:
-    product_root = tmp_path / "products" / "sales-order"
-    generated = product_root / "generated"
-    quality = product_root / "quality"
-    generated.mkdir(parents=True)
-    quality.mkdir()
-    for name in (
-        "data-product.md",
-        "data-semantic.md",
-        "data-dictionary.json",
-        "ossie-model.json",
-        "source-manifest.json",
-    ):
-        (generated / name).write_text(name, encoding="utf-8")
-    for name in (
-        "quality-report.json",
-        "duplicate-report.json",
-        "version-report.json",
-        "impact-report.json",
-        "llm-suggestions.json",
-    ):
-        (quality / name).write_text(json.dumps({"name": name}), encoding="utf-8")
+    product_root = release_product_root(tmp_path)
 
     bundle = build_release_bundle(product_root, tmp_path / "dist" / "release.zip")
 
@@ -109,15 +182,222 @@ def test_release_bundle_contains_public_artifacts_manifest_and_reports(tmp_path:
             "quality/version-report.json",
             "quality/impact-report.json",
             "quality/llm-suggestions.json",
+            "quality/semantic-fidelity.json",
+            "quality/semantic-structure-repair.json",
         }
+
+
+def test_release_bundle_succeeds_without_optional_semantic_repair(tmp_path: Path) -> None:
+    product_root = release_product_root(tmp_path, include_repair=False)
+
+    bundle = build_release_bundle(product_root, tmp_path / "dist" / "release.zip")
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert "quality/semantic-fidelity.json" in archive.namelist()
+        assert "quality/semantic-structure-repair.json" not in archive.namelist()
+
+
+def test_release_bundle_requires_semantic_fidelity(tmp_path: Path) -> None:
+    product_root = release_product_root(tmp_path)
+    (product_root / "quality" / "semantic-fidelity.json").unlink()
+
+    with pytest.raises(
+        ReleaseBlocked,
+        match="RELEASE_ARTIFACT_MISSING: quality/semantic-fidelity.json",
+    ):
+        build_release_bundle(product_root, tmp_path / "dist" / "release.zip")
+
+
+@pytest.mark.parametrize("entrypoint", ["resolve", "bundle"])
+def test_release_independently_rejects_failed_semantic_fidelity(
+    tmp_path: Path,
+    entrypoint: str,
+) -> None:
+    product_root = release_product_root(tmp_path)
+    replace_quality_sibling(
+        product_root,
+        "semantic-fidelity.json",
+        semantic_fidelity_payload(status="FAIL"),
+    )
+
+    with pytest.raises(ReleaseBlocked, match="SEMANTIC_FIDELITY_GATE_FAILED"):
+        if entrypoint == "resolve":
+            resolve_release_plan(
+                PRODUCT_ID,
+                registry_root=tmp_path / "registry",
+                repository_root=tmp_path,
+            )
+        else:
+            build_release_bundle(product_root, tmp_path / "dist" / "release.zip")
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["semantic-fidelity.json", "semantic-structure-repair.json"],
+)
+def test_release_plan_rejects_quality_sibling_digest_mismatch(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    product_root = release_product_root(tmp_path)
+    (product_root / "quality" / name).write_text("corrupt", encoding="utf-8")
+
+    with pytest.raises(ReleaseBlocked, match=f"RELEASE_ARTIFACT_HASH_MISMATCH: {name}"):
+        resolve_release_plan(
+            PRODUCT_ID,
+            registry_root=tmp_path / "registry",
+            repository_root=tmp_path,
+        )
+
+
+def test_release_plan_hashes_the_quality_snapshot_that_passed_the_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product_root = release_product_root(tmp_path)
+    quality_path = product_root / "quality" / "quality-report.json"
+    passed_payload = quality_path.read_bytes()
+    failed = json.loads(passed_payload)
+    failed["status"] = "FAIL"
+    failed_payload = json.dumps(failed).encode()
+    real_validate = release_module.QualityReport.model_validate_json
+
+    def mutate_after_parse(cls, value: bytes):
+        quality = real_validate(value)
+        quality_path.write_bytes(failed_payload)
+        return quality
+
+    monkeypatch.setattr(
+        release_module.QualityReport,
+        "model_validate_json",
+        classmethod(mutate_after_parse),
+    )
+
+    plan = resolve_release_plan(
+        PRODUCT_ID,
+        registry_root=tmp_path / "registry",
+        repository_root=tmp_path,
+    )
+
+    assert plan.artifact_hashes["quality/quality-report.json"] == hashlib.sha256(
+        passed_payload
+    ).hexdigest()
+    assert quality_path.read_bytes() == failed_payload
+
+
+def test_release_plan_gates_the_fidelity_snapshot_that_was_hashed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product_root = release_product_root(tmp_path)
+    fidelity_path = product_root / "quality" / "semantic-fidelity.json"
+    replace_quality_sibling(
+        product_root,
+        "semantic-fidelity.json",
+        semantic_fidelity_payload(status="FAIL"),
+    )
+    passed_payload = (json.dumps(semantic_fidelity_payload()) + "\n").encode()
+    real_read_bytes = Path.read_bytes
+    expected_entries = {
+        path
+        for directory in (product_root / "generated", product_root / "quality")
+        for path in directory.iterdir()
+        if path.is_file()
+    }
+    reads: dict[Path, int] = {}
+
+    def mutate_after_hash(path: Path) -> bytes:
+        payload = real_read_bytes(path)
+        if path in expected_entries:
+            reads[path] = reads.get(path, 0) + 1
+        if path == fidelity_path and reads[path] == 1:
+            fidelity_path.write_bytes(passed_payload)
+        return payload
+
+    monkeypatch.setattr(Path, "read_bytes", mutate_after_hash)
+
+    with pytest.raises(ReleaseBlocked, match="SEMANTIC_FIDELITY_GATE_FAILED"):
+        resolve_release_plan(
+            PRODUCT_ID,
+            registry_root=tmp_path / "registry",
+            repository_root=tmp_path,
+        )
+
+    assert set(reads) == expected_entries
+    assert set(reads.values()) == {1}
+
+
+def test_release_bundle_gates_quality_from_its_single_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product_root = release_product_root(tmp_path)
+    quality_path = product_root / "quality" / "quality-report.json"
+    failed = json.loads(quality_path.read_bytes())
+    failed["status"] = "FAIL"
+    failed_payload = json.dumps(failed).encode()
+    quality_path.write_bytes(failed_payload)
+    real_read_bytes = Path.read_bytes
+    reads = 0
+
+    def replace_after_snapshot(path: Path) -> bytes:
+        nonlocal reads
+        payload = real_read_bytes(path)
+        if path == quality_path:
+            reads += 1
+            if reads == 1:
+                passed = dict(failed)
+                passed["status"] = "PASS"
+                quality_path.write_text(json.dumps(passed), encoding="utf-8")
+        return payload
+
+    monkeypatch.setattr(Path, "read_bytes", replace_after_snapshot)
+
+    with pytest.raises(ReleaseBlocked, match="QUALITY_GATE_FAILED"):
+        build_release_bundle(product_root, tmp_path / "dist" / "release.zip")
+
+    assert reads == 1
+
+
+def test_release_bundle_archives_the_fidelity_snapshot_that_passed_the_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product_root = release_product_root(tmp_path)
+    fidelity_path = product_root / "quality" / "semantic-fidelity.json"
+    passed_payload = fidelity_path.read_bytes()
+    failed_payload = (json.dumps(semantic_fidelity_payload(status="FAIL")) + "\n").encode()
+    real_read_bytes = Path.read_bytes
+    expected_entries = {
+        path
+        for directory in (product_root / "generated", product_root / "quality")
+        for path in directory.iterdir()
+        if path.is_file()
+    }
+    reads: dict[Path, int] = {}
+
+    def mutate_after_validation_read(path: Path) -> bytes:
+        payload = real_read_bytes(path)
+        if path in expected_entries:
+            reads[path] = reads.get(path, 0) + 1
+        if path == fidelity_path and reads[path] == 1:
+            fidelity_path.write_bytes(failed_payload)
+        return payload
+
+    monkeypatch.setattr(Path, "read_bytes", mutate_after_validation_read)
+
+    bundle = build_release_bundle(product_root, tmp_path / "dist" / "release.zip")
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.read("quality/semantic-fidelity.json") == passed_payload
+    assert set(reads) == expected_entries
+    assert set(reads.values()) == {1}
 
 
 def test_changeset_readiness_version_must_match_current_registry(
     tmp_path: Path,
 ) -> None:
     registry_root = tmp_path / "registry"
-    from ard_ossie.registry import Registry
-
     registry = Registry.load(registry_root)
     registry.write_product(product(version=13))
     registry.write_table(table())

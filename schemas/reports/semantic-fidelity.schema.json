@@ -1,0 +1,397 @@
+{
+  "$defs": {
+    "DegradedBlockAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "reason": {
+          "enum": [
+            "structure_unresolved",
+            "provider_unavailable",
+            "repair_rejected"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "spans": {
+          "items": {
+            "$ref": "#/$defs/SpanProvenanceAudit"
+          },
+          "minItems": 1,
+          "title": "Spans",
+          "type": "array"
+        }
+      },
+      "required": [
+        "order",
+        "reason",
+        "spans"
+      ],
+      "title": "DegradedBlockAudit",
+      "type": "object"
+    },
+    "ExtractionMode": {
+      "enum": [
+        "pdf_embedded",
+        "docx_xml",
+        "ocr"
+      ],
+      "title": "ExtractionMode",
+      "type": "string"
+    },
+    "FidelityThresholds": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_score": {
+          "default": 0.72,
+          "title": "Acceptance Score",
+          "type": "number"
+        },
+        "order_weight": {
+          "default": 0.1,
+          "title": "Order Weight",
+          "type": "number"
+        },
+        "overlap_weight": {
+          "default": 0.55,
+          "title": "Overlap Weight",
+          "type": "number"
+        },
+        "page_edge_band": {
+          "default": 0.1,
+          "title": "Page Edge Band",
+          "type": "number"
+        },
+        "repeat_ratio": {
+          "default": 0.6,
+          "title": "Repeat Ratio",
+          "type": "number"
+        },
+        "text_similarity_weight": {
+          "default": 0.35,
+          "title": "Text Similarity Weight",
+          "type": "number"
+        }
+      },
+      "title": "FidelityThresholds",
+      "type": "object"
+    },
+    "RemovedElementAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceBox"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "page_header",
+            "page_footer",
+            "page_number"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "text_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Text Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "page",
+        "bbox",
+        "text_hash"
+      ],
+      "title": "RemovedElementAudit",
+      "type": "object"
+    },
+    "SourceBox": {
+      "additionalProperties": false,
+      "properties": {
+        "bottom": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Bottom",
+          "type": "number"
+        },
+        "left": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Left",
+          "type": "number"
+        },
+        "right": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Right",
+          "type": "number"
+        },
+        "top": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Top",
+          "type": "number"
+        }
+      },
+      "required": [
+        "left",
+        "bottom",
+        "right",
+        "top"
+      ],
+      "title": "SourceBox",
+      "type": "object"
+    },
+    "SpanProvenanceAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceBox"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "text_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Text Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bbox",
+        "text_hash"
+      ],
+      "title": "SpanProvenanceAudit",
+      "type": "object"
+    },
+    "TableFidelityResult": {
+      "additionalProperties": false,
+      "properties": {
+        "column_count": {
+          "minimum": 0,
+          "title": "Column Count",
+          "type": "integer"
+        },
+        "matched_cell_count": {
+          "minimum": 0,
+          "title": "Matched Cell Count",
+          "type": "integer"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "repaired",
+            "degraded"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "total_cell_count": {
+          "minimum": 0,
+          "title": "Total Cell Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "order",
+        "row_count",
+        "column_count",
+        "matched_cell_count",
+        "total_cell_count",
+        "status"
+      ],
+      "title": "TableFidelityResult",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/kimohy/ard-ossie-provider/schemas/reports/semantic-fidelity.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cell_count": {
+      "minimum": 0,
+      "title": "Cell Count",
+      "type": "integer"
+    },
+    "degraded_block_count": {
+      "minimum": 0,
+      "title": "Degraded Block Count",
+      "type": "integer"
+    },
+    "degraded_blocks": {
+      "items": {
+        "$ref": "#/$defs/DegradedBlockAudit"
+      },
+      "title": "Degraded Blocks",
+      "type": "array"
+    },
+    "duplicated_span_count": {
+      "minimum": 0,
+      "title": "Duplicated Span Count",
+      "type": "integer"
+    },
+    "excluded_span_count": {
+      "minimum": 0,
+      "title": "Excluded Span Count",
+      "type": "integer"
+    },
+    "extraction_mode": {
+      "$ref": "#/$defs/ExtractionMode"
+    },
+    "heading_count": {
+      "minimum": 0,
+      "title": "Heading Count",
+      "type": "integer"
+    },
+    "list_item_count": {
+      "minimum": 0,
+      "title": "List Item Count",
+      "type": "integer"
+    },
+    "page_count": {
+      "minimum": 0,
+      "title": "Page Count",
+      "type": "integer"
+    },
+    "paragraph_count": {
+      "minimum": 0,
+      "title": "Paragraph Count",
+      "type": "integer"
+    },
+    "parser_versions": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Parser Versions",
+      "type": "object"
+    },
+    "preserved_span_count": {
+      "minimum": 0,
+      "title": "Preserved Span Count",
+      "type": "integer"
+    },
+    "removed_elements": {
+      "items": {
+        "$ref": "#/$defs/RemovedElementAudit"
+      },
+      "title": "Removed Elements",
+      "type": "array"
+    },
+    "row_count": {
+      "minimum": 0,
+      "title": "Row Count",
+      "type": "integer"
+    },
+    "source_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Hash",
+      "type": "string"
+    },
+    "source_span_count": {
+      "minimum": 0,
+      "title": "Source Span Count",
+      "type": "integer"
+    },
+    "source_text_coverage": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Source Text Coverage",
+      "type": "number"
+    },
+    "status": {
+      "enum": [
+        "PASS",
+        "WARN",
+        "FAIL"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "table_count": {
+      "minimum": 0,
+      "title": "Table Count",
+      "type": "integer"
+    },
+    "table_results": {
+      "items": {
+        "$ref": "#/$defs/TableFidelityResult"
+      },
+      "title": "Table Results",
+      "type": "array"
+    },
+    "thresholds": {
+      "$ref": "#/$defs/FidelityThresholds"
+    },
+    "unmatched_span_count": {
+      "minimum": 0,
+      "title": "Unmatched Span Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "source_hash",
+    "extraction_mode",
+    "page_count",
+    "parser_versions",
+    "status",
+    "heading_count",
+    "paragraph_count",
+    "list_item_count",
+    "table_count",
+    "row_count",
+    "cell_count",
+    "source_span_count",
+    "preserved_span_count",
+    "excluded_span_count",
+    "unmatched_span_count",
+    "duplicated_span_count",
+    "degraded_block_count",
+    "source_text_coverage"
+  ],
+  "title": "SemanticFidelityReport",
+  "type": "object"
+}

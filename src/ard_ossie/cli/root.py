@@ -6,6 +6,7 @@ from ard_ossie.cli import (
     changeset,
     github,
     impact,
+    llm,
     model,
     parse,
     registry,
@@ -29,4 +30,5 @@ app.add_typer(parse.app, name="parse")
 app.add_typer(model.app, name="model")
 app.add_typer(validate.app, name="validate")
 app.add_typer(github.app, name="github")
+app.add_typer(llm.app, name="llm")
 app.add_typer(workflow.app, name="workflow")

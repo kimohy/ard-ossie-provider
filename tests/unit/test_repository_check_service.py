@@ -11,13 +11,17 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import ard_ossie.application.repository_checks as repository_checks
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.application.contracts import (
     WorkflowSecurityError,
     WorkflowTransientError,
     WorkflowValidationError,
 )
-from ard_ossie.application.model_schema_verification import MODEL_SCHEMA_CATALOG
+from ard_ossie.application.model_schema_verification import (
+    MODEL_SCHEMA_CATALOG,
+    ModelSchemaVerificationError,
+)
 from ard_ossie.application.repository_checks import (
     RepositoryCheckRequest,
     RepositoryCheckService,
@@ -307,6 +311,8 @@ def test_candidate_executable_verifiers_receive_credential_free_environment(
     monkeypatch: pytest.MonkeyPatch,
     verifier: str,
 ) -> None:
+    (tmp_path / "schemas").mkdir()
+
     class Runner:
         def __init__(self) -> None:
             self.requests = []
@@ -353,6 +359,8 @@ def test_candidate_executable_verifiers_receive_credential_free_environment(
 def test_model_schema_verifier_invokes_absolute_trusted_helper(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / "schemas").mkdir()
+
     class Runner:
         def __init__(self) -> None:
             self.requests = []
@@ -381,6 +389,8 @@ def test_model_schema_verifier_invokes_absolute_trusted_helper(
 def test_model_schema_verifier_rejects_success_without_completion_receipt(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / "schemas").mkdir()
+
     class Runner:
         def run(self, request):
             return CommandResult(returncode=0, stdout="", stderr="")
@@ -392,6 +402,132 @@ def test_model_schema_verifier_rejects_success_without_completion_receipt(
         match="REPOSITORY_MODEL_SCHEMAS_RECEIPT_INVALID",
     ):
         tools.run("model-schemas")
+
+
+def test_model_schema_verifier_rejects_receipt_omitting_required_semantic_schemas(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "schemas").mkdir()
+
+    class Runner:
+        def run(self, request):
+            result = Path(request.argv[request.argv.index("--result") + 1])
+            nonce = request.argv[request.argv.index("--nonce") + 1]
+            result.write_text(
+                json.dumps(
+                    {
+                        "nonce": nonce,
+                        "schemas": [
+                            reference.schema_path.as_posix()
+                            for reference in MODEL_SCHEMA_CATALOG[:-2]
+                        ],
+                        "status": "success",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    tools = RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner())
+
+    with pytest.raises(
+        WorkflowValidationError,
+        match="REPOSITORY_MODEL_SCHEMAS_RECEIPT_INVALID",
+    ):
+        tools.run("model-schemas")
+
+
+def test_model_schema_verifier_maps_catalog_access_error_to_workflow_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "schemas").mkdir()
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    def reject_catalog_access(_: Path):
+        raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH")
+
+    monkeypatch.setattr(
+        repository_checks,
+        "active_model_schema_catalog",
+        reject_catalog_access,
+    )
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
+        RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner()).run(
+            "model-schemas"
+        )
+
+
+def test_model_schema_verifier_maps_schema_root_access_error_to_workflow_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    original_resolve = Path.resolve
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    def reject_schema_root_resolution(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> Path:
+        if path == schemas:
+            raise PermissionError("injected schemas resolution failure")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", reject_schema_root_resolution)
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
+        RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner()).run(
+            "model-schemas"
+        )
+
+
+def test_repository_check_records_schema_root_access_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    paths = RepositoryPaths(tmp_path)
+    original_resolve = Path.resolve
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    def reject_schema_root_resolution(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> Path:
+        if path == schemas:
+            raise PermissionError("injected schemas resolution failure")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", reject_schema_root_resolution)
+    tools = RepositoryVerificationTools(paths, Runner())
+    git = FakeGit((Path("src/ard_ossie/models.py"),))
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH") as raised:
+        RepositoryCheckService(paths, git, tools).run(
+            request(tmp_path).model_copy(update={"verification_group": "model-schemas"})
+        )
+
+    assert raised.value.outputs["verifiers"] == [
+        {"name": "model-schemas", "status": "failure", "code": "SCHEMA_CATALOG_MISMATCH"}
+    ]
 
 
 def test_model_schema_verifier_rejects_trusted_helper_mutation(
@@ -452,6 +588,40 @@ def test_static_schema_verifier_accepts_valid_candidate_model_schema_change(
     RepositoryVerificationTools(
         RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
     ).run("schemas")
+
+
+def test_static_schema_verifier_accepts_built_in_required_semantic_schemas(
+    tmp_path: Path,
+) -> None:
+    source = Path(__file__).parents[2] / "schemas"
+    shutil.copytree(source, tmp_path / "schemas")
+
+    RepositoryVerificationTools(
+        RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
+    ).run("schemas")
+
+
+@pytest.mark.parametrize(
+    "schema_path",
+    (
+        Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-structure-repair.schema.json"),
+    ),
+)
+def test_static_schema_verifier_rejects_missing_required_semantic_schema(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    source = Path(__file__).parents[2] / "schemas"
+    shutil.copytree(source, tmp_path / "schemas")
+    path = tmp_path / "schemas" / schema_path
+    path.unlink()
+
+    tools = RepositoryVerificationTools(
+        RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
+    )
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
+        tools.run("schemas")
 
 
 def test_static_schema_verifier_rejects_untrusted_catalog_entry(tmp_path: Path) -> None:

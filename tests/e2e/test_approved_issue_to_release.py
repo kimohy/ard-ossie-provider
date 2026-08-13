@@ -28,7 +28,7 @@ from ard_ossie.application.release_publication import (
 )
 from ard_ossie.github_event import prepare_issue_event
 from ard_ossie.pipeline import process_product
-from ard_ossie.ports.git import ChangedPaths, CommitResult
+from ard_ossie.ports.git import ChangedPaths, CommitResult, GitConflict
 from ard_ossie.ports.github import (
     PullRequestState,
     ReleaseAssetState,
@@ -134,6 +134,17 @@ class LifecycleGit:
 
     def remote_branch_sha(self, branch: str) -> str | None:
         return self.remote_heads.get(branch)
+
+    def read_text_at(self, revision: str, path: str | Path) -> str:
+        result = subprocess.run(
+            ["git", "show", f"{revision}:{Path(path).as_posix()}"],
+            cwd=self.repository,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitConflict("REVISION_FILE_NOT_FOUND", result.stderr)
+        return result.stdout
 
     def commit_intake_paths(self, product_key: str, message: str) -> CommitResult:
         return self._commit(message, f"products/{product_key}")
@@ -333,6 +344,22 @@ class LifecycleGitHub:
         )
 
 
+class RecordingProvider:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def capabilities(self) -> dict[str, str]:
+        return {
+            "structured_output": "json_schema",
+            "provider": "test-provider",
+            "model": "test-model",
+        }
+
+    def generate_structured(self, *, schema, messages):
+        self.requests.append({"schema": schema, "messages": messages})
+        return {"suggestions": [], "metrics": [], "product_facts": []}
+
+
 def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
     tmp_path: Path,
 ) -> None:
@@ -362,6 +389,7 @@ def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
         runner_temp=tmp_path,
     )
     git_adapter = LifecycleGit(repository)
+    git_adapter.remote_heads["main"] = base_head
     github = LifecycleGitHub(git_adapter)
     authorization = IssueAuthorizationService(github).run(
         context,
@@ -388,11 +416,12 @@ def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
     pr_number = int(intake_result.outputs["pr_number"])
     product_root = repository / "products" / product_key
 
+    provider = RecordingProvider()
     processing_result = ProcessingService(
         RepositoryPaths(repository),
         git_adapter,
         github,
-        provider_factory=lambda: None,
+        provider_factory=lambda: provider,
     ).run(
         ProcessingRequest(
             repository=repository,
@@ -459,7 +488,13 @@ def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
         "version-report.json",
         "impact-report.json",
         "llm-suggestions.json",
+        "semantic-fidelity.json",
     }
+    assert provider.requests
+    assert all(
+        "semantic-structure-repair-v1" not in json.dumps(request)
+        for request in provider.requests
+    )
 
     manifest = json.loads(
         (product_root / "generated" / "source-manifest.json").read_text(encoding="utf-8")

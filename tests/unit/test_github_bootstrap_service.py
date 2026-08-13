@@ -104,9 +104,8 @@ class FakeGitHub:
 
 def provider_config() -> BootstrapConfig:
     return BootstrapConfig(
+        profile="openai-compatible-default",
         base_url="https://api.openai.com/v1",
-        model="gpt-example",
-        api_style="chat_completions",
         max_attachment_bytes=52_428_800,
     )
 
@@ -127,6 +126,25 @@ def test_bootstrap_plan_contains_exact_project_resources() -> None:
         "environment:production-linkage",
         "branch:main",
     ]
+
+
+def test_bootstrap_config_uses_profile_variables_without_legacy_model_inputs() -> None:
+    config = BootstrapConfig(
+        profile="vertex-claude-production",
+        base_url="https://gateway.example.test/v1/",
+        azure_endpoint="https://example.openai.azure.com/",
+        gcp_project_id="ard-production",
+    )
+
+    assert config.variables() == {
+        "ARD_LLM_PROFILE": "vertex-claude-production",
+        "ARD_LLM_BASE_URL": "https://gateway.example.test/v1",
+        "ARD_AZURE_OPENAI_ENDPOINT": "https://example.openai.azure.com",
+        "ARD_GCP_PROJECT_ID": "ard-production",
+        "ARD_MAX_ATTACHMENT_BYTES": "52428800",
+    }
+    assert "ARD_LLM_MODEL" not in config.variables()
+    assert "ARD_LLM_API_STYLE" not in config.variables()
 
 
 def test_second_bootstrap_is_noop_and_secret_never_enters_result() -> None:
@@ -154,9 +172,7 @@ def test_apply_replans_noop_resources_after_confirmation_drift() -> None:
     result = service.apply(confirmed_plan)
 
     assert github.protection is not None
-    assert any(
-        mutation.resource == "branch_protection" for mutation in result.mutations
-    )
+    assert any(mutation.resource == "branch_protection" for mutation in result.mutations)
 
 
 def test_enable_review_protection_changes_only_approval_count() -> None:

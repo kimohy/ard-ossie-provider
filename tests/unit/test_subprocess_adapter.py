@@ -116,6 +116,43 @@ def test_runner_does_not_buffer_complete_child_output(
     assert len(result.stderr.encode()) == 128
 
 
+def test_binary_runner_bounds_capture_and_reports_truncation() -> None:
+    result = SubprocessRunner().run_bytes(
+        CommandRequest(
+            argv=(
+                sys.executable,
+                "-c",
+                "import sys; "
+                "sys.stdout.buffer.write(b'x'*100000); "
+                "sys.stderr.buffer.write(b'y'*100000)",
+            )
+        ),
+        max_output_bytes=128,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b"x" * 128
+    assert result.stderr == b"y" * 128
+    assert result.stdout_truncated is True
+    assert result.stderr_truncated is True
+
+
+def test_binary_runner_preserves_non_utf8_bytes() -> None:
+    result = SubprocessRunner().run_bytes(
+        CommandRequest(
+            argv=(
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(bytes([0, 255, 128]))",
+            )
+        ),
+        max_output_bytes=128,
+    )
+
+    assert result.stdout == b"\x00\xff\x80"
+    assert result.stdout_truncated is False
+
+
 def test_runner_deadline_is_not_held_open_by_descendant_pipes() -> None:
     """A spawned descendant must not extend the command beyond its overall deadline."""
     started = time.monotonic()
