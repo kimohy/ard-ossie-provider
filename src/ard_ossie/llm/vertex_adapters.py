@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -13,7 +14,9 @@ from jsonschema import validate
 from pydantic import JsonValue, SecretStr
 
 from ard_ossie.llm.contracts import (
+    LLMImagePart,
     LLMMetadata,
+    LLMMultimodalMessage,
     LLMResult,
     ProviderExecutionError,
     ProviderFailureKind,
@@ -38,6 +41,7 @@ class VertexGeminiProvider:
         timeout_seconds: int = 120,
         max_output_tokens: int = 4096,
         temperature: float = 0,
+        vision: bool = False,
         client: Any | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -48,6 +52,7 @@ class VertexGeminiProvider:
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
+        self.vision = vision
         self._clock = clock
         if client is not None:
             self._client = client
@@ -75,7 +80,13 @@ class VertexGeminiProvider:
         return True
 
     def capabilities(self) -> dict[str, JsonValue]:
-        return {"api_style": "generate_content", "structured_output": "json_schema"}
+        return {
+            "api_style": "generate_content",
+            "structured_output": "json_schema",
+            "provider": self.provider_name,
+            "model": self.model,
+            "vision": self.vision,
+        }
 
     def generate_text(
         self,
@@ -94,6 +105,17 @@ class VertexGeminiProvider:
         structured = _parse_structured(result.text, schema, rejected_result=result)
         return result.model_copy(update={"structured": structured})
 
+    def generate_multimodal_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[LLMMultimodalMessage],
+    ) -> LLMResult:
+        system, contents = _gemini_multimodal_messages(messages)
+        result = self._generate_contents(system=system, contents=contents, schema=schema)
+        structured = _parse_structured(result.text, schema, rejected_result=result)
+        return result.model_copy(update={"structured": structured})
+
     def _generate(
         self,
         *,
@@ -101,6 +123,15 @@ class VertexGeminiProvider:
         schema: dict[str, object] | None,
     ) -> LLMResult:
         system, contents = _gemini_messages(messages)
+        return self._generate_contents(system=system, contents=contents, schema=schema)
+
+    def _generate_contents(
+        self,
+        *,
+        system: str | None,
+        contents: list[types.Content],
+        schema: dict[str, object] | None,
+    ) -> LLMResult:
         config_values: dict[str, object] = {
             "system_instruction": system,
             "max_output_tokens": self.max_output_tokens,
@@ -157,6 +188,7 @@ class VertexClaudeProvider:
         timeout_seconds: int = 120,
         max_output_tokens: int = 4096,
         temperature: float = 0,
+        vision: bool = False,
         client: Any | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -167,6 +199,7 @@ class VertexClaudeProvider:
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
+        self.vision = vision
         self._clock = clock
         if client is not None:
             self._client = client
@@ -196,7 +229,13 @@ class VertexClaudeProvider:
         return True
 
     def capabilities(self) -> dict[str, JsonValue]:
-        return {"api_style": "messages", "structured_output": "prompt_json"}
+        return {
+            "api_style": "messages",
+            "structured_output": "prompt_json",
+            "provider": self.provider_name,
+            "model": self.model,
+            "vision": self.vision,
+        }
 
     def generate_text(
         self,
@@ -215,6 +254,21 @@ class VertexClaudeProvider:
         structured = _parse_structured(result.text, schema, rejected_result=result)
         return result.model_copy(update={"structured": structured})
 
+    def generate_multimodal_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[LLMMultimodalMessage],
+    ) -> LLMResult:
+        system, request_messages = _claude_multimodal_messages(messages)
+        result = self._generate_messages(
+            system=system,
+            request_messages=request_messages,
+            schema=schema,
+        )
+        structured = _parse_structured(result.text, schema, rejected_result=result)
+        return result.model_copy(update={"structured": structured})
+
     def _generate(
         self,
         *,
@@ -222,6 +276,19 @@ class VertexClaudeProvider:
         schema: dict[str, object] | None,
     ) -> LLMResult:
         system, request_messages = _claude_messages(messages)
+        return self._generate_messages(
+            system=system,
+            request_messages=request_messages,
+            schema=schema,
+        )
+
+    def _generate_messages(
+        self,
+        *,
+        system: str | None,
+        request_messages: list[dict[str, object]],
+        schema: dict[str, object] | None,
+    ) -> LLMResult:
         if schema is not None:
             schema_instruction = (
                 "Return only one JSON object that validates against this JSON Schema: "
@@ -300,11 +367,36 @@ def _gemini_messages(
     return ("\n\n".join(system_parts) or None, contents)
 
 
+def _gemini_multimodal_messages(
+    messages: list[LLMMultimodalMessage],
+) -> tuple[str | None, list[types.Content]]:
+    system_parts: list[str] = []
+    contents: list[types.Content] = []
+    for message in messages:
+        parts: list[types.Part] = []
+        for part in message.content:
+            if isinstance(part, LLMImagePart):
+                parts.append(types.Part.from_bytes(data=part.data, mime_type=part.mime_type))
+            else:
+                if message.role == "system":
+                    system_parts.append(part.text)
+                else:
+                    parts.append(types.Part.from_text(text=part.text))
+        if parts:
+            contents.append(
+                types.Content(
+                    role="model" if message.role == "assistant" else "user",
+                    parts=parts,
+                )
+            )
+    return ("\n\n".join(system_parts) or None, contents)
+
+
 def _claude_messages(
     messages: list[dict[str, str]],
-) -> tuple[str | None, list[dict[str, str]]]:
+) -> tuple[str | None, list[dict[str, object]]]:
     system_parts: list[str] = []
-    output: list[dict[str, str]] = []
+    output: list[dict[str, object]] = []
     for message in messages:
         role = message.get("role")
         content = message.get("content")
@@ -316,6 +408,34 @@ def _claude_messages(
             output.append({"role": role, "content": content})
         else:
             raise _configuration_error()
+    return ("\n\n".join(system_parts) or None, output)
+
+
+def _claude_multimodal_messages(
+    messages: list[LLMMultimodalMessage],
+) -> tuple[str | None, list[dict[str, object]]]:
+    system_parts: list[str] = []
+    output: list[dict[str, object]] = []
+    for message in messages:
+        content: list[dict[str, object]] = []
+        for part in message.content:
+            if isinstance(part, LLMImagePart):
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": part.mime_type,
+                            "data": base64.b64encode(part.data).decode("ascii"),
+                        },
+                    }
+                )
+            elif message.role == "system":
+                system_parts.append(part.text)
+            else:
+                content.append({"type": "text", "text": part.text})
+        if content:
+            output.append({"role": message.role, "content": content})
     return ("\n\n".join(system_parts) or None, output)
 
 

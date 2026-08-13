@@ -25,6 +25,7 @@ def test_packaged_registry_resolves_migration_profile() -> None:
     assert profile.timeout_seconds == 120
     assert profile.max_output_tokens == 4096
     assert profile.temperature == 0
+    assert profile.vision is True
 
 
 def test_registry_rejects_unknown_keys_and_unsafe_environment_names(tmp_path: Path) -> None:

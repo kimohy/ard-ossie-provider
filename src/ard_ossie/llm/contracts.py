@@ -4,7 +4,7 @@ import re
 from enum import StrEnum
 from typing import Literal, Protocol
 
-from pydantic import Field, JsonValue, field_validator
+from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from ard_ossie.models import StrictModel
 
@@ -71,6 +71,45 @@ class LLMResult(StrictModel):
     text: str = Field(repr=False)
     structured: dict[str, object] | None = Field(default=None, repr=False)
     metadata: LLMMetadata
+    repair_validation_codes: list[str] = Field(default_factory=list, max_length=2, repr=False)
+
+    @field_validator("repair_validation_codes")
+    @classmethod
+    def validate_repair_codes(cls, value: list[str]) -> list[str]:
+        if any(_ERROR_CODE.fullmatch(code) is None for code in value):
+            raise ValueError("invalid repair validation codes")
+        return value
+
+
+class LLMTextPart(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["text"] = "text"
+    text: str = Field(min_length=1, max_length=200_000)
+
+
+class LLMImagePart(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["image"] = "image"
+    mime_type: Literal["image/png", "image/jpeg"]
+    data: bytes = Field(min_length=1, max_length=8 * 1024 * 1024, repr=False)
+
+
+class LLMMultimodalMessage(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    role: Literal["system", "user", "assistant"]
+    content: tuple[LLMTextPart | LLMImagePart, ...] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_image_boundary(self) -> LLMMultimodalMessage:
+        images = [part for part in self.content if isinstance(part, LLMImagePart)]
+        if len(images) > 1:
+            raise ValueError("LLM_MULTIMODAL_IMAGE_LIMIT_EXCEEDED")
+        if images and self.role != "user":
+            raise ValueError("LLM_MULTIMODAL_IMAGE_ROLE_INVALID")
+        return self
 
 
 class LLMProvider(Protocol):
@@ -89,4 +128,11 @@ class LLMProvider(Protocol):
         *,
         schema: dict[str, object],
         messages: list[dict[str, str]],
+    ) -> LLMResult: ...
+
+    def generate_multimodal_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[LLMMultimodalMessage],
     ) -> LLMResult: ...

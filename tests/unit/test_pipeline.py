@@ -32,7 +32,8 @@ from ard_ossie.pipeline import (
     _shared_table_findings,
 )
 from ard_ossie.registry import Registry
-from ard_ossie.semantic.models import SemanticStructureRepairRecord
+from ard_ossie.semantic.correction import OcrCorrectionPlanner
+from ard_ossie.semantic.models import SemanticFidelityReport, SemanticStructureRepairRecord
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 from ard_ossie.versioning import plan_version
 
@@ -60,6 +61,29 @@ def trusted_repair_payload() -> dict[str, object]:
     ).model_dump(mode="json")
 
 
+def trusted_fidelity_payload() -> dict[str, object]:
+    return SemanticFidelityReport(
+        source_hash="a" * 64,
+        extraction_mode="docx_xml",
+        page_count=1,
+        parser_versions={"semantic": "test"},
+        status="PASS",
+        heading_count=0,
+        paragraph_count=1,
+        list_item_count=0,
+        table_count=0,
+        row_count=0,
+        cell_count=0,
+        source_span_count=1,
+        preserved_span_count=1,
+        excluded_span_count=0,
+        unmatched_span_count=0,
+        duplicated_span_count=0,
+        degraded_block_count=0,
+        source_text_coverage=1.0,
+    ).model_dump(mode="json")
+
+
 def test_processing_parser_injects_planner_and_validated_trusted_record() -> None:
     provider = object()
 
@@ -67,12 +91,18 @@ def test_processing_parser_injects_planner_and_validated_trusted_record() -> Non
         provider=provider,
         parser=None,
         trusted_semantic_repair=trusted_repair_payload(),
+        trusted_semantic_fidelity=trusted_fidelity_payload(),
     )
 
     assert isinstance(parser._structure_repair_planner, SemanticStructureRepairPlanner)
     assert parser._structure_repair_planner._provider is provider
+    assert isinstance(parser._ocr_correction_planner, OcrCorrectionPlanner)
+    assert parser._ocr_correction_planner.provider is provider
     assert parser._trusted_repair_record == SemanticStructureRepairRecord.model_validate(
         trusted_repair_payload()
+    )
+    assert parser._trusted_fidelity_report == SemanticFidelityReport.model_validate(
+        trusted_fidelity_payload()
     )
 
 
@@ -83,6 +113,7 @@ def test_processing_parser_leaves_custom_parser_untouched() -> None:
         provider=object(),
         parser=custom,
         trusted_semantic_repair={"invalid": "ignored for a custom parser"},
+        trusted_semantic_fidelity={"invalid": "ignored for a custom parser"},
     )
 
     assert parser is custom

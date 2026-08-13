@@ -331,11 +331,15 @@ def test_pipeline_writes_and_hashes_semantic_repair_record(tmp_path: Path) -> No
     ).hexdigest()
 
 
-def test_pipeline_reports_semantic_ocr_fallback(tmp_path: Path) -> None:
+def test_pipeline_reports_semantic_ocr_correction_warning(tmp_path: Path) -> None:
     product = create_product_fixture(tmp_path)
     add_complete_dictionary_descriptions(product)
     fidelity = pass_fidelity_report().model_copy(
-        update={"extraction_mode": ExtractionMode.OCR, "status": "WARN"}
+        update={
+            "extraction_mode": ExtractionMode.OCR,
+            "status": "WARN",
+            "warning_codes": ["SEMANTIC_OCR_CORRECTION_UNAVAILABLE"],
+        }
     )
 
     result = process_product(
@@ -346,7 +350,7 @@ def test_pipeline_reports_semantic_ocr_fallback(tmp_path: Path) -> None:
 
     assert result.quality_report.status == "WARN"
     assert [finding.code for finding in result.quality_report.warnings] == [
-        "SEMANTIC_OCR_FALLBACK"
+        "SEMANTIC_OCR_CORRECTION_UNAVAILABLE"
     ]
 
 

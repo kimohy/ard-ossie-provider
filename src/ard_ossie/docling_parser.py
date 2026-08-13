@@ -10,6 +10,7 @@ from ard_ossie.models import Sha256, StrictModel
 from ard_ossie.semantic.models import SemanticFidelityReport, SemanticStructureRepairRecord
 
 if TYPE_CHECKING:
+    from ard_ossie.semantic.correction import OcrCorrectionPlanner
     from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 
 
@@ -39,12 +40,16 @@ class DoclingParser:
         full_page_ocr_converter: Any | None = None,
         structure_repair_planner: SemanticStructureRepairPlanner | None = None,
         trusted_repair_record: SemanticStructureRepairRecord | None = None,
+        ocr_correction_planner: OcrCorrectionPlanner | None = None,
+        trusted_fidelity_report: SemanticFidelityReport | None = None,
         pdfium: Any | None = None,
     ) -> None:
         self._converter = converter
         self._full_page_ocr_converter = full_page_ocr_converter
         self._structure_repair_planner = structure_repair_planner
         self._trusted_repair_record = trusted_repair_record
+        self._ocr_correction_planner = ocr_correction_planner
+        self._trusted_fidelity_report = trusted_fidelity_report
         self._pdfium = pdfium
 
     def parse(self, source: SourceFile) -> ParsedDocument:
@@ -59,6 +64,8 @@ class DoclingParser:
                 full_page_ocr_converter=self._full_page_ocr_converter,
                 repair_planner=self._structure_repair_planner,
                 trusted_record=self._trusted_repair_record,
+                correction_planner=self._ocr_correction_planner,
+                trusted_fidelity=self._trusted_fidelity_report,
                 pdfium=self._pdfium,
             )
             return ParsedDocument(

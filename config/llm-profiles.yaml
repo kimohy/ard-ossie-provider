@@ -8,6 +8,7 @@ profiles:
     provider: openai_compatible
     model: gpt-5.6-terra
     structured_output: native
+    vision: true
     api: chat_completions
     base_url_env: ARD_LLM_BASE_URL
     api_key_env: ARD_LLM_API_KEY

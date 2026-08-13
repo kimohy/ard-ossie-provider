@@ -1,7 +1,10 @@
 from ard_ossie.llm.contracts import (
+    LLMImagePart,
     LLMMetadata,
+    LLMMultimodalMessage,
     LLMProvider,
     LLMResult,
+    LLMTextPart,
     ProviderExecutionError,
     ProviderFailureKind,
     ProviderName,
@@ -20,7 +23,11 @@ from ard_ossie.llm.profiles import (
     VertexClaudeProfile,
     VertexGeminiProfile,
 )
-from ard_ossie.llm.service import LLMService
+from ard_ossie.llm.service import (
+    STRUCTURED_REPAIR_PROMPT_VERSION,
+    LLMService,
+    structured_repair_prompt_contract_hash,
+)
 from ard_ossie.llm.suggestions import (
     AISuggestion,
     MetricSuggestion,
@@ -38,12 +45,15 @@ __all__ = [
     "AzureOpenAIProvider",
     "AzureOpenAIProfile",
     "LLMMetadata",
+    "LLMImagePart",
+    "LLMMultimodalMessage",
     "LLMProvider",
     "LLMProviderFactory",
     "LLMProfile",
     "LLMProfileRegistry",
     "LLMResult",
     "LLMService",
+    "LLMTextPart",
     "MetricSuggestion",
     "OpenAICompatibleProvider",
     "OpenAICompatibleProfile",
@@ -52,10 +62,12 @@ __all__ = [
     "ProviderExecutionError",
     "ProviderFailureKind",
     "ProviderName",
+    "STRUCTURED_REPAIR_PROMPT_VERSION",
     "VertexClaudeProfile",
     "VertexClaudeProvider",
     "VertexGeminiProfile",
     "VertexGeminiProvider",
     "semantic_extraction_schema",
+    "structured_repair_prompt_contract_hash",
     "validate_semantic_suggestions",
 ]
