@@ -33,3 +33,4 @@ def test_wheel_contains_runtime_templates_and_schemas(tmp_path: Path) -> None:
     assert "ard_ossie/assets/templates/data-product.md.j2" in names
     assert "ard_ossie/assets/templates/data-semantic.md.j2" in names
     assert "ard_ossie/assets/schemas/ossie/0.1.1/osi-schema.json" in names
+    assert "ard_ossie/assets/config/llm-profiles.yaml" in names

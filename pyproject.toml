@@ -21,6 +21,9 @@ dependencies = [
   "pyyaml>=6.0,<7",
   "sqlglot==30.16.0",
   "typer==0.26.8",
+  "google-genai>=1,<2",
+  "anthropic[vertex]>=0.70,<1",
+  "google-auth[requests]>=2.40,<3",
 ]
 
 [project.scripts]
@@ -40,6 +43,7 @@ packages = ["src/ard_ossie"]
 [tool.hatch.build.targets.wheel.force-include]
 "templates" = "ard_ossie/assets/templates"
 "schemas" = "ard_ossie/assets/schemas"
+"config/llm-profiles.yaml" = "ard_ossie/assets/config/llm-profiles.yaml"
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"

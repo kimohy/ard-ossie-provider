@@ -56,4 +56,4 @@ def test_real_openai_sdk_contract_uses_compatible_chat_completions_endpoint() ->
         messages=[{"role": "user", "content": "extract"}],
     )
 
-    assert result == {"terms": ["revenue"]}
+    assert result.structured == {"terms": ["revenue"]}

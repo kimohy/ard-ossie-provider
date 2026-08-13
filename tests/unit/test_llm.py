@@ -112,13 +112,9 @@ def test_metric_contract_requires_non_empty_dataset_names() -> None:
     with pytest.raises(PydanticValidationError):
         llm.MetricSuggestion.model_validate(metric_payload())
     with pytest.raises(PydanticValidationError):
-        llm.MetricSuggestion.model_validate(
-            {**metric_payload(), "dataset_names": []}
-        )
+        llm.MetricSuggestion.model_validate({**metric_payload(), "dataset_names": []})
 
-    metric = llm.MetricSuggestion.model_validate(
-        {**metric_payload(), "dataset_names": ["orders"]}
-    )
+    metric = llm.MetricSuggestion.model_validate({**metric_payload(), "dataset_names": ["orders"]})
     assert metric.dataset_names == ["orders"]
 
 
@@ -243,7 +239,7 @@ def test_provider_validates_structured_response_against_local_schema() -> None:
         schema=schema, messages=[{"role": "user", "content": "x"}]
     )
 
-    assert result == {"terms": ["net revenue"]}
+    assert result.structured == {"terms": ["net revenue"]}
     assert client.completions.last_request["model"] == "example-model"
     assert "secret-value" not in repr(provider)
 
@@ -290,16 +286,17 @@ def test_provider_rejects_schema_invalid_response() -> None:
         )
 
     assert captured.value.kind is ProviderFailureKind.OUTPUT
-    assert "sentinel-response-payload" not in "".join(
-        traceback.format_exception(captured.value)
-    )
+    assert "sentinel-response-payload" not in "".join(traceback.format_exception(captured.value))
 
 
 def test_provider_normalizes_client_construction_failure(monkeypatch) -> None:
     def fail_client(**kwargs):
         raise ValueError("sentinel-client-configuration")
 
-    monkeypatch.setattr("ard_ossie.llm._new_client", fail_client)
+    monkeypatch.setattr(
+        "ard_ossie.llm.openai_adapters._new_openai_client",
+        fail_client,
+    )
 
     with pytest.raises(
         ProviderExecutionError,
@@ -363,9 +360,7 @@ def test_provider_normalizes_client_construction_failure(monkeypatch) -> None:
             id="rate-limit",
         ),
         pytest.param(
-            APITimeoutError(
-                httpx.Request("POST", "https://llm.example.com/v1/chat/completions")
-            ),
+            APITimeoutError(httpx.Request("POST", "https://llm.example.com/v1/chat/completions")),
             "LLM_PROVIDER_TIMEOUT",
             ProviderFailureKind.TRANSIENT,
             id="timeout",
@@ -373,9 +368,7 @@ def test_provider_normalizes_client_construction_failure(monkeypatch) -> None:
         pytest.param(
             APIConnectionError(
                 message="sentinel-exception-message",
-                request=httpx.Request(
-                    "POST", "https://llm.example.com/v1/chat/completions"
-                ),
+                request=httpx.Request("POST", "https://llm.example.com/v1/chat/completions"),
             ),
             "LLM_PROVIDER_CONNECTION_FAILED",
             ProviderFailureKind.TRANSIENT,
@@ -402,9 +395,7 @@ def test_provider_normalizes_client_construction_failure(monkeypatch) -> None:
         pytest.param(
             APIError(
                 "sentinel-exception-message",
-                httpx.Request(
-                    "POST", "https://llm.example.com/v1/chat/completions"
-                ),
+                httpx.Request("POST", "https://llm.example.com/v1/chat/completions"),
                 body={"message": "sentinel-response-body"},
             ),
             "LLM_PROVIDER_FAILURE",
@@ -472,9 +463,7 @@ def test_provider_classifies_invalid_structured_output(
 
 
 def test_provider_classifies_missing_choice_as_invalid_output() -> None:
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=EmptyChoicesCompletions())
-    )
+    client = SimpleNamespace(chat=SimpleNamespace(completions=EmptyChoicesCompletions()))
     provider = OpenAICompatibleProvider(
         base_url="https://llm.example.com/v1",
         api_key=SecretStr("secret-value"),
@@ -517,9 +506,7 @@ def test_semantic_schema_is_closed_and_openai_strict_compatible() -> None:
     def assert_closed(node: object) -> None:
         if isinstance(node, dict):
             node_type = node.get("type")
-            if node_type == "object" or (
-                isinstance(node_type, list) and "object" in node_type
-            ):
+            if node_type == "object" or (isinstance(node_type, list) and "object" in node_type):
                 assert node.get("additionalProperties") is False
                 assert set(node.get("required", [])) == set(node.get("properties", {}))
             for value in node.values():

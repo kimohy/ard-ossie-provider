@@ -84,9 +84,9 @@ def test_processing_run_steps_only_invoke_ard_cli() -> None:
                 assert not any(token in command for token in FORBIDDEN_SHELL_CONTROL), (
                     f"{path.name}: shell control syntax is forbidden"
                 )
-                assert any(
-                    f"ard {lifecycle}" in command for lifecycle in APPROVED_LIFECYCLES
-                ), f"{path.name}: unapproved lifecycle command"
+                assert any(f"ard {lifecycle}" in command for lifecycle in APPROVED_LIFECYCLES), (
+                    f"{path.name}: unapproved lifecycle command"
+                )
                 assert step.get("id"), f"{path.name}: run step must expose an id"
 
 
@@ -121,9 +121,7 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert "environment" not in validation
     assert "GH_TOKEN" not in str(validation)
     validation_checkouts = [
-        step
-        for step in validation["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for step in validation["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
     assert [step["with"]["path"] for step in validation_checkouts] == [
         "trusted",
@@ -148,23 +146,29 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     }
     text = (WORKFLOWS / "ard-process.yml").read_text(encoding="utf-8")
     assert "secrets.ARD_LLM_API_KEY" in text
+    assert job["env"]["ARD_LLM_PROFILE"] == "${{ vars.ARD_LLM_PROFILE }}"
+    assert job["env"]["ARD_LLM_BASE_URL"] == (
+        "${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}"
+    )
+    assert job["env"]["ARD_AZURE_OPENAI_ENDPOINT"] == ("${{ vars.ARD_AZURE_OPENAI_ENDPOINT }}")
+    assert job["env"]["ARD_AZURE_OPENAI_API_KEY"] == ("${{ secrets.ARD_AZURE_OPENAI_API_KEY }}")
+    assert job["env"]["ARD_GCP_PROJECT_ID"] == "${{ vars.ARD_GCP_PROJECT_ID }}"
+    assert job["env"]["ARD_VERTEX_CREDENTIALS_JSON"] == (
+        "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}"
+    )
+    assert "ARD_LLM_MODEL" not in job["env"]
+    assert "ARD_LLM_API_STYLE" not in job["env"]
     assert "ard workflow process" in text
     assert "ard workflow process-reconcile" in text
     assert "--expected-head" in text
-    assert job["env"]["PROCESS_INVOCATION_ID"] == (
-        "${{ github.run_id }}-${{ github.run_attempt }}"
-    )
+    assert job["env"]["PROCESS_INVOCATION_ID"] == ("${{ github.run_id }}-${{ github.run_attempt }}")
     assert "retention-days: 30" in text
     assert "lfs: true" in text
     checkouts = [
-        step
-        for step in job["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
     assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
-    assert checkouts[0]["with"]["ref"] == (
-        "${{ github.event.repository.default_branch }}"
-    )
+    assert checkouts[0]["with"]["ref"] == ("${{ github.event.repository.default_branch }}")
     assert checkouts[0]["with"]["persist-credentials"] == "false"
     assert checkouts[1]["with"]["ref"] == "${{ inputs.expected_head }}"
     process_runs = [step for step in job["steps"] if step.get("run")]
@@ -178,6 +182,29 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert "environment" not in finalizer
     assert "ard workflow finalize" in text
     assert_actions_are_sha_pinned(WORKFLOWS / "ard-process.yml")
+
+
+def test_llm_smoke_workflow_is_manual_trusted_read_only_and_protected() -> None:
+    workflow = load_workflow("ard-llm-smoke.yml")
+
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    profile = workflow["on"]["workflow_dispatch"]["inputs"]["profile"]
+    assert profile["required"] == "true"
+    assert workflow["permissions"] == {"contents": "read"}
+    job = workflow["jobs"]["smoke"]
+    assert job["environment"] == "ard-llm"
+    assert job["permissions"] == {"contents": "read"}
+    checkout = next(
+        step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert checkout["with"]["ref"] == "main"
+    assert checkout["with"]["persist-credentials"] == "false"
+    run = next(step for step in job["steps"] if step.get("run"))
+    assert run["run"].startswith("uv run --frozen ard llm smoke-test")
+    assert "${{" not in run["run"]
+    assert run["env"]["ARD_LLM_PROFILE"] == "${{ inputs.profile }}"
+    assert "upload-artifact" not in str(workflow)
+    assert_actions_are_sha_pinned(WORKFLOWS / "ard-llm-smoke.yml")
 
 
 def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() -> None:
@@ -203,21 +230,16 @@ def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() ->
     assert "github.event.workflow_run.event == 'push'" in guard
     assert "github.event.workflow_run.head_repository.full_name == github.repository" in guard
     assert (
-        "github.event.workflow_run.head_branch != github.event.repository.default_branch"
-        in guard
+        "github.event.workflow_run.head_branch != github.event.repository.default_branch" in guard
     )
     assert validation["permissions"] == {"contents": "read"}
     assert "environment" not in validation
     assert "GH_TOKEN" not in str(validation)
     checkouts = [
-        step
-        for step in validation["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for step in validation["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
     assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
-    assert checkouts[0]["with"]["ref"] == (
-        "${{ github.event.repository.default_branch }}"
-    )
+    assert checkouts[0]["with"]["ref"] == ("${{ github.event.repository.default_branch }}")
     assert checkouts[1]["with"]["ref"] == "${{ github.event.workflow_run.head_sha }}"
     validation_runs = [step for step in validation["steps"] if step.get("run")]
     assert all(step["working-directory"] == "trusted" for step in validation_runs)
@@ -262,9 +284,7 @@ def test_issue_intake_routes_existing_drafts_through_trusted_base_sync() -> None
         "expected_head",
     }
     route_checkout = next(
-        step
-        for step in route["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for step in route["steps"] if step.get("uses", "").startswith("actions/checkout@")
     )
     assert route_checkout["with"] == {
         "ref": "${{ github.sha }}",
@@ -289,9 +309,7 @@ def test_issue_intake_routes_existing_drafts_through_trusted_base_sync() -> None
         "pull-requests": "read",
     }
     checkouts = [
-        step
-        for step in base_sync["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for step in base_sync["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
     assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
     assert checkouts[0]["with"] == {
@@ -321,12 +339,10 @@ def test_issue_intake_routes_existing_drafts_through_trusted_base_sync() -> None
     )
     for name in ("branch", "product_key", "expected_head"):
         assert process["with"][name] == (
-            f"${{{{ needs.intake.outputs.{name} || "
-            f"needs.base_sync.outputs.{name} }}}}"
+            f"${{{{ needs.intake.outputs.{name} || needs.base_sync.outputs.{name} }}}}"
         )
     assert process["with"]["pr_number"] == (
-        "${{ fromJSON(needs.intake.outputs.pr_number || "
-        "needs.base_sync.outputs.pr_number) }}"
+        "${{ fromJSON(needs.intake.outputs.pr_number || needs.base_sync.outputs.pr_number) }}"
     )
     assert process["secrets"] == "inherit"
 
@@ -401,18 +417,14 @@ def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
     assert check["permissions"] == {"contents": "read"}
     assert "GH_TOKEN" not in str(check)
     checkouts = [
-        step
-        for step in check["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for step in check["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
     assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
     assert checkouts[0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
-    assert checkouts[1]["with"]["ref"] == (
-        "refs/pull/${{ github.event.pull_request.number }}/head"
-    )
+    assert checkouts[1]["with"]["ref"] == ("refs/pull/${{ github.event.pull_request.number }}/head")
     repository_step = next(step for step in check["steps"] if step.get("run"))
     assert repository_step["working-directory"] == "trusted"
-    assert "--repository \"$CANDIDATE_REPOSITORY\"" in repository_step["run"]
+    assert '--repository "$CANDIDATE_REPOSITORY"' in repository_step["run"]
     assert "--verification-group static" in repository_step["run"]
     assert "publish-statuses" not in repository_step["run"]
     assert "repository-name" not in repository_step["run"]
@@ -428,9 +440,7 @@ def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
         "wheel",
     ]
     executable_checkouts = [
-        step
-        for step in executable["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        step for step in executable["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
     assert [step["with"]["path"] for step in executable_checkouts] == [
         "trusted",
@@ -439,10 +449,8 @@ def test_code_only_pull_requests_publish_the_same_required_statuses() -> None:
     assert executable_checkouts[1]["with"]["ref"] == (
         "refs/pull/${{ github.event.pull_request.number }}/head"
     )
-    executable_run = next(
-        step["run"] for step in executable["steps"] if step.get("run")
-    )
-    assert "--verification-group \"$VERIFICATION_GROUP\"" in executable_run
+    executable_run = next(step["run"] for step in executable["steps"] if step.get("run"))
+    assert '--verification-group "$VERIFICATION_GROUP"' in executable_run
     assert "publish-statuses" not in executable_run
     assert "repository-name" not in executable_run
 

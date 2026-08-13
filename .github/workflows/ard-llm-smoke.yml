@@ -1,0 +1,48 @@
+name: ARD LLM smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Repository-defined LLM profile name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    environment: ard-llm
+    permissions:
+      contents: read
+    env:
+      ARD_LLM_BASE_URL: ${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}
+      ARD_LLM_API_KEY: ${{ secrets.ARD_LLM_API_KEY }}
+      ARD_AZURE_OPENAI_ENDPOINT: ${{ vars.ARD_AZURE_OPENAI_ENDPOINT }}
+      ARD_AZURE_OPENAI_API_KEY: ${{ secrets.ARD_AZURE_OPENAI_API_KEY }}
+      ARD_GCP_PROJECT_ID: ${{ vars.ARD_GCP_PROJECT_ID }}
+      ARD_VERTEX_CREDENTIALS_JSON: ${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}
+    steps:
+      - name: Checkout trusted main code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.33'
+      - name: Run safe text and structured smoke checks
+        id: smoke
+        env:
+          ARD_LLM_PROFILE: ${{ inputs.profile }}
+          PYTHONSAFEPATH: '1'
+        run: >-
+          uv run --frozen ard llm smoke-test
+          --profile "$ARD_LLM_PROFILE"

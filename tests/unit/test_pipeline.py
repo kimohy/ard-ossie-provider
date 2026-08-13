@@ -12,7 +12,12 @@ from ard_ossie.docling_parser import Evidence, ParsedDocument
 from ard_ossie.excel_adapter import DictionaryColumn, DictionaryTable, ParsedDictionary
 from ard_ossie.impact import build_changeset
 from ard_ossie.ingestion import SourceRole
-from ard_ossie.llm import MetricSuggestion, ProductFactSuggestion
+from ard_ossie.llm import (
+    LLMMetadata,
+    LLMResult,
+    MetricSuggestion,
+    ProductFactSuggestion,
+)
 from ard_ossie.models import (
     MetricRecord,
     ProductRecord,
@@ -189,9 +194,7 @@ def reserved_metric_drafts(root: Path) -> list[pipeline._TableDraft]:
                 "locator": draft.locator.model_copy(
                     update={"schema_name": "reserved", "table_name": "order"}
                 ),
-                "columns": [
-                    draft.columns[0].model_copy(update={"name": "select"})
-                ],
+                "columns": [draft.columns[0].model_copy(update={"name": "select"})],
             }
         )
     ]
@@ -227,10 +230,7 @@ def duplicate_leaf_metric_drafts(root: Path) -> list[pipeline._TableDraft]:
         ),
         pytest.param(
             "ROUND(SUM(revenue) / NULLIF(COUNT(*), 0), 2)",
-            (
-                "ROUND(SUM(marketing_campaign.revenue) / "
-                "NULLIF(COUNT(*), 0), 2)"
-            ),
+            ("ROUND(SUM(marketing_campaign.revenue) / NULLIF(COUNT(*), 0), 2)"),
             id="nested-functions-and-star",
         ),
         pytest.param(
@@ -267,9 +267,7 @@ def test_prepare_metrics_casts_integral_division_numerator(tmp_path: Path) -> No
         "CAST(SUM(marketing_campaign.engagement_count) AS DECIMAL(38, 12)) / "
         "NULLIF(SUM(marketing_campaign.impression_count), 0)"
     )
-    assert raw.expression == (
-        "SUM(engagement_count) / NULLIF(SUM(impression_count), 0)"
-    )
+    assert raw.expression == ("SUM(engagement_count) / NULLIF(SUM(impression_count), 0)")
 
 
 @pytest.mark.parametrize(
@@ -754,6 +752,69 @@ def test_product_prompt_assigns_ids_only_to_accepted_evidence(tmp_path: Path) ->
     assert provider.system_message is not None
     assert "exact dataset names" in provider.system_message
     assert "dataset_names" in provider.system_message
+
+
+def test_extract_suggestions_accepts_normalized_llm_result(tmp_path: Path) -> None:
+    class NormalizedProvider:
+        def generate_structured(self, *, schema, messages):
+            return LLMResult(
+                text='{"suggestions":[],"metrics":[],"product_facts":[]}',
+                structured={"suggestions": [], "metrics": [], "product_facts": []},
+                metadata=LLMMetadata(
+                    profile="safe-profile",
+                    provider="openai_compatible",
+                    model="safe-model",
+                    elapsed_ms=1,
+                ),
+            )
+
+    batch = pipeline._extract_suggestions(
+        NormalizedProvider(),
+        product_document(),
+        ParsedDocument(
+            role=SourceRole.SEMANTIC_DOCUMENT,
+            source_hash="a" * 64,
+            markdown="# Semantic",
+        ),
+        metric_drafts(tmp_path),
+    )
+
+    assert batch.suggestions == []
+    assert batch.metrics == []
+    assert batch.product_facts == []
+    assert batch.provenance is not None
+    assert batch.provenance.profile == "safe-profile"
+
+
+def test_quality_report_provenance_excludes_generated_content() -> None:
+    report = pipeline.QualityReport(
+        status=pipeline.QualityStatus.PASS,
+        product_id=None,
+        product_version=None,
+        completeness=1,
+        hard_errors=[],
+        warnings=[],
+        artifact_hashes={},
+        llm_provenance=LLMMetadata(
+            profile="safe-profile",
+            provider="vertex_gemini",
+            model="safe-model",
+            request_id="request_123",
+            input_tokens=4,
+            output_tokens=2,
+            finish_reason="stop",
+            elapsed_ms=8,
+            retry_count=1,
+            repair_count=1,
+        ),
+    )
+
+    rendered = report.model_dump_json()
+
+    assert "safe-profile" in rendered
+    assert "request_123" in rendered
+    assert "text" not in report.llm_provenance.model_fields_set
+    assert "structured" not in rendered
 
 
 def test_product_facts_omit_low_confidence_and_sort_deduplicated_repeated_values() -> None:
