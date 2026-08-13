@@ -11,7 +11,7 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import ValidationError as PydanticValidationError
 
 from ard_ossie.canonical import canonical_hash
-from ard_ossie.llm import LLMProvider, ProviderExecutionError
+from ard_ossie.llm.contracts import LLMProvider, LLMResult, ProviderExecutionError
 from ard_ossie.semantic.models import (
     MAX_LIST_DEPTH,
     MAX_TABLE_CELLS,
@@ -296,27 +296,28 @@ class SemanticStructureRepairPlanner:
         context: _RepairContext,
         response: object,
     ) -> tuple[_ValidatedPlan | None, str | None, RepairPlan | None]:
-        errors = tuple(Draft202012Validator(context.schema).iter_errors(response))
+        payload = _repair_plan_payload(response)
+        if not isinstance(payload, dict):
+            return None, _SCHEMA_INVALID, None
+        errors = tuple(Draft202012Validator(context.schema).iter_errors(payload))
         if errors:
             return None, _schema_error_code(errors), None
-        if not isinstance(response, dict):
-            return None, _SCHEMA_INVALID, None
-        if _has_empty_non_table_span_ids(response):
-            return None, _SCHEMA_INVALID, _parse_plan(response)
+        if _has_empty_non_table_span_ids(payload):
+            return None, _SCHEMA_INVALID, _parse_plan(payload)
 
-        allocations = _raw_allocations(response)
+        allocations = _raw_allocations(payload)
         allowed = set(context.ordered_span_ids)
         if any(span_id not in allowed for span_id in allocations):
-            parsed = _parse_plan(response)
+            parsed = _parse_plan(payload)
             return None, _UNKNOWN_SPAN, parsed
         if any(span_id not in allocations for span_id in context.ordered_span_ids):
-            parsed = _parse_plan(response)
+            parsed = _parse_plan(payload)
             return None, _MISSING_SPAN, parsed
         if len(allocations) != len(set(allocations)):
             return None, _DUPLICATE_SPAN, None
 
         try:
-            plan = RepairPlan.model_validate(response)
+            plan = RepairPlan.model_validate(payload)
         except PydanticValidationError as error:
             code = _TABLE_INVALID if _is_table_model_error(error) else _SCHEMA_INVALID
             return None, code, None
@@ -336,6 +337,14 @@ class SemanticStructureRepairPlanner:
             if (semantic := _semantic_block(block)) is not None
         )
         return _ValidatedPlan(plan=plan, blocks=blocks), None, plan
+
+
+def _repair_plan_payload(response: object) -> dict[str, object] | None:
+    if isinstance(response, LLMResult):
+        return response.structured
+    if isinstance(response, dict):
+        return response
+    return None
 
 
 def _repair_context(

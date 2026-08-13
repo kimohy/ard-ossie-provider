@@ -6,8 +6,17 @@ from copy import deepcopy
 
 import pytest
 
+from ard_ossie.application.processing import provider_from_environment
 from ard_ossie.canonical import canonical_hash
-from ard_ossie.llm import ProviderExecutionError, ProviderFailureKind
+from ard_ossie.llm import (
+    LLMMetadata,
+    LLMProfileRegistry,
+    LLMProviderFactory,
+    LLMResult,
+    LLMService,
+    ProviderExecutionError,
+    ProviderFailureKind,
+)
 from ard_ossie.semantic.models import (
     ExtractionMode,
     NativeDocument,
@@ -31,7 +40,7 @@ SOURCE_HASH = "a" * 64
 class RecordingProvider:
     def __init__(
         self,
-        response: dict[str, object] | None = None,
+        response: object | None = None,
         *,
         error: Exception | None = None,
         capabilities_error: Exception | None = None,
@@ -61,10 +70,55 @@ class RecordingProvider:
         *,
         schema: dict[str, object],
         messages: list[dict[str, str]],
-    ) -> dict[str, object]:
+    ) -> object:
         self.calls.append({"schema": schema, "messages": messages})
         if self.error is not None:
             raise self.error
+        assert self.response is not None
+        return deepcopy(self.response)
+
+
+def repair_result(plan: dict[str, object] | None) -> LLMResult:
+    return LLMResult(
+        text="",
+        structured=deepcopy(plan),
+        metadata=LLMMetadata(
+            profile="semantic-repair-test",
+            provider="openai_compatible",
+            model="semantic-repair-model",
+            elapsed_ms=1,
+        ),
+    )
+
+
+class ConfiguredRepairProvider:
+    response: LLMResult | None = None
+
+    def __init__(self, **kwargs: object) -> None:
+        self.model = kwargs["model"]
+        self.profile = kwargs["profile"]
+        self.api = kwargs["api"]
+
+    def health_check(self) -> bool:
+        return True
+
+    def capabilities(self) -> dict[str, str]:
+        return {
+            "structured_output": "json_schema",
+            "provider": "openai_compatible",
+            "model": self.model,
+        }
+
+    def generate_text(self, *, messages: list[dict[str, str]]) -> LLMResult:
+        assert self.response is not None
+        return deepcopy(self.response)
+
+    def generate_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[dict[str, str]],
+    ) -> LLMResult:
         assert self.response is not None
         return deepcopy(self.response)
 
@@ -260,6 +314,78 @@ def test_valid_repair_uses_only_allowlisted_spans() -> None:
     assert application.record.ordered_span_hashes == [
         item.text_hash for item in native.spans
     ]
+
+
+def test_raw_provider_llm_result_repair_plan_applies_blocks() -> None:
+    native, skeleton, unresolved_span_ids = unresolved_fixture()
+    provider = RecordingProvider(repair_result(valid_table_plan(unresolved_span_ids)))
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native,
+        skeleton,
+        unresolved_span_ids,
+        trusted_record=None,
+    )
+
+    assert application.record.outcome == "applied"
+    assert isinstance(application.blocks[0], TableBlock)
+
+
+def test_llm_service_llm_result_repair_plan_applies_blocks_and_audit_identity() -> None:
+    native, skeleton, unresolved_span_ids = unresolved_fixture()
+    service = LLMService(
+        RecordingProvider(repair_result(valid_table_plan(unresolved_span_ids)))
+    )
+
+    application = SemanticStructureRepairPlanner(service).repair(
+        native,
+        skeleton,
+        unresolved_span_ids,
+        trusted_record=None,
+    )
+
+    assert application.record.outcome == "applied"
+    assert isinstance(application.blocks[0], TableBlock)
+    assert application.record.provider == "recording_provider"
+    assert application.record.model == "recording-model-v1"
+
+
+def test_configured_profile_llm_service_applies_unresolved_semantic_repair() -> None:
+    native, skeleton, unresolved_span_ids = unresolved_fixture()
+    ConfiguredRepairProvider.response = repair_result(valid_table_plan(unresolved_span_ids))
+    service = provider_from_environment(
+        registry=LLMProfileRegistry.load_packaged(),
+        environment={
+            "ARD_LLM_PROFILE": "openai-compatible-default",
+            "ARD_LLM_BASE_URL": "https://example.test/v1",
+            "ARD_LLM_API_KEY": "secret",
+        },
+        factory=LLMProviderFactory(openai_constructor=ConfiguredRepairProvider),
+    )
+
+    assert isinstance(service, LLMService)
+    application = SemanticStructureRepairPlanner(service).repair(
+        native,
+        skeleton,
+        unresolved_span_ids,
+        trusted_record=None,
+    )
+
+    assert application.record.outcome == "applied"
+    assert isinstance(application.blocks[0], TableBlock)
+    assert application.record.provider == "openai_compatible"
+    assert application.record.model == "gpt-5.6-terra"
+
+
+def test_llm_result_without_structured_object_is_rejected_boundedly() -> None:
+    native, skeleton, unresolved_span_ids = unresolved_fixture()
+    application = SemanticStructureRepairPlanner(
+        RecordingProvider(repair_result(None))
+    ).repair(native, skeleton, unresolved_span_ids, trusted_record=None)
+
+    assert application.blocks == ()
+    assert application.record.outcome == "rejected"
+    assert application.record.validation_codes == ["SEMANTIC_REPAIR_SCHEMA_INVALID"]
 
 
 @pytest.mark.parametrize(
