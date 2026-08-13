@@ -307,6 +307,8 @@ def test_candidate_executable_verifiers_receive_credential_free_environment(
     monkeypatch: pytest.MonkeyPatch,
     verifier: str,
 ) -> None:
+    (tmp_path / "schemas").mkdir()
+
     class Runner:
         def __init__(self) -> None:
             self.requests = []
@@ -353,6 +355,8 @@ def test_candidate_executable_verifiers_receive_credential_free_environment(
 def test_model_schema_verifier_invokes_absolute_trusted_helper(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / "schemas").mkdir()
+
     class Runner:
         def __init__(self) -> None:
             self.requests = []
@@ -381,8 +385,35 @@ def test_model_schema_verifier_invokes_absolute_trusted_helper(
 def test_model_schema_verifier_rejects_success_without_completion_receipt(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / "schemas").mkdir()
+
     class Runner:
         def run(self, request):
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    tools = RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner())
+
+    with pytest.raises(
+        WorkflowValidationError,
+        match="REPOSITORY_MODEL_SCHEMAS_RECEIPT_INVALID",
+    ):
+        tools.run("model-schemas")
+
+
+def test_model_schema_verifier_rejects_receipt_omitting_present_optional_group(
+    tmp_path: Path,
+) -> None:
+    for schema_path in (
+        Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-structure-repair.schema.json"),
+    ):
+        path = tmp_path / "schemas" / schema_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
             return CommandResult(returncode=0, stdout="", stderr="")
 
     tools = RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner())
@@ -452,6 +483,64 @@ def test_static_schema_verifier_accepts_valid_candidate_model_schema_change(
     RepositoryVerificationTools(
         RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
     ).run("schemas")
+
+
+def test_static_schema_verifier_accepts_complete_preapproved_semantic_group(
+    tmp_path: Path,
+) -> None:
+    source = Path(__file__).parents[2] / "schemas"
+    shutil.copytree(source, tmp_path / "schemas")
+    for schema_path in (
+        Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-structure-repair.schema.json"),
+    ):
+        path = tmp_path / "schemas" / schema_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    RepositoryVerificationTools(
+        RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
+    ).run("schemas")
+
+
+@pytest.mark.parametrize(
+    "schema_path",
+    (
+        Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-structure-repair.schema.json"),
+    ),
+)
+def test_static_schema_verifier_rejects_partial_preapproved_semantic_group(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    source = Path(__file__).parents[2] / "schemas"
+    shutil.copytree(source, tmp_path / "schemas")
+    path = tmp_path / "schemas" / schema_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tools = RepositoryVerificationTools(
+        RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
+    )
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
+        tools.run("schemas")
 
 
 def test_static_schema_verifier_rejects_untrusted_catalog_entry(tmp_path: Path) -> None:

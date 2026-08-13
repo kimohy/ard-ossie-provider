@@ -6,13 +6,96 @@ from pathlib import Path
 
 import pytest
 
+import ard_ossie.application.model_schema_verification as verification
 from ard_ossie.application.model_schema_verification import (
     MODEL_SCHEMA_CATALOG,
     ModelSchemaReference,
     ModelSchemaVerificationError,
+    active_model_schema_catalog,
     main,
     verify_model_schemas,
 )
+
+
+def test_active_model_schema_catalog_skips_absent_optional_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required = ModelSchemaReference(
+        Path("required.schema.json"), "json", "JSONDecoder"
+    )
+    optional_group = (
+        ModelSchemaReference(
+            Path("reports/first.schema.json"), "json", "JSONDecoder"
+        ),
+        ModelSchemaReference(
+            Path("reports/second.schema.json"), "json", "JSONDecoder"
+        ),
+    )
+    (tmp_path / "schemas").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(verification, "MODEL_SCHEMA_CATALOG", (required,))
+    monkeypatch.setattr(verification, "OPTIONAL_MODEL_SCHEMA_GROUPS", (optional_group,))
+
+    assert active_model_schema_catalog(tmp_path) == (required,)
+
+
+def test_active_model_schema_catalog_includes_complete_optional_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required = ModelSchemaReference(
+        Path("required.schema.json"), "json", "JSONDecoder"
+    )
+    optional_group = (
+        ModelSchemaReference(
+            Path("reports/first.schema.json"), "json", "JSONDecoder"
+        ),
+        ModelSchemaReference(
+            Path("reports/second.schema.json"), "json", "JSONDecoder"
+        ),
+    )
+    (tmp_path / "schemas" / "reports").mkdir(parents=True)
+    for reference in optional_group:
+        (tmp_path / "schemas" / reference.schema_path).write_text(
+            "{}", encoding="utf-8"
+        )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(verification, "MODEL_SCHEMA_CATALOG", (required,))
+    monkeypatch.setattr(verification, "OPTIONAL_MODEL_SCHEMA_GROUPS", (optional_group,))
+
+    assert active_model_schema_catalog(tmp_path) == (required, *optional_group)
+
+
+@pytest.mark.parametrize(
+    "present_path",
+    ("reports/first.schema.json", "reports/second.schema.json"),
+)
+def test_active_model_schema_catalog_rejects_partial_optional_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    present_path: str,
+) -> None:
+    required = ModelSchemaReference(
+        Path("required.schema.json"), "json", "JSONDecoder"
+    )
+    optional_group = (
+        ModelSchemaReference(
+            Path("reports/first.schema.json"), "json", "JSONDecoder"
+        ),
+        ModelSchemaReference(
+            Path("reports/second.schema.json"), "json", "JSONDecoder"
+        ),
+    )
+    schema = tmp_path / "schemas" / present_path
+    schema.parent.mkdir(parents=True)
+    schema.write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(verification, "MODEL_SCHEMA_CATALOG", (required,))
+    monkeypatch.setattr(verification, "OPTIONAL_MODEL_SCHEMA_GROUPS", (optional_group,))
+
+    with pytest.raises(ModelSchemaVerificationError, match="SCHEMA_CATALOG_MISMATCH"):
+        active_model_schema_catalog(tmp_path)
 
 
 def test_model_schema_helper_accepts_current_candidate_models(

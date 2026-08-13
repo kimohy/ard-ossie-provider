@@ -26,7 +26,10 @@ from ard_ossie.application.contracts import (
     WorkflowTransientError,
     WorkflowValidationError,
 )
-from ard_ossie.application.model_schema_verification import MODEL_SCHEMA_CATALOG
+from ard_ossie.application.model_schema_verification import (
+    ModelSchemaVerificationError,
+    active_model_schema_catalog,
+)
 from ard_ossie.models import StrictModel
 from ard_ossie.ports.filesystem import FileSystemPort, PathPolicyError
 from ard_ossie.ports.git import GitPort
@@ -266,7 +269,7 @@ class RepositoryVerificationTools:
             "nonce": nonce,
             "schemas": [
                 reference.schema_path.as_posix()
-                for reference in MODEL_SCHEMA_CATALOG
+                for reference in active_model_schema_catalog(self.paths.root)
             ],
             "status": "success",
         }
@@ -327,7 +330,16 @@ class RepositoryVerificationTools:
             synchronized = {
                 path for path in parsed if not path.parts or path.parts[0] != "ossie"
             }
-            expected_paths = {entry.schema_path for entry in MODEL_SCHEMA_CATALOG}
+            try:
+                expected_paths = {
+                    entry.schema_path
+                    for entry in active_model_schema_catalog(self.paths.root)
+                }
+            except ModelSchemaVerificationError as error:
+                raise WorkflowValidationError(
+                    "SCHEMA_CATALOG_MISMATCH",
+                    "checked-in model schema catalog differs from the verifier catalog",
+                ) from error
             if synchronized != expected_paths:
                 raise WorkflowValidationError(
                     "SCHEMA_CATALOG_MISMATCH",

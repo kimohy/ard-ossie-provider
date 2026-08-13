@@ -62,6 +62,21 @@ MODEL_SCHEMA_CATALOG = (
     ),
 )
 
+OPTIONAL_MODEL_SCHEMA_GROUPS: tuple[tuple[ModelSchemaReference, ...], ...] = (
+    (
+        ModelSchemaReference(
+            Path("reports/semantic-fidelity.schema.json"),
+            "ard_ossie.semantic.models",
+            "SemanticFidelityReport",
+        ),
+        ModelSchemaReference(
+            Path("reports/semantic-structure-repair.schema.json"),
+            "ard_ossie.semantic.models",
+            "SemanticStructureRepairRecord",
+        ),
+    ),
+)
+
 
 class ModelSchemaVerificationError(RuntimeError):
     def __init__(self, code: str, schema_path: Path = Path(".")) -> None:
@@ -78,7 +93,7 @@ def verify_model_schemas(repository: Path) -> None:
         redirect_stderr(sink),
     ):
         strict_model = _strict_model_class()
-        for reference in MODEL_SCHEMA_CATALOG:
+        for reference in active_model_schema_catalog(repository):
             schema = _load_schema(root, reference.schema_path)
             model = _load_model(reference, strict_model)
             try:
@@ -107,7 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ModelSchemaVerificationError("MODEL_SCHEMA_RECEIPT_INVALID")
         verify_model_schemas(arguments.repository)
         if arguments.result is not None:
-            _write_receipt(arguments.result, arguments.nonce)
+            _write_receipt(arguments.result, arguments.nonce, arguments.repository)
     except ModelSchemaVerificationError as error:
         print(str(error), file=sys.stderr)
         return 10
@@ -115,14 +130,44 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _candidate_root(repository: Path) -> Path:
+    root = _schema_catalog_root(repository)
+    if root != Path.cwd().resolve():
+        raise ModelSchemaVerificationError("MODEL_SCHEMA_REPOSITORY_INVALID")
+    return root
+
+
+def active_model_schema_catalog(repository: Path) -> tuple[ModelSchemaReference, ...]:
+    root = _schema_catalog_root(repository)
+    schemas = (root / "schemas").resolve(strict=True)
+    active = list(MODEL_SCHEMA_CATALOG)
+    for group in OPTIONAL_MODEL_SCHEMA_GROUPS:
+        present = tuple(
+            _schema_exists(schemas, reference.schema_path) for reference in group
+        )
+        if all(present):
+            active.extend(group)
+        elif any(present):
+            raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH")
+    return tuple(active)
+
+
+def _schema_catalog_root(repository: Path) -> Path:
     try:
         root = repository.expanduser().resolve(strict=True)
         schemas = (root / "schemas").resolve(strict=True)
     except OSError as error:
         raise ModelSchemaVerificationError("MODEL_SCHEMA_REPOSITORY_INVALID") from error
-    if root != Path.cwd().resolve() or not schemas.is_dir() or not schemas.is_relative_to(root):
+    if not schemas.is_dir() or not schemas.is_relative_to(root):
         raise ModelSchemaVerificationError("MODEL_SCHEMA_REPOSITORY_INVALID")
     return root
+
+
+def _schema_exists(schemas: Path, schema_path: Path) -> bool:
+    try:
+        resolved = (schemas / schema_path).resolve(strict=True)
+    except OSError:
+        return False
+    return resolved.is_file() and resolved.is_relative_to(schemas)
 
 
 def _strict_model_class() -> type[Any]:
@@ -183,11 +228,12 @@ def _load_model(
     return model
 
 
-def _write_receipt(result: Path, nonce: str) -> None:
+def _write_receipt(result: Path, nonce: str, repository: Path) -> None:
     receipt = {
         "nonce": nonce,
         "schemas": [
-            reference.schema_path.as_posix() for reference in MODEL_SCHEMA_CATALOG
+            reference.schema_path.as_posix()
+            for reference in active_model_schema_catalog(repository)
         ],
         "status": "success",
     }
