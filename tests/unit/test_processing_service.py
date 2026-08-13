@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 import traceback
 from pathlib import Path
 
 import pytest
 
 from ard_ossie.adapters.filesystem import RepositoryPaths
+from ard_ossie.adapters.git_cli import GitCli
+from ard_ossie.adapters.subprocess import SubprocessRunner
 from ard_ossie.application.contracts import (
     ExitCode,
     MutationRecord,
@@ -24,6 +28,7 @@ from ard_ossie.application.processing import (
     ProcessingReconcileService,
     ProcessingRequest,
     ProcessingService,
+    _trusted_semantic_repair,
 )
 from ard_ossie.pipeline import (
     ProcessResult,
@@ -32,7 +37,7 @@ from ard_ossie.pipeline import (
     QualityReport,
     QualityStatus,
 )
-from ard_ossie.ports.git import ChangedPaths, CommitResult, GitTransientError
+from ard_ossie.ports.git import ChangedPaths, CommitResult, GitConflict, GitTransientError
 from ard_ossie.ports.github import GitHubTransientError, PullRequestState
 from tests.integration.test_cli_process import create_product_fixture
 
@@ -44,10 +49,27 @@ INVOCATION_ID = "31543231017-1"
 
 
 class FakeGit:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        base_sha: str = OLD_SHA,
+        revision_files: dict[str, str | bytes] | None = None,
+    ) -> None:
         self.sha = OLD_SHA
         self.remote_sha = OLD_SHA
+        self.base_sha = base_sha
+        self.revision_files = revision_files or {}
+        self.revision_reads: list[tuple[str, str]] = []
         self.pushes: list[tuple[str, bool]] = []
+
+    @classmethod
+    def with_revision_files(
+        cls,
+        *,
+        base_sha: str,
+        files: dict[str, str | bytes],
+    ) -> FakeGit:
+        return cls(base_sha=base_sha, revision_files=files)
 
     def current_sha(self) -> str:
         return self.sha
@@ -63,7 +85,25 @@ class FakeGit:
         self.remote_sha = self.sha
 
     def remote_branch_sha(self, branch: str) -> str | None:
+        if branch == "main":
+            return self.base_sha
         return self.remote_sha
+
+    def read_text_at(self, revision: str, path: str | Path) -> str:
+        relative = Path(path).as_posix()
+        self.revision_reads.append((revision, relative))
+        if revision != self.base_sha or relative not in self.revision_files:
+            raise GitConflict("REVISION_FILE_NOT_FOUND", relative)
+        value = self.revision_files[relative]
+        return value.decode("utf-8") if isinstance(value, bytes) else value
+
+    def read_bytes_at(self, revision: str, path: str | Path) -> bytes:
+        relative = Path(path).as_posix()
+        self.revision_reads.append((revision, relative))
+        if revision != self.base_sha or relative not in self.revision_files:
+            raise GitConflict("REVISION_FILE_NOT_FOUND", relative)
+        value = self.revision_files[relative]
+        return value if isinstance(value, bytes) else value.encode("utf-8")
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
         return ancestor == OLD_SHA and descendant == NEW_SHA
@@ -205,6 +245,278 @@ def repository(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (tmp_path / "registry").mkdir()
+
+
+def valid_repair_record() -> dict[str, object]:
+    return {
+        "source_hash": "a" * 64,
+        "ordered_span_hashes": [],
+        "parser_version": "semantic-structure-v1",
+        "prompt_version": "semantic-structure-repair-v1",
+        "schema_hash": "b" * 64,
+        "provider": "test-provider",
+        "model": "test-model",
+        "outcome": "degraded",
+        "plan": None,
+        "provider_error_code": "LLM_PROVIDER_TRANSIENT_FAILED",
+        "validation_codes": [],
+        "applied_orders": [],
+        "rejected_orders": [],
+        "plan_hash": None,
+    }
+
+
+def capturing_processing_service(
+    tmp_path: Path,
+    *,
+    git: FakeGit,
+) -> tuple[ProcessingService, dict[str, object]]:
+    repository(tmp_path)
+    captured: dict[str, object] = {}
+
+    def processor(product_path: Path, **kwargs) -> ProcessResult:
+        captured.update(kwargs)
+        return successful_processor(product_path, **kwargs)
+
+    return (
+        ProcessingService(
+            RepositoryPaths(tmp_path),
+            git,
+            FakeGitHub(git),
+            processor=processor,
+            provider_factory=lambda: None,
+        ),
+        captured,
+    )
+
+
+def test_processing_passes_none_when_base_quality_has_no_repair_hash_or_file(
+    tmp_path: Path,
+) -> None:
+    git = FakeGit.with_revision_files(
+        base_sha=OLD_SHA,
+        files={
+            "products/sales-order/quality/quality-report.json": json.dumps(
+                {"quality_artifact_hashes": {}}
+            )
+        },
+    )
+    service, captured = capturing_processing_service(tmp_path, git=git)
+
+    service.run(request(tmp_path))
+
+    assert captured["trusted_semantic_repair"] is None
+
+
+def test_processing_passes_only_hash_verified_base_repair_to_processor(
+    tmp_path: Path,
+) -> None:
+    repair_text = json.dumps(valid_repair_record()) + "\n"
+    quality_text = json.dumps(
+        {
+            "quality_artifact_hashes": {
+                "semantic-structure-repair.json": hashlib.sha256(
+                    repair_text.encode()
+                ).hexdigest()
+            }
+        }
+    )
+    git = FakeGit.with_revision_files(
+        base_sha=NEW_SHA,
+        files={
+            "products/sales-order/quality/quality-report.json": quality_text,
+            "products/sales-order/quality/semantic-structure-repair.json": repair_text,
+        },
+    )
+    service, captured = capturing_processing_service(tmp_path, git=git)
+
+    service.run(request(tmp_path))
+
+    assert captured["trusted_semantic_repair"] == valid_repair_record()
+    assert git.revision_reads == [
+        (
+            NEW_SHA,
+            "products/sales-order/quality/quality-report.json",
+        ),
+        (
+            NEW_SHA,
+            "products/sales-order/quality/semantic-structure-repair.json",
+        ),
+    ]
+
+
+def test_processing_hashes_raw_repair_bytes_and_rejects_invalid_utf8(tmp_path: Path) -> None:
+    repair_bytes = b'{"invalid":"\xff"}\n'
+    quality_bytes = json.dumps(
+        {
+            "quality_artifact_hashes": {
+                "semantic-structure-repair.json": hashlib.sha256(repair_bytes).hexdigest()
+            }
+        }
+    ).encode("utf-8")
+    git = FakeGit.with_revision_files(
+        base_sha=NEW_SHA,
+        files={
+            "products/sales-order/quality/quality-report.json": quality_bytes,
+            "products/sales-order/quality/semantic-structure-repair.json": repair_bytes,
+        },
+    )
+    service, _captured = capturing_processing_service(tmp_path, git=git)
+
+    with pytest.raises(WorkflowSecurityError, match="SEMANTIC_REPAIR_TRUST_MISMATCH"):
+        service.run(request(tmp_path))
+
+
+def test_real_git_adapter_loads_hash_verified_repair_blob_over_one_mib(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    quality = tmp_path / "products" / "sales-order" / "quality"
+    quality.mkdir(parents=True)
+    repair = {"padding": "x" * (1024 * 1024 + 17)}
+    repair_bytes = (json.dumps(repair) + "\n").encode("utf-8")
+    (quality / "semantic-structure-repair.json").write_bytes(repair_bytes)
+    (quality / "quality-report.json").write_text(
+        json.dumps(
+            {
+                "quality_artifact_hashes": {
+                    "semantic-structure-repair.json": hashlib.sha256(repair_bytes).hexdigest()
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "fixture"], check=True)
+    revision = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    loaded = _trusted_semantic_repair(
+        GitCli(tmp_path, SubprocessRunner()),
+        base_sha=revision,
+        product_key="sales-order",
+    )
+
+    assert loaded == repair
+
+
+def test_processing_never_reads_repair_from_mutable_checkout(tmp_path: Path) -> None:
+    git = FakeGit()
+    service, captured = capturing_processing_service(tmp_path, git=git)
+    mutable_quality = tmp_path / "products" / "sales-order" / "quality"
+    mutable_quality.mkdir()
+    (mutable_quality / "semantic-structure-repair.json").write_text(
+        json.dumps(valid_repair_record()),
+        encoding="utf-8",
+    )
+
+    service.run(request(tmp_path))
+
+    assert captured["trusted_semantic_repair"] is None
+    assert git.revision_reads == [
+        (OLD_SHA, "products/sales-order/quality/quality-report.json"),
+        (OLD_SHA, "products/sales-order/quality/semantic-structure-repair.json"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("quality_text", "repair_text"),
+    [
+        pytest.param(
+            json.dumps(
+                {
+                    "quality_artifact_hashes": {
+                        "semantic-structure-repair.json": "0" * 64
+                    }
+                }
+            ),
+            json.dumps(valid_repair_record()),
+            id="digest-mismatch",
+        ),
+        pytest.param("{", json.dumps(valid_repair_record()), id="malformed-quality"),
+        pytest.param(
+            json.dumps(
+                {
+                    "quality_artifact_hashes": {
+                        "semantic-structure-repair.json": hashlib.sha256(b"{").hexdigest()
+                    }
+                }
+            ),
+            "{",
+            id="malformed-repair",
+        ),
+        pytest.param(None, json.dumps(valid_repair_record()), id="missing-quality"),
+        pytest.param(
+            json.dumps(
+                {
+                    "quality_artifact_hashes": {
+                        "semantic-structure-repair.json": None
+                    }
+                }
+            ),
+            None,
+            id="null-digest-without-repair",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "quality_artifact_hashes": {
+                        "semantic-structure-repair.json": 7
+                    }
+                }
+            ),
+            json.dumps(valid_repair_record()),
+            id="non-string-digest-with-repair",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "quality_artifact_hashes": {
+                        "semantic-structure-repair.json": "0" * 64
+                    }
+                }
+            ),
+            None,
+            id="missing-repair",
+        ),
+    ],
+)
+def test_processing_rejects_unverified_base_repair_state(
+    tmp_path: Path,
+    quality_text: str | None,
+    repair_text: str | None,
+) -> None:
+    files = {}
+    if quality_text is not None:
+        files["products/sales-order/quality/quality-report.json"] = quality_text
+    if repair_text is not None:
+        files["products/sales-order/quality/semantic-structure-repair.json"] = repair_text
+    git = FakeGit.with_revision_files(base_sha=NEW_SHA, files=files)
+    service, _ = capturing_processing_service(tmp_path, git=git)
+
+    with pytest.raises(WorkflowSecurityError) as captured:
+        service.run(request(tmp_path))
+
+    assert captured.value.code == "SEMANTIC_REPAIR_TRUST_MISMATCH"
+    assert str(captured.value) == (
+        "SEMANTIC_REPAIR_TRUST_MISMATCH: "
+        "trusted semantic repair record failed hash or JSON verification"
+    )
+
+
+def test_processing_rejects_noncanonical_base_revision(tmp_path: Path) -> None:
+    git = FakeGit(base_sha="B" * 40)
+    service, _ = capturing_processing_service(tmp_path, git=git)
+
+    with pytest.raises(WorkflowSecurityError, match="SEMANTIC_REPAIR_TRUST_MISMATCH"):
+        service.run(request(tmp_path))
 
 
 def bind_changeset(tmp_path: Path) -> None:

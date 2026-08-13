@@ -404,20 +404,28 @@ def test_model_schema_verifier_rejects_success_without_completion_receipt(
         tools.run("model-schemas")
 
 
-def test_model_schema_verifier_rejects_receipt_omitting_present_optional_group(
+def test_model_schema_verifier_rejects_receipt_omitting_required_semantic_schemas(
     tmp_path: Path,
 ) -> None:
-    for schema_path in (
-        Path("reports/semantic-fidelity.schema.json"),
-        Path("reports/semantic-structure-repair.schema.json"),
-    ):
-        path = tmp_path / "schemas" / schema_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}", encoding="utf-8")
+    (tmp_path / "schemas").mkdir()
 
     class Runner:
         def run(self, request):
-            write_model_schema_receipt(request)
+            result = Path(request.argv[request.argv.index("--result") + 1])
+            nonce = request.argv[request.argv.index("--nonce") + 1]
+            result.write_text(
+                json.dumps(
+                    {
+                        "nonce": nonce,
+                        "schemas": [
+                            reference.schema_path.as_posix()
+                            for reference in MODEL_SCHEMA_CATALOG[:-2]
+                        ],
+                        "status": "success",
+                    }
+                ),
+                encoding="utf-8",
+            )
             return CommandResult(returncode=0, stdout="", stderr="")
 
     tools = RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner())
@@ -427,24 +435,6 @@ def test_model_schema_verifier_rejects_receipt_omitting_present_optional_group(
         match="REPOSITORY_MODEL_SCHEMAS_RECEIPT_INVALID",
     ):
         tools.run("model-schemas")
-
-
-def test_model_schema_verifier_maps_partial_optional_group_to_workflow_error(
-    tmp_path: Path,
-) -> None:
-    partial = tmp_path / "schemas" / "reports" / "semantic-fidelity.schema.json"
-    partial.parent.mkdir(parents=True)
-    partial.write_text("{}", encoding="utf-8")
-
-    class Runner:
-        def run(self, request):
-            write_model_schema_receipt(request)
-            return CommandResult(returncode=0, stdout="", stderr="")
-
-    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
-        RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner()).run(
-            "model-schemas"
-        )
 
 
 def test_model_schema_verifier_maps_catalog_access_error_to_workflow_error(
@@ -600,26 +590,11 @@ def test_static_schema_verifier_accepts_valid_candidate_model_schema_change(
     ).run("schemas")
 
 
-def test_static_schema_verifier_accepts_complete_preapproved_semantic_group(
+def test_static_schema_verifier_accepts_built_in_required_semantic_schemas(
     tmp_path: Path,
 ) -> None:
     source = Path(__file__).parents[2] / "schemas"
     shutil.copytree(source, tmp_path / "schemas")
-    for schema_path in (
-        Path("reports/semantic-fidelity.schema.json"),
-        Path("reports/semantic-structure-repair.schema.json"),
-    ):
-        path = tmp_path / "schemas" / schema_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "type": "object",
-                }
-            ),
-            encoding="utf-8",
-        )
 
     RepositoryVerificationTools(
         RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
@@ -633,23 +608,14 @@ def test_static_schema_verifier_accepts_complete_preapproved_semantic_group(
         Path("reports/semantic-structure-repair.schema.json"),
     ),
 )
-def test_static_schema_verifier_rejects_partial_preapproved_semantic_group(
+def test_static_schema_verifier_rejects_missing_required_semantic_schema(
     tmp_path: Path,
     schema_path: Path,
 ) -> None:
     source = Path(__file__).parents[2] / "schemas"
     shutil.copytree(source, tmp_path / "schemas")
     path = tmp_path / "schemas" / schema_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-            }
-        ),
-        encoding="utf-8",
-    )
+    path.unlink()
 
     tools = RepositoryVerificationTools(
         RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,7 +19,7 @@ from ard_ossie.impact import ChangeSetStatus
 from ard_ossie.models import ProductKey, StrictModel, TableId
 from ard_ossie.ports.filesystem import FileSystemPort, PathPolicyError
 from ard_ossie.ports.git import GitPort
-from ard_ossie.ports.github import GitHubPort, ReleaseState
+from ard_ossie.ports.github import GitHubPort, ReleaseAssetPayload, ReleaseState
 from ard_ossie.registry import Registry
 from ard_ossie.release import (
     ReleaseBlocked,
@@ -28,6 +27,7 @@ from ard_ossie.release import (
     build_release_bundle,
     release_source_paths,
     resolve_release_plan,
+    verify_release_bundle,
 )
 
 
@@ -76,8 +76,12 @@ class ReleasePublicationService:
         except (OSError, TypeError, ValueError, ReleaseBlocked) as error:
             raise _release_conflict(error, "RELEASE_BUNDLE_BUILD_FAILED") from error
         bundle = self.paths.resolve_read(bundle)
-        _verify_bundle_sources(bundle, plan.artifact_hashes)
-        artifact_sha256 = _sha256_file(bundle)
+        try:
+            bundle_payload = verify_release_bundle(bundle, plan.artifact_hashes)
+        except ReleaseBlocked as error:
+            raise _release_conflict(error, "RELEASE_BUNDLE_INVALID") from error
+        artifact_sha256 = hashlib.sha256(bundle_payload).hexdigest()
+        release_asset = ReleaseAssetPayload(name=bundle.name, payload=bundle_payload)
         self._require_current_head(request.current)
 
         tags = [plan.product_tag, *plan.table_tags]
@@ -89,7 +93,8 @@ class ReleasePublicationService:
                     f"immutable tag {tag} targets {target}, not {request.current}",
                 )
         existing_release = self.github.get_release(plan.product_tag)
-        _verify_existing_release(existing_release, plan, bundle.name, artifact_sha256)
+        _verify_existing_release(existing_release, plan, release_asset.name, artifact_sha256)
+        _require_bundle_unchanged(bundle, artifact_sha256)
 
         artifact = bundle.relative_to(self.paths.root).as_posix()
         outputs: dict[str, object] = {
@@ -125,7 +130,7 @@ class ReleasePublicationService:
                 self.github.upsert_release(
                     plan.product_tag,
                     f"{plan.product_key} v{plan.product_version}",
-                    bundle,
+                    release_asset,
                     artifact_sha256,
                 )
             )
@@ -241,36 +246,27 @@ def _verify_existing_release(
         )
 
 
-def _verify_bundle_sources(bundle: Path, expected: dict[str, str]) -> None:
-    try:
-        with zipfile.ZipFile(bundle) as archive:
-            names = archive.namelist()
-            if len(names) != len(set(names)) or set(names) != set(expected):
-                raise WorkflowConflict(
-                    "RELEASE_BUNDLE_CONTENT_MISMATCH",
-                    "release bundle entries do not match the verified plan",
-                )
-            for name, digest in expected.items():
-                if hashlib.sha256(archive.read(name)).hexdigest() != digest:
-                    raise WorkflowConflict(
-                        "RELEASE_BUNDLE_HASH_MISMATCH",
-                        f"release bundle source changed after planning: {name}",
-                    )
-    except WorkflowConflict:
-        raise
-    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
-        raise WorkflowConflict(
-            "RELEASE_BUNDLE_INVALID",
-            "release bundle is malformed",
-        ) from error
-
-
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _require_bundle_unchanged(path: Path, expected_sha256: str) -> None:
+    try:
+        current_sha256 = _sha256_file(path)
+    except OSError as error:
+        raise WorkflowConflict(
+            "RELEASE_BUNDLE_CHANGED",
+            "release bundle changed before publication",
+        ) from error
+    if current_sha256 != expected_sha256:
+        raise WorkflowConflict(
+            "RELEASE_BUNDLE_CHANGED",
+            "release bundle changed before publication",
+        )
 
 
 def _release_conflict(error: Exception, fallback: str) -> WorkflowConflict:

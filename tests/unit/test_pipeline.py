@@ -32,11 +32,60 @@ from ard_ossie.pipeline import (
     _shared_table_findings,
 )
 from ard_ossie.registry import Registry
+from ard_ossie.semantic.models import SemanticStructureRepairRecord
+from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 from ard_ossie.versioning import plan_version
 
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 OTHER_PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
+
+
+def trusted_repair_payload() -> dict[str, object]:
+    return SemanticStructureRepairRecord(
+        source_hash="a" * 64,
+        ordered_span_hashes=[],
+        parser_version="semantic-structure-v1",
+        prompt_version="semantic-structure-repair-v1",
+        schema_hash="b" * 64,
+        provider="test-provider",
+        model="test-model",
+        outcome="degraded",
+        plan=None,
+        provider_error_code="LLM_PROVIDER_TRANSIENT_FAILED",
+        validation_codes=[],
+        applied_orders=[],
+        rejected_orders=[],
+        plan_hash=None,
+    ).model_dump(mode="json")
+
+
+def test_processing_parser_injects_planner_and_validated_trusted_record() -> None:
+    provider = object()
+
+    parser = pipeline._processing_parser(
+        provider=provider,
+        parser=None,
+        trusted_semantic_repair=trusted_repair_payload(),
+    )
+
+    assert isinstance(parser._structure_repair_planner, SemanticStructureRepairPlanner)
+    assert parser._structure_repair_planner._provider is provider
+    assert parser._trusted_repair_record == SemanticStructureRepairRecord.model_validate(
+        trusted_repair_payload()
+    )
+
+
+def test_processing_parser_leaves_custom_parser_untouched() -> None:
+    custom = pipeline.DoclingParser()
+
+    parser = pipeline._processing_parser(
+        provider=object(),
+        parser=custom,
+        trusted_semantic_repair={"invalid": "ignored for a custom parser"},
+    )
+
+    assert parser is custom
 
 
 def product_evidence(

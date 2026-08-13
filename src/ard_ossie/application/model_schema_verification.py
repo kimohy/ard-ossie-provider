@@ -52,6 +52,16 @@ MODEL_SCHEMA_CATALOG = (
         "QualityReport",
     ),
     ModelSchemaReference(
+        Path("reports/semantic-fidelity.schema.json"),
+        "ard_ossie.semantic.models",
+        "SemanticFidelityReport",
+    ),
+    ModelSchemaReference(
+        Path("reports/semantic-structure-repair.schema.json"),
+        "ard_ossie.semantic.models",
+        "SemanticStructureRepairRecord",
+    ),
+    ModelSchemaReference(
         Path("reports/version-report.schema.json"),
         "ard_ossie.versioning",
         "VersionDecision",
@@ -63,20 +73,7 @@ MODEL_SCHEMA_CATALOG = (
     ),
 )
 
-OPTIONAL_MODEL_SCHEMA_GROUPS: tuple[tuple[ModelSchemaReference, ...], ...] = (
-    (
-        ModelSchemaReference(
-            Path("reports/semantic-fidelity.schema.json"),
-            "ard_ossie.semantic.models",
-            "SemanticFidelityReport",
-        ),
-        ModelSchemaReference(
-            Path("reports/semantic-structure-repair.schema.json"),
-            "ard_ossie.semantic.models",
-            "SemanticStructureRepairRecord",
-        ),
-    ),
-)
+OPTIONAL_MODEL_SCHEMA_GROUPS: tuple[tuple[ModelSchemaReference, ...], ...] = ()
 
 
 class ModelSchemaVerificationError(RuntimeError):

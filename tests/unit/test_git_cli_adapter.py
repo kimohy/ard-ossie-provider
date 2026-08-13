@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
 
 from ard_ossie.adapters.git_cli import GitCli
+from ard_ossie.adapters.subprocess import SubprocessRunner
 from ard_ossie.ports.filesystem import PathPolicyError
 from ard_ossie.ports.git import CommitResult, GitConflict, GitTransientError
 from ard_ossie.ports.process import CommandRequest, CommandResult
@@ -270,6 +272,29 @@ def test_read_text_at_uses_validated_revision_and_repository_path(tmp_path: Path
     assert runner.argv == [
         ("git", "show", f"{SHA}:registry/products/prd_example.json")
     ]
+
+
+def test_read_bytes_at_returns_real_git_blob_over_generic_runner_limit(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    payload = b'{"padding":"' + (b"x" * (1024 * 1024 + 17)) + b'"}\n'
+    (tmp_path / "large.json").write_bytes(payload)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "large.json"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "fixture"], check=True)
+    revision = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    actual = GitCli(tmp_path, SubprocessRunner()).read_bytes_at(revision, "large.json")
+
+    assert actual == payload
 
 
 def test_merge_revision_creates_an_explicit_non_fast_forward_merge(

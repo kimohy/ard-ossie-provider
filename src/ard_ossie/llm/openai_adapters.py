@@ -105,7 +105,12 @@ class OpenAICompatibleProvider:
         return True
 
     def capabilities(self) -> dict[str, JsonValue]:
-        return {"api_style": self.api, "structured_output": "json_schema"}
+        return {
+            "api_style": self.api,
+            "structured_output": "json_schema",
+            "provider": self.provider_name,
+            "model": self.model,
+        }
 
     def generate_text(
         self,

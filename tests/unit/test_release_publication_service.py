@@ -16,6 +16,7 @@ from ard_ossie.application.release_publication import (
     ReleasePublicationRequest,
     ReleasePublicationService,
 )
+from ard_ossie.cli import release as release_cli
 from ard_ossie.impact import build_changeset
 from ard_ossie.models import (
     ProductRecord,
@@ -30,7 +31,7 @@ from ard_ossie.ports.github import (
     ReleaseState,
 )
 from ard_ossie.registry import Registry
-from ard_ossie.release import build_release_bundle
+from ard_ossie.release import ReleaseBlocked, build_release_bundle
 
 CURRENT = "a" * 40
 MERGE_SHA = "b" * 40
@@ -165,13 +166,42 @@ def build_repository(tmp_path: Path) -> None:
         value = f"generated:{name}".encode()
         (generated / name).write_bytes(value)
         hashes[name] = hashlib.sha256(value).hexdigest()
+    quality_hashes: dict[str, str] = {}
     for name in (
         "duplicate-report.json",
         "version-report.json",
         "impact-report.json",
         "llm-suggestions.json",
+        "semantic-fidelity.json",
     ):
-        (quality / name).write_text(json.dumps({"name": name}), encoding="utf-8")
+        payload: dict[str, object] = {"name": name}
+        if name == "semantic-fidelity.json":
+            payload = {
+                "source_hash": "a" * 64,
+                "extraction_mode": "docx_xml",
+                "page_count": 0,
+                "parser_versions": {"semantic": "test"},
+                "status": "PASS",
+                "heading_count": 0,
+                "paragraph_count": 1,
+                "list_item_count": 0,
+                "table_count": 0,
+                "row_count": 0,
+                "cell_count": 0,
+                "source_span_count": 1,
+                "preserved_span_count": 1,
+                "excluded_span_count": 0,
+                "unmatched_span_count": 0,
+                "duplicated_span_count": 0,
+                "degraded_block_count": 0,
+                "source_text_coverage": 1.0,
+                "removed_elements": [],
+                "degraded_blocks": [],
+                "table_results": [],
+            }
+        value = json.dumps(payload).encode()
+        (quality / name).write_bytes(value)
+        quality_hashes[name] = hashlib.sha256(value).hexdigest()
     (quality / "quality-report.json").write_text(
         json.dumps(
             {
@@ -182,6 +212,7 @@ def build_repository(tmp_path: Path) -> None:
                 "hard_errors": [],
                 "warnings": [],
                 "artifact_hashes": hashes,
+                "quality_artifact_hashes": quality_hashes,
             }
         ),
         encoding="utf-8",
@@ -430,6 +461,164 @@ def test_publish_rejects_bundle_source_tampering_before_tags(tmp_path: Path) -> 
         ).run(request(tmp_path))
 
     assert git.created == []
+
+
+def test_publish_rejects_bundle_mutation_after_hash_before_tags(tmp_path: Path) -> None:
+    build_repository(tmp_path)
+    bundle = tmp_path / "dist" / f"{PRODUCT_ID}-v12.zip"
+
+    class MutatingGit(FakeGit):
+        changed = False
+
+        def tag_target(self, tag: str) -> str | None:
+            if not self.changed:
+                self.changed = True
+                bundle.write_bytes(b"replacement payload after service hash")
+            return super().tag_target(tag)
+
+    class HashingGitHub(FakeGitHub):
+        def upsert_release(self, tag: str, title: str, asset: object, sha256: str):
+            payload = (
+                asset.payload
+                if hasattr(asset, "payload")
+                else Path(asset).read_bytes()  # type: ignore[arg-type]
+            )
+            if hashlib.sha256(payload).hexdigest() != sha256:
+                raise WorkflowConflict(
+                    "RELEASE_BUNDLE_CHANGED",
+                    "release bundle changed before upload",
+                )
+            return super().upsert_release(tag, title, asset, sha256)  # type: ignore[arg-type]
+
+    git = MutatingGit()
+    github = HashingGitHub()
+
+    with pytest.raises(WorkflowConflict, match="RELEASE_BUNDLE_CHANGED"):
+        service(tmp_path, git, github).run(request(tmp_path))
+
+    assert git.created == []
+    assert git.pushed == []
+    assert github.upserts == []
+
+
+def test_release_build_rejects_completed_zip_that_does_not_match_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_repository(tmp_path)
+    real_builder = build_release_bundle
+
+    def tampering_builder(product_root: Path, output: Path) -> Path:
+        (product_root / "generated" / "ossie-model.json").write_text(
+            "changed after plan resolution",
+            encoding="utf-8",
+        )
+        return real_builder(product_root, output)
+
+    monkeypatch.setattr(release_cli, "build_release_bundle", tampering_builder)
+
+    with pytest.raises(ReleaseBlocked, match="RELEASE_BUNDLE_HASH_MISMATCH"):
+        release_cli.release_build(
+            PRODUCT_ID,
+            registry=tmp_path / "registry",
+            output=tmp_path / "dist",
+            repository=tmp_path,
+            table_id=[TABLE_ID],
+        )
+
+    assert not (tmp_path / "dist" / "release-plan.json").exists()
+    assert not (tmp_path / "dist" / f"{PRODUCT_ID}-v12.zip").exists()
+
+
+def test_release_build_promotes_the_verified_immutable_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_repository(tmp_path)
+    verified_payload = b""
+    real_verifier = release_cli.verify_release_bundle
+
+    def mutate_after_verification(bundle: Path, expected: dict[str, str]) -> bytes:
+        nonlocal verified_payload
+        verified_payload = real_verifier(bundle, expected)
+        bundle.write_bytes(b"replacement after verification")
+        return verified_payload
+
+    monkeypatch.setattr(release_cli, "verify_release_bundle", mutate_after_verification)
+
+    release_cli.release_build(
+        PRODUCT_ID,
+        registry=tmp_path / "registry",
+        output=tmp_path / "dist",
+        repository=tmp_path,
+        table_id=[TABLE_ID],
+    )
+
+    destination = tmp_path / "dist" / f"{PRODUCT_ID}-v12.zip"
+    assert destination.read_bytes() == verified_payload
+    assert destination.read_bytes() != b"replacement after verification"
+
+
+def test_release_build_rejects_builder_returned_symlink_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_repository(tmp_path)
+    real_builder = build_release_bundle
+
+    def aliasing_builder(product_root: Path, output: Path) -> Path:
+        real_builder(product_root, output)
+        alias = output.with_suffix(".alias")
+        alias.symlink_to(output.name)
+        return alias
+
+    monkeypatch.setattr(release_cli, "build_release_bundle", aliasing_builder)
+
+    with pytest.raises(ReleaseBlocked, match="RELEASE_BUNDLE_OUTPUT_MISMATCH"):
+        release_cli.release_build(
+            PRODUCT_ID,
+            registry=tmp_path / "registry",
+            output=tmp_path / "dist",
+            repository=tmp_path,
+            table_id=[TABLE_ID],
+        )
+
+    assert not (tmp_path / "dist" / "release-plan.json").exists()
+    assert not (tmp_path / "dist" / f"{PRODUCT_ID}-v12.zip").exists()
+
+
+@pytest.mark.parametrize("replacement_kind", ["symlink", "directory"])
+def test_release_build_rejects_nonregular_exact_builder_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+) -> None:
+    build_repository(tmp_path)
+    real_builder = build_release_bundle
+
+    def nonregular_builder(product_root: Path, output: Path) -> Path:
+        alternate = output.with_suffix(".real")
+        real_builder(product_root, alternate)
+        output.unlink()
+        if replacement_kind == "symlink":
+            output.symlink_to(alternate.name)
+        else:
+            output.mkdir()
+        return output
+
+    monkeypatch.setattr(release_cli, "build_release_bundle", nonregular_builder)
+
+    with pytest.raises(ReleaseBlocked, match="RELEASE_BUNDLE_OUTPUT_MISMATCH"):
+        release_cli.release_build(
+            PRODUCT_ID,
+            registry=tmp_path / "registry",
+            output=tmp_path / "dist",
+            repository=tmp_path,
+            table_id=[TABLE_ID],
+        )
+
+    assert not (tmp_path / "dist" / "release-plan.json").exists()
+    assert not (tmp_path / "dist" / f"{PRODUCT_ID}-v12.zip").exists()
 
 
 def test_publish_rejects_symlinked_public_source_before_bundle_or_tags(

@@ -11,12 +11,18 @@ from ard_ossie.ports.git import (
     GitConflict,
     GitTransientError,
 )
-from ard_ossie.ports.process import CommandRequest, CommandResult, CommandRunner
+from ard_ossie.ports.process import (
+    BinaryCommandResult,
+    CommandRequest,
+    CommandResult,
+    CommandRunner,
+)
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _BOT_NAME = "github-actions[bot]"
 _BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+_MAX_REVISION_FILE_BYTES = 16 * 1024 * 1024
 
 
 class GitCli:
@@ -301,6 +307,22 @@ class GitCli:
             )
         return result.stdout
 
+    def read_bytes_at(self, revision: str, path: str | Path) -> bytes:
+        revision = _validated_sha(revision)
+        relative = self._repository_relative(path)
+        result = self._git_bytes("show", f"{revision}:{relative.as_posix()}")
+        if result.returncode != 0:
+            raise GitConflict(
+                "REVISION_FILE_NOT_FOUND",
+                result.stderr.decode("utf-8", errors="replace") or relative.as_posix(),
+            )
+        if result.stdout_truncated:
+            raise GitTransientError(
+                "REVISION_FILE_TOO_LARGE",
+                f"revision file exceeds {_MAX_REVISION_FILE_BYTES} bytes",
+            )
+        return result.stdout
+
     def _repository_relative(self, value: str | Path) -> Path:
         resolved = self.paths.resolve_write(value)
         return resolved.relative_to(self.repository)
@@ -317,6 +339,27 @@ class GitCli:
                 cwd=self.repository,
                 timeout_seconds=timeout_seconds,
             )
+        )
+
+    def _git_bytes(
+        self,
+        *arguments: str,
+        timeout_seconds: int = 60,
+    ) -> BinaryCommandResult:
+        try:
+            run_bytes = self.runner.run_bytes
+        except AttributeError:
+            raise GitTransientError(
+                "BINARY_COMMAND_UNAVAILABLE",
+                "configured command runner cannot return exact bytes",
+            ) from None
+        return run_bytes(
+            CommandRequest(
+                argv=("git", *arguments),
+                cwd=self.repository,
+                timeout_seconds=timeout_seconds,
+            ),
+            max_output_bytes=_MAX_REVISION_FILE_BYTES,
         )
 
     @staticmethod

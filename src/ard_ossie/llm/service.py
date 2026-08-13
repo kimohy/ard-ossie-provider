@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema import validate
+from pydantic import JsonValue
 
 from ard_ossie.llm.contracts import (
     LLMProvider,
@@ -31,6 +32,12 @@ class LLMService:
         self.provider = provider
         self._sleep = sleep
         self._jitter = jitter
+
+    def health_check(self) -> bool:
+        return self.provider.health_check()
+
+    def capabilities(self) -> dict[str, JsonValue]:
+        return self.provider.capabilities()
 
     def generate_text(
         self,

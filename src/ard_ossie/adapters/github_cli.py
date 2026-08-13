@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import tempfile
+from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,7 @@ from ard_ossie.ports.github import (
     GitHubTransientError,
     LabelState,
     PullRequestState,
+    ReleaseAssetPayload,
     ReleaseAssetState,
     ReleaseState,
     RepositoryState,
@@ -281,75 +285,153 @@ class GitHubCli:
         self,
         tag: str,
         title: str,
-        asset: Path,
+        asset: ReleaseAssetPayload | Path,
         sha256: str,
     ) -> MutationRecord:
         _validate_name(tag, "tag")
         if not _SHA256.fullmatch(sha256):
             raise ValueError("invalid release asset SHA-256")
-        if self.paths is None:
-            raise GitHubConflict(
-                "RELEASE_ASSET_PATH_POLICY_REQUIRED",
-                "release upload requires an explicit repository root",
-            )
-        asset = self.paths.resolve_read(asset)
-        if not asset.is_file():
-            raise GitHubConflict("RELEASE_ASSET_NOT_FOUND", asset.name)
-        existing = self.get_release(tag)
-        if existing is not None:
-            matching = [item for item in existing.assets if item.name == asset.name]
-            if len(matching) > 1:
-                raise GitHubConflict("MULTIPLE_RELEASE_ASSETS", asset.name)
-            if matching:
-                digest = matching[0].digest
-                if digest != sha256:
-                    raise GitHubConflict("RELEASE_ASSET_CONFLICT", asset.name)
-            release_id = existing.id
-            metadata_changed = (
-                existing.title != title or existing.draft or existing.prerelease
-            )
-            if metadata_changed:
-                self._api_json(
-                    "PATCH",
-                    f"repos/{self.repository_name}/releases/{release_id}",
-                    payload={"draft": False, "name": title, "prerelease": False},
+        payload = self._release_asset_payload(asset, sha256)
+        temporary, upload_path = self._stage_release_asset(payload)
+        primary_error: BaseException | None = None
+        try:
+            existing = self.get_release(tag)
+            if existing is not None:
+                matching = [item for item in existing.assets if item.name == payload.name]
+                if len(matching) > 1:
+                    raise GitHubConflict("MULTIPLE_RELEASE_ASSETS", payload.name)
+                if matching:
+                    digest = matching[0].digest
+                    if digest != sha256:
+                        raise GitHubConflict("RELEASE_ASSET_CONFLICT", payload.name)
+                release_id = existing.id
+                metadata_changed = (
+                    existing.title != title or existing.draft or existing.prerelease
                 )
-            if matching:
-                return MutationRecord(
-                    resource="release",
-                    target=tag,
-                    action="update" if metadata_changed else "noop",
-                    result_id=str(existing.id),
+                if metadata_changed:
+                    self._api_json(
+                        "PATCH",
+                        f"repos/{self.repository_name}/releases/{release_id}",
+                        payload={"draft": False, "name": title, "prerelease": False},
+                    )
+                if matching:
+                    return MutationRecord(
+                        resource="release",
+                        target=tag,
+                        action="update" if metadata_changed else "noop",
+                        result_id=str(existing.id),
+                    )
+            else:
+                created = self._api_json(
+                    "POST",
+                    f"repos/{self.repository_name}/releases",
+                    payload={
+                        "draft": False,
+                        "generate_release_notes": False,
+                        "name": title,
+                        "prerelease": False,
+                        "tag_name": tag,
+                    },
                 )
+                release_id = int(created["id"])
+            upload = self._gh(
+                "release",
+                "upload",
+                tag,
+                str(upload_path),
+                "--repo",
+                self.repository_name,
+                timeout_seconds=600,
+            )
+            self._require_success(upload, "RELEASE_UPLOAD_FAILED")
+            return MutationRecord(
+                resource="release",
+                target=tag,
+                action="upload",
+                result_id=f"{release_id}:{sha256}",
+            )
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            try:
+                self._cleanup_release_asset_stage(temporary)
+            except GitHubTransientError as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(str(cleanup_error))
+
+    @staticmethod
+    def _stage_release_asset(
+        payload: ReleaseAssetPayload,
+    ) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+        temporary: tempfile.TemporaryDirectory[str] | None = None
+        try:
+            temporary = tempfile.TemporaryDirectory(prefix="ard-release-upload-")
+            os.chmod(temporary.name, 0o700)
+            upload_path = Path(temporary.name) / payload.name
+            descriptor = os.open(
+                upload_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    descriptor = -1
+                    stream.write(payload.payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+            return temporary, upload_path
+        except OSError as error:
+            if temporary is not None:
+                with suppress(GitHubTransientError):
+                    GitHubCli._cleanup_release_asset_stage(temporary)
+            raise GitHubTransientError(
+                "RELEASE_ASSET_STAGING_FAILED",
+                "unable to stage the immutable release asset",
+            ) from error
+
+    @staticmethod
+    def _cleanup_release_asset_stage(
+        temporary: tempfile.TemporaryDirectory[str],
+    ) -> None:
+        try:
+            temporary.cleanup()
+        except OSError as error:
+            raise GitHubTransientError(
+                "RELEASE_ASSET_CLEANUP_FAILED",
+                "unable to clean the private release asset stage",
+            ) from error
+
+    def _release_asset_payload(
+        self,
+        asset: ReleaseAssetPayload | Path,
+        sha256: str,
+    ) -> ReleaseAssetPayload:
+        if isinstance(asset, ReleaseAssetPayload):
+            payload = asset
         else:
-            created = self._api_json(
-                "POST",
-                f"repos/{self.repository_name}/releases",
-                payload={
-                    "draft": False,
-                    "generate_release_notes": False,
-                    "name": title,
-                    "prerelease": False,
-                    "tag_name": tag,
-                },
+            if self.paths is None:
+                raise GitHubConflict(
+                    "RELEASE_ASSET_PATH_POLICY_REQUIRED",
+                    "release upload requires an explicit repository root",
+                )
+            path = self.paths.resolve_read(asset)
+            if not path.is_file():
+                raise GitHubConflict("RELEASE_ASSET_NOT_FOUND", path.name)
+            try:
+                payload = ReleaseAssetPayload(name=path.name, payload=path.read_bytes())
+            except OSError as error:
+                raise GitHubConflict("RELEASE_ASSET_NOT_FOUND", path.name) from error
+        if hashlib.sha256(payload.payload).hexdigest() != sha256:
+            raise GitHubConflict(
+                "RELEASE_BUNDLE_CHANGED",
+                "release asset bytes do not match the verified digest",
             )
-            release_id = int(created["id"])
-        upload = self._gh(
-            "release",
-            "upload",
-            tag,
-            str(asset),
-            "--repo",
-            self.repository_name,
-            timeout_seconds=600,
-        )
-        self._require_success(upload, "RELEASE_UPLOAD_FAILED")
-        return MutationRecord(
-            resource="release",
-            target=tag,
-            action="upload",
-            result_id=f"{release_id}:{sha256}",
-        )
+        return payload
 
     def repository_dispatch(
         self,

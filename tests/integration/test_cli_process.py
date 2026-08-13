@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from importlib import import_module
 from pathlib import Path
@@ -12,11 +13,20 @@ from openpyxl import Workbook
 from typer.testing import CliRunner
 
 from ard_ossie.cli import app
+from ard_ossie.docling_parser import ParsedDocument
+from ard_ossie.ingestion import SourceRole
 from ard_ossie.ossie_compiler import load_ossie_011_schema
 from ard_ossie.pipeline import (
+    PipelineValidationError,
     ProviderExecutionError,
     ProviderFailureKind,
     process_product,
+)
+from ard_ossie.semantic.models import (
+    DegradedBlockAudit,
+    ExtractionMode,
+    SemanticFidelityReport,
+    SemanticStructureRepairRecord,
 )
 
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
@@ -67,6 +77,188 @@ def create_product_fixture(root: Path, *, valid_dictionary: bool = True) -> Path
     return product
 
 
+def add_complete_dictionary_descriptions(product: Path) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "orders"
+    sheet["B3"] = "저장 플랫폼 및 세부 위치"
+    sheet["C3"] = "erp.analytics.sales"
+    sheet["B4"] = "테이블 명"
+    sheet["C4"] = "orders"
+    sheet["B7"] = "테이블 설명"
+    sheet["C7"] = "Confirmed sales orders"
+    for column, value in enumerate(
+        [
+            "컬럼명",
+            "컬럼 설명",
+            "Type",
+            "Key 여부",
+            "Null 허용",
+        ],
+        start=2,
+    ):
+        sheet.cell(row=13, column=column, value=value)
+    for column, value in enumerate(
+        ["order_id", "Unique order identifier", "INT64", "PK", "N"],
+        start=2,
+    ):
+        sheet.cell(row=14, column=column, value=value)
+    workbook.save(product / "sources" / "dictionary" / "dictionary.xlsx")
+
+
+def pass_fidelity_report() -> SemanticFidelityReport:
+    return SemanticFidelityReport(
+        source_hash="a" * 64,
+        extraction_mode=ExtractionMode.DOCX_XML,
+        page_count=1,
+        parser_versions={"semantic": "test"},
+        status="PASS",
+        heading_count=1,
+        paragraph_count=1,
+        list_item_count=0,
+        table_count=0,
+        row_count=0,
+        cell_count=0,
+        source_span_count=2,
+        preserved_span_count=2,
+        excluded_span_count=0,
+        unmatched_span_count=0,
+        duplicated_span_count=0,
+        degraded_block_count=0,
+        source_text_coverage=1.0,
+    )
+
+
+def degraded_fidelity_report() -> SemanticFidelityReport:
+    return pass_fidelity_report().model_copy(
+        update={
+            "status": "WARN",
+            "degraded_block_count": 1,
+            "degraded_blocks": [
+                DegradedBlockAudit(
+                    order=0,
+                    reason="structure_unresolved",
+                    spans=[{"bbox": None, "text_hash": "b" * 64}],
+                )
+            ],
+        }
+    )
+
+
+def failed_fidelity_report(*, duplicated: bool = False) -> SemanticFidelityReport:
+    return pass_fidelity_report().model_copy(
+        update={
+            "status": "FAIL",
+            "preserved_span_count": 1 if not duplicated else 2,
+            "unmatched_span_count": 1 if not duplicated else 0,
+            "duplicated_span_count": 1 if duplicated else 0,
+            "source_text_coverage": 0.5 if not duplicated else 1.0,
+        }
+    )
+
+
+def repair_record() -> SemanticStructureRepairRecord:
+    return SemanticStructureRepairRecord(
+        source_hash="a" * 64,
+        ordered_span_hashes=["b" * 64],
+        parser_version="semantic-structure-v1",
+        prompt_version="semantic-structure-repair-v1",
+        schema_hash="c" * 64,
+        provider="test-provider",
+        model="test-model",
+        outcome="degraded",
+        plan=None,
+        provider_error_code="LLM_PROVIDER_TRANSIENT_FAILED",
+        validation_codes=[],
+        applied_orders=[],
+        rejected_orders=[0],
+        plan_hash=None,
+    )
+
+
+class FidelityParser:
+    def __init__(
+        self,
+        fidelity: SemanticFidelityReport,
+        repair: SemanticStructureRepairRecord | None = None,
+    ) -> None:
+        self.fidelity = fidelity
+        self.repair = repair
+
+    def parse(self, source) -> ParsedDocument:
+        if source.role is SourceRole.PRODUCT_HTML:
+            return ParsedDocument(
+                role=source.role,
+                source_hash=source.sha256,
+                markdown="# Sales Order\n\nOrder analytics.",
+            )
+        return ParsedDocument(
+            role=source.role,
+            source_hash=source.sha256,
+            markdown="# Order semantics\n\nAn order is a confirmed customer purchase.",
+            semantic_fidelity=self.fidelity,
+            semantic_repair=self.repair,
+        )
+
+
+@pytest.mark.parametrize("duplicated", [False, True], ids=["loss", "duplication"])
+def test_pipeline_treats_model_valid_failed_fidelity_as_a_hard_error(
+    tmp_path: Path,
+    duplicated: bool,
+) -> None:
+    product = create_product_fixture(tmp_path)
+
+    with pytest.raises(PipelineValidationError) as captured:
+        process_product(
+            product,
+            registry_root=tmp_path / "registry",
+            parser=FidelityParser(failed_fidelity_report(duplicated=duplicated)),
+        )
+
+    assert captured.value.report is not None
+    assert "SEMANTIC_FIDELITY_FAILED" in {
+        finding.code for finding in captured.value.report.hard_errors
+    }
+    assert not (product / "generated").exists()
+
+
+def test_pipeline_preserves_authoritative_semantic_boundary_whitespace(tmp_path: Path) -> None:
+    product = create_product_fixture(tmp_path)
+
+    class BoundaryWhitespaceParser(FidelityParser):
+        def parse(self, source) -> ParsedDocument:
+            parsed = super().parse(source)
+            if source.role is SourceRole.SEMANTIC_DOCUMENT:
+                return parsed.model_copy(update={"markdown": " \tleading\ntrailing\t \n"})
+            return parsed
+
+    process_product(
+        product,
+        registry_root=tmp_path / "registry",
+        parser=BoundaryWhitespaceParser(pass_fidelity_report()),
+    )
+
+    assert (product / "generated" / "data-semantic.md").read_text(encoding="utf-8") == (
+        " \tleading\ntrailing\t \n"
+    )
+
+
+def test_pipeline_reports_blank_only_native_table_as_empty_semantic_document(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    semantic_path = product / "sources" / "semantic" / "semantic.docx"
+    document = Document()
+    document.add_table(rows=1, cols=1).cell(0, 0).text = " \t"
+    document.save(semantic_path)
+
+    result = process_product(product, registry_root=tmp_path / "registry")
+
+    assert "EMPTY_SEMANTIC_DOCUMENT" in {
+        finding.code for finding in result.quality_report.warnings
+    }
+
+
 def test_process_emits_required_artifacts_and_reuses_column_ids(tmp_path: Path) -> None:
     product = create_product_fixture(tmp_path)
     registry = tmp_path / "registry"
@@ -99,6 +291,63 @@ def test_process_emits_required_artifacts_and_reuses_column_ids(tmp_path: Path) 
     assert table_record["columns"][0]["column_id"] == column_id
     quality = json.loads((product / "quality" / "quality-report.json").read_text())
     assert quality["status"] in {"PASS", "WARN"}
+
+
+def test_pipeline_writes_and_hashes_semantic_fidelity(tmp_path: Path) -> None:
+    product = create_product_fixture(tmp_path)
+    fidelity = pass_fidelity_report()
+
+    process_product(
+        product,
+        registry_root=tmp_path / "registry",
+        parser=FidelityParser(fidelity),
+    )
+
+    fidelity_path = product / "quality" / "semantic-fidelity.json"
+    quality = json.loads((product / "quality" / "quality-report.json").read_text())
+    assert json.loads(fidelity_path.read_text()) == fidelity.model_dump(mode="json")
+    assert quality["quality_artifact_hashes"] == {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((product / "quality").iterdir())
+        if path.name != "quality-report.json"
+    }
+
+
+def test_pipeline_writes_and_hashes_semantic_repair_record(tmp_path: Path) -> None:
+    product = create_product_fixture(tmp_path)
+    repair = repair_record()
+
+    process_product(
+        product,
+        registry_root=tmp_path / "registry",
+        parser=FidelityParser(pass_fidelity_report(), repair),
+    )
+
+    repair_path = product / "quality" / "semantic-structure-repair.json"
+    quality = json.loads((product / "quality" / "quality-report.json").read_text())
+    assert json.loads(repair_path.read_text()) == repair.model_dump(mode="json")
+    assert quality["quality_artifact_hashes"][repair_path.name] == hashlib.sha256(
+        repair_path.read_bytes()
+    ).hexdigest()
+
+
+def test_pipeline_reports_semantic_ocr_fallback(tmp_path: Path) -> None:
+    product = create_product_fixture(tmp_path)
+    add_complete_dictionary_descriptions(product)
+    fidelity = pass_fidelity_report().model_copy(
+        update={"extraction_mode": ExtractionMode.OCR, "status": "WARN"}
+    )
+
+    result = process_product(
+        product,
+        registry_root=tmp_path / "registry",
+        parser=FidelityParser(fidelity),
+    )
+
+    assert result.quality_report.status == "WARN"
+    assert [finding.code for finding in result.quality_report.warnings] == [
+        "SEMANTIC_OCR_FALLBACK"
+    ]
 
 
 def test_process_cli_passes_warnings_as_errors_before_promotion(

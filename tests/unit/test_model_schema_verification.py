@@ -10,6 +10,7 @@ import pytest
 import ard_ossie.application.model_schema_verification as verification
 from ard_ossie.application.model_schema_verification import (
     MODEL_SCHEMA_CATALOG,
+    OPTIONAL_MODEL_SCHEMA_GROUPS,
     ModelSchemaReference,
     ModelSchemaVerificationError,
     active_model_schema_catalog,
@@ -159,7 +160,7 @@ def test_active_model_schema_catalog_rejects_optional_schema_resolution_failure(
         active_model_schema_catalog(tmp_path)
 
 
-def test_model_schema_helper_rejects_partial_optional_group_before_model_import(
+def test_model_schema_helper_rejects_stale_required_semantic_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -176,10 +177,24 @@ def test_model_schema_helper_rejects_partial_optional_group_before_model_import(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(verification, "_strict_model_class", import_candidate_model)
 
-    with pytest.raises(ModelSchemaVerificationError, match="SCHEMA_CATALOG_MISMATCH"):
+    with pytest.raises(
+        ModelSchemaVerificationError,
+        match=r"SCHEMA_SYNCHRONIZATION_FAILED:reports/semantic-fidelity\.schema\.json",
+    ):
         verify_model_schemas(tmp_path)
 
-    assert not imported.exists()
+    assert imported.exists()
+
+
+def test_model_schema_catalog_requires_semantic_schema_pair() -> None:
+    assert {
+        reference.schema_path
+        for reference in MODEL_SCHEMA_CATALOG
+    } >= {
+        Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-structure-repair.schema.json"),
+    }
+    assert OPTIONAL_MODEL_SCHEMA_GROUPS == ()
 
 
 def test_model_schema_helper_receipt_retains_catalog_verified_before_model_mutation(

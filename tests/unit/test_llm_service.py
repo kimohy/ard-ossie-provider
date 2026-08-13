@@ -39,8 +39,15 @@ class SequenceProvider:
         self.calls = 0
         self.messages: list[list[dict[str, str]]] = []
 
+    def health_check(self) -> bool:
+        return True
+
     def capabilities(self) -> dict[str, str]:
-        return {"structured_output": "json_schema"}
+        return {
+            "structured_output": "json_schema",
+            "provider": "openai_compatible",
+            "model": "safe-model",
+        }
 
     def generate_text(self, *, messages: list[dict[str, str]]) -> LLMResult:
         return self._next(messages)
@@ -73,6 +80,18 @@ def closed_schema() -> dict[str, object]:
 
 def user_messages() -> list[dict[str, str]]:
     return [{"role": "user", "content": "produce JSON"}]
+
+
+def test_service_delegates_provider_health_and_capability_audit_identity() -> None:
+    provider = SequenceProvider([])
+    service = LLMService(provider)
+
+    assert service.health_check() is True
+    assert service.capabilities() == {
+        "structured_output": "json_schema",
+        "provider": "openai_compatible",
+        "model": "safe-model",
+    }
 
 
 def test_transient_failure_retries_three_total_attempts_same_provider() -> None:
