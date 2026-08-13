@@ -9,11 +9,16 @@
 ```bash
 uv run ard github bootstrap --repo kimohy/ard-ossie-provider --dry-run
 uv run ard github bootstrap --repo kimohy/ard-ossie-provider
+uv run ard github bootstrap --repo kimohy/ard-ossie-provider \
+  --profile openai-compatible-default \
+  --azure-endpoint https://RESOURCE.openai.azure.com \
+  --gcp-project-id GCP_PROJECT_ID --dry-run
 ```
 
 두 번째 명령은 redacted plan 확인 뒤 LLM API key를 숨김 입력으로 요청하며,
 key는 `gh secret set ... --env ard-llm`의 표준 입력에만 전달됩니다. 기존 key 교체는
-기본적으로 거부됩니다. 초기 `main` 보호는 두 required status, 최신 base, PR 및 conversation
+기본적으로 거부됩니다. bootstrap은 Variable과 기존 `ARD_LLM_API_KEY`만 수렴시키며 Azure와
+Vertex Secret은 읽거나 교체하지 않습니다. 초기 `main` 보호는 두 required status, 최신 base, PR 및 conversation
 resolution을 요구하지만 승인 수는 0으로 둡니다. 비소유자 writer가 준비된 뒤에만 다음 명령으로
 승인 수를 1로 전환합니다.
 
@@ -34,19 +39,79 @@ uv run ard github enable-review-protection --repo kimohy/ard-ossie-provider
 
 ## 2. Secrets와 Variables
 
-LLM Secret은 repository-level Secret이 아니라 보호된 Environment에 둡니다. `Settings → Environments`에서 `ard-llm`을 만들고 required reviewers와 허용 branch를 지정한 뒤 아래 Secrets를 그 환경에 설정합니다.
+LLM Secret은 repository-level Secret이 아니라 보호된 Environment에 둡니다. `Settings → Environments`에서 `ard-llm`을 만들고 required reviewers와 허용 branch를 지정합니다. 운영 processor는 아래 고정 이름만 읽습니다.
 
-Secrets:
+| 종류 | 이름 | 용도 | 필수 조건 |
+|---|---|---|---|
+| Variable | `ARD_LLM_PROFILE` | `config/llm-profiles.yaml`의 기본 프로필 이름 | 항상 필수; 초기값 `openai-compatible-default` |
+| Variable/Secret | `ARD_LLM_BASE_URL` | OpenAI-compatible endpoint | 해당 provider 선택 시 필수; 같은 이름의 Secret이 우선 |
+| Secret | `ARD_LLM_API_KEY` | OpenAI-compatible API 키 | 해당 provider 선택 시 필수 |
+| Variable | `ARD_AZURE_OPENAI_ENDPOINT` | Azure OpenAI resource endpoint | Azure 프로필 선택 시 필수 |
+| Secret | `ARD_AZURE_OPENAI_API_KEY` | Azure OpenAI API 키 | Azure 프로필 선택 시 필수 |
+| Variable | `ARD_GCP_PROJECT_ID` | Vertex AI project ID | Gemini 또는 Claude 프로필 선택 시 필수 |
+| Secret | `ARD_VERTEX_CREDENTIALS_JSON` | Vertex service-account JSON | Gemini 또는 Claude 프로필 선택 시 필수 |
+| Variable | `ARD_MAX_ATTACHMENT_BYTES` | 파일 하나의 최대 byte | 선택; 기본값 `52428800` |
 
-- `ARD_LLM_API_KEY` — 필수 OpenAI-compatible API 키
-- `ARD_LLM_BASE_URL` — endpoint 자체를 숨겨야 하는 경우에만 선택적으로 사용
+선택하지 않은 provider의 값은 없어도 됩니다. 선택된 프로필에 필요한 값만 읽고 검증합니다.
+기존 `ARD_LLM_MODEL`과 `ARD_LLM_API_STYLE` Variable은 삭제합니다. 해당 값은 이제 아래처럼
+review를 거치는 저장소 프로필에 들어갑니다.
 
-Repository 또는 `ard-llm` Environment Variables:
+```yaml
+version: 1
+defaults:
+  timeout_seconds: 120
+  max_output_tokens: 4096
+  temperature: 0
+profiles:
+  openai-compatible-default:
+    provider: openai_compatible
+    model: gpt-5.6-terra
+    structured_output: native
+    api: chat_completions
+    base_url_env: ARD_LLM_BASE_URL
+    api_key_env: ARD_LLM_API_KEY
+  azure-production:
+    provider: azure_openai
+    model: AZURE_DEPLOYMENT_NAME
+    structured_output: native
+    api: responses
+    endpoint_env: ARD_AZURE_OPENAI_ENDPOINT
+    api_key_env: ARD_AZURE_OPENAI_API_KEY
+  vertex-gemini-production:
+    provider: vertex_gemini
+    model: GEMINI_MODEL_ID
+    structured_output: native
+    project_env: ARD_GCP_PROJECT_ID
+    location: global
+    credentials_env: ARD_VERTEX_CREDENTIALS_JSON
+  vertex-claude-production:
+    provider: vertex_claude
+    model: CLAUDE_MODEL_ID
+    structured_output: prompt_json
+    project_env: ARD_GCP_PROJECT_ID
+    location: us-east5
+    credentials_env: ARD_VERTEX_CREDENTIALS_JSON
+```
 
-- `ARD_LLM_BASE_URL` — Secret이 없을 때 사용할 endpoint; 기본값 `https://api.openai.com/v1`
-- `ARD_LLM_MODEL` — 필수 provider model 이름
-- `ARD_LLM_API_STYLE` — `chat_completions`
-- `ARD_MAX_ATTACHMENT_BYTES` — 파일 하나의 최대 byte; 기본값 `52428800`
+placeholder model/deployment/region은 계정에서 실제로 허용된 값으로 교체해 PR review를 받아야
+합니다. Claude는 Vertex AI 경로만 사용하며 Phase 1에서는 `structured_output: prompt_json`을
+명시합니다. 프로필 이름, 모델, endpoint, region, API 방식은 Issue 내용이나 production
+workflow input으로 전달할 수 없습니다. production은 관리자 Variable `ARD_LLM_PROFILE`만
+사용합니다.
+
+프로필을 기본값으로 바꾸기 전에 `main`의 **ARD LLM provider smoke test** workflow를 수동
+실행합니다. 이 workflow는 `ard-llm` 승인을 받은 read-only job에서만 실제 text/structured
+요청을 보내고 artifact를 만들지 않습니다.
+
+```bash
+uv run ard llm profiles
+ARD_LLM_PROFILE=openai-compatible-default uv run ard llm validate
+uv run ard llm smoke-test --profile openai-compatible-default
+```
+
+`validate`가 보호된 Environment 밖에서 credential 상태를 `unavailable`로 표시하는 것은
+정상이며 credential 성공을 의미하지 않습니다. 실제 연결 검증은 보호된 smoke workflow로
+수행합니다.
 
 `ard-llm`과 `production-linkage`의 deployment branch는 모두 `main`만 허용합니다. direct branch의 push workflow는 `contents: read` signal만 남기고, 기본 브랜치에서 로드되는 `workflow_run` coordinator가 exact candidate를 검증한 뒤 보호된 processor를 호출합니다. processor는 `trusted/`의 기본 브랜치 CLI만 실행하고 candidate checkout은 `--repository`로 지정한 데이터와 Git state로만 사용합니다. API 키는 credential-free validation job, fork PR, artifact, commit 또는 PR 코멘트에 전달하지 않습니다. Secret 값은 public ARD 문서에 절대로 포함하면 안 됩니다.
 
@@ -97,8 +162,9 @@ bootstrap을 적용해 다음 운영 계약을 구성했습니다.
 
 - `ard-llm`과 `production-linkage`는 repository owner 승인을 요구하며 `main`에서만
   deployment할 수 있습니다.
-- `ard-llm`에는 `ARD_LLM_API_KEY` Environment Secret과 승인된 provider 변수 네 개가
-  있습니다. Secret 값은 운영 기록과 workflow log에 남기지 않습니다.
+- `ard-llm`에는 기본 `ARD_LLM_PROFILE`, provider endpoint/project Variables와 선택한
+  provider의 Environment Secret이 있습니다. Secret 값은 운영 기록과 workflow log에
+  남기지 않습니다.
 - Actions 기본 권한은 read이며 workflow의 pull request 생성을 허용합니다.
 - `main`은 pull request, 최신 base, conversation resolution,
   `ard/quality-gate`, `ard/changeset`을 요구하고 관리자 우회, force push, 삭제를 허용하지
@@ -173,6 +239,8 @@ git lfs pull
 uv run pytest -q
 actionlint .github/workflows/*.yml
 uv run ruff check src tests
+uv run ard llm profiles
+uv run ard llm validate --profile openai-compatible-default
 ```
 
 테스트용 실제 API 키를 public branch나 fixture에 넣지 마세요.

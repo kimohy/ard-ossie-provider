@@ -1,5 +1,110 @@
 {
   "$defs": {
+    "LLMMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "elapsed_ms": {
+          "minimum": 0,
+          "title": "Elapsed Ms",
+          "type": "integer"
+        },
+        "finish_reason": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9_:-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finish Reason"
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "model": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        },
+        "profile": {
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "title": "Profile",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "openai_compatible",
+            "azure_openai",
+            "vertex_gemini",
+            "vertex_claude"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "repair_count": {
+          "default": 0,
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Repair Count",
+          "type": "integer"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "retry_count": {
+          "default": 0,
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "profile",
+        "provider",
+        "model",
+        "elapsed_ms"
+      ],
+      "title": "LLMMetadata",
+      "type": "object"
+    },
     "QualityFinding": {
       "additionalProperties": false,
       "properties": {
@@ -65,6 +170,17 @@
       },
       "title": "Hard Errors",
       "type": "array"
+    },
+    "llm_provenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LLMMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "product_id": {
       "anyOf": [

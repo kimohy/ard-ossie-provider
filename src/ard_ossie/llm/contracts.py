@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import re
+from enum import StrEnum
+from typing import Literal, Protocol
+
+from pydantic import Field, JsonValue, field_validator
+
+from ard_ossie.models import StrictModel
+
+_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+
+ProviderName = Literal[
+    "openai_compatible",
+    "azure_openai",
+    "vertex_gemini",
+    "vertex_claude",
+]
+
+
+class ProviderFailureKind(StrEnum):
+    CONFIGURATION = "configuration"
+    TRANSIENT = "transient"
+    OUTPUT = "output"
+
+
+class ProviderExecutionError(RuntimeError):
+    def __init__(
+        self,
+        code: str,
+        *,
+        kind: ProviderFailureKind,
+        rejected_result: object | None = None,
+    ) -> None:
+        if _ERROR_CODE.fullmatch(code) is None:
+            raise ValueError("INVALID_PROVIDER_ERROR_CODE")
+        super().__init__(code)
+        self.code = code
+        self.kind = kind
+        self.rejected_result = rejected_result
+
+
+class LLMMetadata(StrictModel):
+    profile: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    provider: ProviderName
+    model: str = Field(min_length=1, max_length=200)
+    request_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9._:-]{1,128}$",
+    )
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    finish_reason: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9_:-]{1,64}$",
+    )
+    elapsed_ms: int = Field(ge=0)
+    retry_count: int = Field(default=0, ge=0, le=2)
+    repair_count: int = Field(default=0, ge=0, le=2)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(character in normalized for character in "\x00\r\n"):
+            raise ValueError("invalid model")
+        return normalized
+
+
+class LLMResult(StrictModel):
+    text: str = Field(repr=False)
+    structured: dict[str, object] | None = Field(default=None, repr=False)
+    metadata: LLMMetadata
+
+
+class LLMProvider(Protocol):
+    def health_check(self) -> bool: ...
+
+    def capabilities(self) -> dict[str, JsonValue]: ...
+
+    def generate_text(
+        self,
+        *,
+        messages: list[dict[str, str]],
+    ) -> LLMResult: ...
+
+    def generate_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[dict[str, str]],
+    ) -> LLMResult: ...

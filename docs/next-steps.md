@@ -35,7 +35,7 @@ P0는 2026-08-11에 연속 실행했습니다. PR #1의 정확한 head에서 boo
 
 - `ard:submission`, `ard:approved`, `ard:processing`, `ard:failed`, `ard:pr-created` labels가 있습니다.
 - `ard-llm`과 `production-linkage`는 repository owner 승인을 요구하고 `main`만 deployment branch로 허용합니다.
-- `ard-llm`에는 `ARD_LLM_API_KEY` Environment Secret과 `ARD_LLM_BASE_URL`, `ARD_LLM_MODEL`, `ARD_LLM_API_STYLE`, `ARD_MAX_ATTACHMENT_BYTES` Variables가 있습니다. Secret 값은 읽거나 교체하거나 기록하지 않았습니다.
+- `ard-llm`에는 `ARD_LLM_PROFILE`, provider endpoint/project, `ARD_MAX_ATTACHMENT_BYTES` Variables와 선택한 provider의 Environment Secret이 있습니다. 모델과 API 방식은 저장소 프로필에 있으며 Secret 값은 읽거나 교체하거나 기록하지 않습니다.
 - Actions 기본 권한은 read이며 workflow의 pull request 생성을 허용합니다.
 - `main`은 pull request, 최신 base, conversation resolution, `ard/quality-gate`, `ard/changeset`을 요구합니다. 관리자 우회, force push와 삭제는 허용하지 않으며, 비소유자 writer가 없으므로 required approvals는 0입니다.
 - 정리 PR #2에서 일회성 workflow와 해당 테스트 계약을 제거하고 운영 문서를 갱신했습니다. 영구 gate의 `static`, `pytest`, `wheel`과 aggregate가 성공하고 trusted finalizer가 같은 PR head에 두 required status를 게시한 뒤 병합했습니다.

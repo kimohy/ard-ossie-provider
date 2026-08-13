@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Literal
@@ -69,17 +70,22 @@ _PROTECTION = BranchProtectionState(
     require_pull_request=True,
 )
 _SECRET_NAME = "ARD_LLM_API_KEY"
+_PROFILE_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SAFE_VALUE = re.compile(r"^[^\x00\r\n]{1,200}$")
 
 
 class BootstrapConfig(StrictModel):
-    base_url: str
-    model: str
-    api_style: Literal["chat_completions"] = "chat_completions"
+    profile: str = "openai-compatible-default"
+    base_url: str = "https://api.openai.com/v1"
+    azure_endpoint: str | None = None
+    gcp_project_id: str | None = None
     max_attachment_bytes: int = 52_428_800
 
-    @field_validator("base_url")
+    @field_validator("base_url", "azure_endpoint")
     @classmethod
-    def validate_base_url(cls, value: str) -> str:
+    def validate_endpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         normalized = value.strip().rstrip("/")
         if not normalized.startswith(("https://", "http://")) or any(
             character in normalized for character in ("\x00", "\n", "\r")
@@ -87,13 +93,21 @@ class BootstrapConfig(StrictModel):
             raise ValueError("INVALID_PROVIDER_CONFIG")
         return normalized
 
-    @field_validator("model")
+    @field_validator("profile")
     @classmethod
-    def validate_model(cls, value: str) -> str:
+    def validate_profile(cls, value: str) -> str:
         normalized = value.strip()
-        if not normalized or len(normalized) > 200 or any(
-            character in normalized for character in ("\x00", "\n", "\r")
-        ):
+        if _PROFILE_NAME.fullmatch(normalized) is None:
+            raise ValueError("INVALID_PROVIDER_CONFIG")
+        return normalized
+
+    @field_validator("gcp_project_id")
+    @classmethod
+    def validate_gcp_project_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if _SAFE_VALUE.fullmatch(normalized) is None:
             raise ValueError("INVALID_PROVIDER_CONFIG")
         return normalized
 
@@ -105,12 +119,16 @@ class BootstrapConfig(StrictModel):
         return value
 
     def variables(self) -> dict[str, str]:
-        return {
-            "ARD_LLM_API_STYLE": self.api_style,
+        variables = {
+            "ARD_LLM_PROFILE": self.profile,
             "ARD_LLM_BASE_URL": self.base_url,
-            "ARD_LLM_MODEL": self.model,
             "ARD_MAX_ATTACHMENT_BYTES": str(self.max_attachment_bytes),
         }
+        if self.azure_endpoint is not None:
+            variables["ARD_AZURE_OPENAI_ENDPOINT"] = self.azure_endpoint
+        if self.gcp_project_id is not None:
+            variables["ARD_GCP_PROJECT_ID"] = self.gcp_project_id
+        return variables
 
 
 class BootstrapItem(StrictModel):
@@ -154,18 +172,12 @@ class GitHubBootstrapService:
         items.append(
             BootstrapItem(
                 target="actions:workflow-permissions",
-                action=(
-                    "noop"
-                    if self.github.get_actions_permissions() == _ACTIONS
-                    else "update"
-                ),
+                action=("noop" if self.github.get_actions_permissions() == _ACTIONS else "update"),
             )
         )
         llm = _llm_environment(owner)
         current_llm = self.github.get_environment(llm.name)
-        llm_variables = (
-            self.github.list_variables(llm.name) if current_llm is not None else {}
-        )
+        llm_variables = self.github.list_variables(llm.name) if current_llm is not None else {}
         secret_names = (
             self.github.list_environment_secret_names(llm.name)
             if current_llm is not None
@@ -173,20 +185,13 @@ class GitHubBootstrapService:
         )
         llm_drift = (
             current_llm != llm
-            or any(
-                llm_variables.get(name) != value
-                for name, value in config.variables().items()
-            )
+            or any(llm_variables.get(name) != value for name, value in config.variables().items())
             or _SECRET_NAME not in secret_names
         )
         items.append(
             BootstrapItem(
                 target="environment:ard-llm",
-                action=(
-                    "create"
-                    if current_llm is None
-                    else ("update" if llm_drift else "noop")
-                ),
+                action=("create" if current_llm is None else ("update" if llm_drift else "noop")),
             )
         )
         production = _production_environment(owner)
@@ -276,9 +281,7 @@ class GitHubBootstrapService:
             current_variables = self.github.list_variables(llm.name)
             for name, value in sorted(plan.config.variables().items()):
                 if current_variables.get(name) != value:
-                    mutations.append(
-                        self.github.set_variable(name, value, llm.name)
-                    )
+                    mutations.append(self.github.set_variable(name, value, llm.name))
             production = _production_environment(owner)
             if self.github.get_environment(production.name) != production:
                 mutations.append(self.github.upsert_environment(production))

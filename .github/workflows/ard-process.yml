@@ -88,10 +88,13 @@ jobs:
       version: ${{ steps.processor.outputs.version || steps.reconcile.outputs.version || steps.processor_readonly.outputs.version }}
     env:
       GH_TOKEN: ${{ github.token }}
+      ARD_LLM_PROFILE: ${{ vars.ARD_LLM_PROFILE }}
       ARD_LLM_API_KEY: ${{ secrets.ARD_LLM_API_KEY }}
       ARD_LLM_BASE_URL: ${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}
-      ARD_LLM_MODEL: ${{ vars.ARD_LLM_MODEL }}
-      ARD_LLM_API_STYLE: ${{ vars.ARD_LLM_API_STYLE || 'chat_completions' }}
+      ARD_AZURE_OPENAI_ENDPOINT: ${{ vars.ARD_AZURE_OPENAI_ENDPOINT }}
+      ARD_AZURE_OPENAI_API_KEY: ${{ secrets.ARD_AZURE_OPENAI_API_KEY }}
+      ARD_GCP_PROJECT_ID: ${{ vars.ARD_GCP_PROJECT_ID }}
+      ARD_VERTEX_CREDENTIALS_JSON: ${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}
       PRODUCT_KEY: ${{ inputs.product_key }}
       BRANCH: ${{ inputs.branch }}
       PR_NUMBER: ${{ inputs.pr_number }}

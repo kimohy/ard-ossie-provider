@@ -5,7 +5,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -485,32 +485,27 @@ class ProcessingReconcileService:
         raise AssertionError("retry loop exhausted without returning")
 
 
-def provider_from_environment():
-    from pydantic import SecretStr
-
-    from ard_ossie.llm import OpenAICompatibleProvider
-
-    api_style = os.environ.get("ARD_LLM_API_STYLE", "chat_completions")
-    if api_style != "chat_completions":
-        raise ProviderExecutionError(
-            "LLM_API_STYLE_UNSUPPORTED",
-            kind=ProviderFailureKind.CONFIGURATION,
-        )
-    names = ("ARD_LLM_BASE_URL", "ARD_LLM_API_KEY", "ARD_LLM_MODEL")
-    values = {name: os.environ.get(name) for name in names}
-    present = [name for name, value in values.items() if value]
-    if not present:
-        return None
-    if len(present) != len(names):
-        raise ProviderExecutionError(
-            "LLM_PROVIDER_CONFIG_INCOMPLETE",
-            kind=ProviderFailureKind.CONFIGURATION,
-        )
-    return OpenAICompatibleProvider(
-        base_url=values["ARD_LLM_BASE_URL"] or "",
-        api_key=SecretStr(values["ARD_LLM_API_KEY"] or ""),
-        model=values["ARD_LLM_MODEL"] or "",
+def provider_from_environment(
+    *,
+    registry=None,
+    environment: Mapping[str, str] | None = None,
+    factory=None,
+):
+    from ard_ossie.llm import (
+        LLMProfileRegistry,
+        LLMProviderFactory,
+        LLMService,
     )
+
+    active_environment = environment if environment is not None else os.environ
+    profile_name = active_environment.get("ARD_LLM_PROFILE")
+    if not profile_name:
+        return None
+    active_registry = registry or LLMProfileRegistry.load_packaged()
+    active_factory = factory or LLMProviderFactory()
+    profile = active_registry.resolve(profile_name)
+    provider = active_factory.create(profile_name, profile, active_environment)
+    return LLMService(provider)
 
 
 def _validated_branch(value: str) -> str:

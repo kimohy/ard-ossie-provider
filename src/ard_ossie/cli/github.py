@@ -21,7 +21,6 @@ from ard_ossie.application.github_bootstrap import (
 from ard_ossie.cli.execution import result_writer
 
 app = typer.Typer(no_args_is_help=True)
-_prompt: Callable[..., str] = typer.prompt
 _confirm: Callable[..., bool] = typer.confirm
 _getpass: Callable[[str], str] = getpass.getpass
 
@@ -34,9 +33,19 @@ def github_group() -> None:
 @app.command("bootstrap")
 def bootstrap(
     repo: Annotated[str, typer.Option("--repo")],
+    profile: Annotated[
+        str,
+        typer.Option("--profile"),
+    ] = "openai-compatible-default",
     base_url: Annotated[str, typer.Option("--base-url")] = "https://api.openai.com/v1",
-    model: Annotated[str | None, typer.Option("--model")] = None,
-    api_style: Annotated[str, typer.Option("--api-style")] = "chat_completions",
+    azure_endpoint: Annotated[
+        str | None,
+        typer.Option("--azure-endpoint"),
+    ] = None,
+    gcp_project_id: Annotated[
+        str | None,
+        typer.Option("--gcp-project-id"),
+    ] = None,
     max_attachment_bytes: Annotated[
         int,
         typer.Option("--max-attachment-bytes", min=1, max=1_073_741_824),
@@ -47,9 +56,10 @@ def bootstrap(
 
     def run() -> WorkflowResult:
         config = BootstrapConfig(
+            profile=profile,
             base_url=base_url,
-            model=model or _prompt("ARD_LLM_MODEL"),
-            api_style=api_style,
+            azure_endpoint=azure_endpoint,
+            gcp_project_id=gcp_project_id,
             max_attachment_bytes=max_attachment_bytes,
         )
         service = _bootstrap_service(repo)

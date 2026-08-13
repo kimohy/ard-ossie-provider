@@ -6,10 +6,10 @@ from ard_ossie.cli import _product_tag, _provider_from_environment
 from ard_ossie.pipeline import ProviderExecutionError
 
 
-def test_openai_compatible_api_style_rejects_unknown_protocol(monkeypatch) -> None:
-    monkeypatch.setenv("ARD_LLM_API_STYLE", "responses")
+def test_unknown_profile_is_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("ARD_LLM_PROFILE", "missing-profile")
 
-    with pytest.raises(ProviderExecutionError, match="LLM_API_STYLE_UNSUPPORTED"):
+    with pytest.raises(ProviderExecutionError, match="LLM_PROFILE_NOT_FOUND"):
         _provider_from_environment()
 
 
