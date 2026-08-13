@@ -80,6 +80,268 @@
       "title": "FidelityThresholds",
       "type": "object"
     },
+    "OcrCorrectionPageAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "effective_prompt_hash": {
+          "default": "0000000000000000000000000000000000000000000000000000000000000000",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Prompt Hash",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "ocr_catalog_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ocr Catalog Hash",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "applied",
+            "reused",
+            "rejected",
+            "provider_failed",
+            "unavailable"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "page_image_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Page Image Hash",
+          "type": "string"
+        },
+        "patches": {
+          "items": {
+            "$ref": "#/$defs/OcrCorrectionPatchAudit"
+          },
+          "maxItems": 2000,
+          "title": "Patches",
+          "type": "array"
+        },
+        "prompt_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Hash",
+          "type": "string"
+        },
+        "prompt_version": {
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_error_code": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Error Code"
+        },
+        "repair_count": {
+          "default": 0,
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Repair Count",
+          "type": "integer"
+        },
+        "repair_prompt_hash": {
+          "default": "0000000000000000000000000000000000000000000000000000000000000000",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Repair Prompt Hash",
+          "type": "string"
+        },
+        "repair_prompt_version": {
+          "default": "unbound",
+          "title": "Repair Prompt Version",
+          "type": "string"
+        },
+        "repair_validation_codes": {
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 2,
+          "title": "Repair Validation Codes",
+          "type": "array"
+        },
+        "request_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Hash",
+          "type": "string"
+        },
+        "retry_count": {
+          "default": 0,
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "schema_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Schema Hash",
+          "type": "string"
+        },
+        "source_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_hash",
+        "page",
+        "page_image_hash",
+        "ocr_catalog_hash",
+        "request_hash",
+        "prompt_version",
+        "prompt_hash",
+        "schema_hash",
+        "provider",
+        "model",
+        "outcome"
+      ],
+      "title": "OcrCorrectionPageAudit",
+      "type": "object"
+    },
+    "OcrCorrectionPatchAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "corrected_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Corrected Text"
+        },
+        "corrected_text_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Corrected Text Hash"
+        },
+        "correction_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "character_recognition",
+                "spacing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correction Kind"
+        },
+        "original_text_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Text Hash",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "applied",
+            "reused",
+            "rejected"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "rejected_text_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejected Text Hash"
+        },
+        "span_id": {
+          "pattern": "^span_[0-9a-f]{16}$",
+          "title": "Span Id",
+          "type": "string"
+        },
+        "validation_code": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validation Code"
+        }
+      },
+      "required": [
+        "span_id",
+        "original_text_hash",
+        "outcome"
+      ],
+      "title": "OcrCorrectionPatchAudit",
+      "type": "object"
+    },
     "RemovedElementAudit": {
       "additionalProperties": false,
       "properties": {
@@ -292,6 +554,25 @@
       "title": "List Item Count",
       "type": "integer"
     },
+    "ocr_correction_applied_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Ocr Correction Applied Count",
+      "type": "integer"
+    },
+    "ocr_correction_rejected_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Ocr Correction Rejected Count",
+      "type": "integer"
+    },
+    "ocr_corrections": {
+      "items": {
+        "$ref": "#/$defs/OcrCorrectionPageAudit"
+      },
+      "title": "Ocr Corrections",
+      "type": "array"
+    },
     "page_count": {
       "minimum": 0,
       "title": "Page Count",
@@ -370,6 +651,14 @@
       "minimum": 0,
       "title": "Unmatched Span Count",
       "type": "integer"
+    },
+    "warning_codes": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "title": "Warning Codes",
+      "type": "array"
     }
   },
   "required": [

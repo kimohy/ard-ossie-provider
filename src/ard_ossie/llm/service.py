@@ -4,14 +4,18 @@ import json
 import random
 import time
 from collections.abc import Callable
+from typing import TypeVar
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema import validate
 from pydantic import JsonValue
 
+from ard_ossie.canonical import canonical_hash
 from ard_ossie.llm.contracts import (
+    LLMMultimodalMessage,
     LLMProvider,
     LLMResult,
+    LLMTextPart,
     ProviderExecutionError,
     ProviderFailureKind,
 )
@@ -19,6 +23,8 @@ from ard_ossie.llm.contracts import (
 _MAX_TOTAL_ATTEMPTS = 3
 _MAX_REPAIRS = 2
 _MAX_BACKOFF_SECONDS = 8.0
+STRUCTURED_REPAIR_PROMPT_VERSION = "structured-output-repair-v1"
+_Messages = TypeVar("_Messages")
 
 
 class LLMService:
@@ -45,7 +51,7 @@ class LLMService:
         messages: list[dict[str, str]],
     ) -> LLMResult:
         result, retries = self._retry(lambda: self.provider.generate_text(messages=messages))
-        return _with_counts(result, retries=retries, repairs=0)
+        return _with_counts(result, retries=retries, repairs=0, repair_codes=())
 
     def generate_structured(
         self,
@@ -53,15 +59,47 @@ class LLMService:
         schema: dict[str, object],
         messages: list[dict[str, str]],
     ) -> LLMResult:
+        return self._generate_structured(
+            schema=schema,
+            messages=messages,
+            generate=lambda active: self.provider.generate_structured(
+                schema=schema,
+                messages=active,
+            ),
+            repair=_repair_messages,
+        )
+
+    def generate_multimodal_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[LLMMultimodalMessage],
+    ) -> LLMResult:
+        return self._generate_structured(
+            schema=schema,
+            messages=messages,
+            generate=lambda active: self.provider.generate_multimodal_structured(
+                schema=schema,
+                messages=active,
+            ),
+            repair=_repair_multimodal_messages,
+        )
+
+    def _generate_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[_Messages],
+        generate: Callable[[list[_Messages]], LLMResult],
+        repair: Callable[[list[_Messages], dict[str, object], str], list[_Messages]],
+    ) -> LLMResult:
         repairs = 0
         retries = 0
+        repair_codes: list[str] = []
         active_messages = messages
         for attempt in range(_MAX_TOTAL_ATTEMPTS):
             try:
-                result = self.provider.generate_structured(
-                    schema=schema,
-                    messages=active_messages,
-                )
+                result = generate(active_messages)
             except ProviderExecutionError as error:
                 if (
                     error.kind is ProviderFailureKind.TRANSIENT
@@ -78,7 +116,8 @@ class LLMService:
                 ):
                     raise
                 repairs += 1
-                active_messages = _repair_messages(messages, schema, error.code)
+                repair_codes.append(error.code)
+                active_messages = repair(messages, schema, error.code)
                 continue
             try:
                 structured = _validate_result(result, schema)
@@ -90,13 +129,15 @@ class LLMService:
                 ):
                     raise
                 repairs += 1
-                active_messages = _repair_messages(messages, schema, error.code)
+                repair_codes.append(error.code)
+                active_messages = repair(messages, schema, error.code)
                 continue
             normalized = result.model_copy(update={"structured": structured})
             return _with_counts(
                 normalized,
                 retries=retries,
                 repairs=repairs,
+                repair_codes=tuple(repair_codes),
             )
         raise AssertionError("unreachable")
 
@@ -180,14 +221,70 @@ def _repair_messages(
     ]
 
 
-def _with_counts(result: LLMResult, *, retries: int, repairs: int) -> LLMResult:
+def _repair_multimodal_messages(
+    original: list[LLMMultimodalMessage],
+    schema: dict[str, object],
+    code: str,
+) -> list[LLMMultimodalMessage]:
+    return [
+        LLMMultimodalMessage(
+            role="system",
+            content=(
+                LLMTextPart(
+                    text=json.dumps(
+                        _repair_instruction(schema, code),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                ),
+            ),
+        ),
+        *original,
+    ]
+
+
+def _repair_instruction(schema: dict[str, object], code: str) -> dict[str, object]:
+    return {
+        "validation_code": code,
+        "required_schema": schema,
+        "rules": [
+            "Return only one JSON object.",
+            "Correct only content that violates the schema or validation code.",
+            "Do not add unsupported facts.",
+        ],
+    }
+
+
+def structured_repair_prompt_contract_hash(schema: dict[str, object]) -> str:
+    """Hash the complete repair template independently of a runtime error code."""
+    return canonical_hash(
+        {
+            "version": STRUCTURED_REPAIR_PROMPT_VERSION,
+            "instruction": _repair_instruction(schema, "{VALIDATION_CODE}"),
+        }
+    )
+
+
+def _with_counts(
+    result: LLMResult,
+    *,
+    retries: int,
+    repairs: int,
+    repair_codes: tuple[str, ...],
+) -> LLMResult:
     metadata = result.metadata.model_copy(
         update={
             "retry_count": min(retries, 2),
             "repair_count": repairs,
         }
     )
-    return result.model_copy(update={"metadata": metadata})
+    return result.model_copy(
+        update={
+            "metadata": metadata,
+            "repair_validation_codes": list(repair_codes),
+        }
+    )
 
 
 def _output_error(code: str) -> ProviderExecutionError:

@@ -65,6 +65,100 @@ class SourceSpan(ImmutableStrictModel):
         return self
 
 
+class OcrCorrectionPatch(StrictModel):
+    span_id: SpanId
+    original_text_hash: Sha256
+    corrected_text: str
+    correction_kind: Literal["character_recognition", "spacing"]
+    bbox: SourceBox
+    confidence: float = Field(ge=0, le=1)
+
+
+class OcrCorrectionPlan(StrictModel):
+    request_hash: Sha256
+    patches: list[OcrCorrectionPatch] = Field(max_length=2_000)
+
+
+class OcrCorrectionPatchAudit(StrictModel):
+    span_id: SpanId
+    original_text_hash: Sha256
+    corrected_text: str | None = None
+    corrected_text_hash: Sha256 | None = None
+    rejected_text_hash: Sha256 | None = None
+    bbox: SourceBox | None = None
+    correction_kind: Literal["character_recognition", "spacing"] | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    outcome: Literal["applied", "reused", "rejected"]
+    validation_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
+
+    @model_validator(mode="after")
+    def validate_audit_outcome(self) -> OcrCorrectionPatchAudit:
+        if self.outcome in {"applied", "reused"}:
+            if (
+                self.corrected_text is None
+                or self.corrected_text_hash is None
+                or self.rejected_text_hash is not None
+                or self.validation_code is not None
+            ):
+                raise ValueError("OCR_CORRECTION_ACCEPTED_AUDIT_INVALID")
+            expected = hashlib.sha256(self.corrected_text.encode("utf-8")).hexdigest()
+            if self.corrected_text_hash != expected:
+                raise ValueError("OCR_CORRECTION_ACCEPTED_HASH_INVALID")
+        elif (
+            self.corrected_text is not None
+            or self.corrected_text_hash is not None
+            or self.rejected_text_hash is None
+            or self.validation_code is None
+        ):
+            raise ValueError("OCR_CORRECTION_REJECTED_AUDIT_INVALID")
+        return self
+
+
+class OcrCorrectionPageAudit(StrictModel):
+    source_hash: Sha256
+    page: int = Field(ge=1)
+    page_image_hash: Sha256
+    ocr_catalog_hash: Sha256
+    request_hash: Sha256
+    prompt_version: str
+    prompt_hash: Sha256
+    schema_hash: Sha256
+    repair_prompt_version: str = "unbound"
+    repair_prompt_hash: Sha256 = "0" * 64
+    effective_prompt_hash: Sha256 = "0" * 64
+    repair_validation_codes: list[
+        Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]{0,127}$")]
+    ] = Field(default_factory=list, max_length=2)
+    provider: str
+    model: str
+    outcome: Literal["applied", "reused", "rejected", "provider_failed", "unavailable"]
+    patches: list[OcrCorrectionPatchAudit] = Field(default_factory=list, max_length=2_000)
+    provider_error_code: str | None = Field(
+        default=None,
+        pattern=r"^[A-Z][A-Z0-9_]{0,127}$",
+    )
+    retry_count: int = Field(default=0, ge=0, le=2)
+    repair_count: int = Field(default=0, ge=0, le=2)
+
+    @model_validator(mode="after")
+    def validate_page_outcome(self) -> OcrCorrectionPageAudit:
+        if self.repair_count != len(self.repair_validation_codes):
+            raise ValueError("OCR_CORRECTION_REPAIR_AUDIT_INVALID")
+        if self.outcome in {"applied", "reused"}:
+            if self.provider_error_code is not None or any(
+                patch.outcome != self.outcome for patch in self.patches
+            ):
+                raise ValueError("OCR_CORRECTION_PAGE_AUDIT_INVALID")
+        elif self.outcome == "rejected":
+            if self.provider_error_code is not None or any(
+                patch.outcome != "rejected" for patch in self.patches
+            ):
+                raise ValueError("OCR_CORRECTION_PAGE_AUDIT_INVALID")
+        elif self.patches:
+            raise ValueError("OCR_CORRECTION_PAGE_PATCHES_INVALID")
+        return self
+
+
 class NativeGroup(ImmutableStrictModel):
     order: int = Field(ge=0)
     kind: Literal["paragraph", "list_item", "table", "caption", "text_box", "alt_text"]
@@ -377,6 +471,13 @@ class SemanticFidelityReport(StrictModel):
     removed_elements: list[RemovedElementAudit] = Field(default_factory=list)
     degraded_blocks: list[DegradedBlockAudit] = Field(default_factory=list)
     table_results: list[TableFidelityResult] = Field(default_factory=list)
+    ocr_corrections: list[OcrCorrectionPageAudit] = Field(default_factory=list)
+    ocr_correction_applied_count: int = Field(default=0, ge=0)
+    ocr_correction_rejected_count: int = Field(default=0, ge=0)
+    warning_codes: list[str] = Field(
+        default_factory=list,
+        max_length=1_000,
+    )
     thresholds: FidelityThresholds = Field(default_factory=FidelityThresholds)
 
     @model_validator(mode="after")
@@ -394,10 +495,28 @@ class SemanticFidelityReport(StrictModel):
         )
         if self.source_text_coverage != coverage:
             raise ValueError("FIDELITY_COVERAGE_INVALID")
+        applied_count = sum(
+            patch.outcome in {"applied", "reused"}
+            for page in self.ocr_corrections
+            for patch in page.patches
+        )
+        rejected_count = sum(
+            patch.outcome == "rejected" for page in self.ocr_corrections for patch in page.patches
+        )
+        if (
+            self.ocr_correction_applied_count != applied_count
+            or self.ocr_correction_rejected_count != rejected_count
+            or len(self.warning_codes) != len(set(self.warning_codes))
+        ):
+            raise ValueError("FIDELITY_OCR_CORRECTION_COUNTS_INVALID")
         if self.unmatched_span_count or self.duplicated_span_count:
             if self.status != "FAIL":
                 raise ValueError("FIDELITY_STATUS_FAIL_REQUIRED")
-        elif self.extraction_mode is ExtractionMode.OCR or self.degraded_block_count:
+        elif (
+            self.degraded_block_count
+            or self.warning_codes
+            or (self.extraction_mode is ExtractionMode.OCR and not self.ocr_corrections)
+        ):
             if self.status != "WARN":
                 raise ValueError("FIDELITY_STATUS_WARN_REQUIRED")
         elif self.status != "PASS":
@@ -438,13 +557,10 @@ class SemanticStructureRepairRecord(StrictModel):
             raise ValueError("REPAIR_RECORD_ORDERS_NOT_UNIQUE")
         if applied & rejected:
             raise ValueError("REPAIR_RECORD_ORDERS_OVERLAP")
-        if self.outcome in {"applied", "reused"} and (
-            self.plan is None or self.plan_hash is None
-        ):
+        if self.outcome in {"applied", "reused"} and (self.plan is None or self.plan_hash is None):
             raise ValueError("REPAIR_RECORD_PLAN_REQUIRED")
         if self.plan_hash is not None and (
-            self.plan is None
-            or self.plan_hash != canonical_hash(self.plan.model_dump(mode="json"))
+            self.plan is None or self.plan_hash != canonical_hash(self.plan.model_dump(mode="json"))
         ):
             raise ValueError("REPAIR_RECORD_PLAN_HASH_INVALID")
         return self
@@ -474,12 +590,7 @@ def _validate_grid(
         end_row = cell.end_row
         start_column = cell.start_column
         end_column = cell.end_column
-        if (
-            start_row < 0
-            or start_column < 0
-            or end_row <= start_row
-            or end_column <= start_column
-        ):
+        if start_row < 0 or start_column < 0 or end_row <= start_row or end_column <= start_column:
             raise ValueError(f"{error_prefix}_CELL_OFFSETS_INVALID")
         if end_row > row_count or end_column > column_count:
             raise ValueError(f"{error_prefix}_CELL_OFFSETS_OUT_OF_BOUNDS")

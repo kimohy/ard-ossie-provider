@@ -266,6 +266,44 @@ def valid_repair_record() -> dict[str, object]:
     }
 
 
+def valid_fidelity_report() -> dict[str, object]:
+    return {
+        "source_hash": "a" * 64,
+        "extraction_mode": "docx_xml",
+        "page_count": 1,
+        "parser_versions": {"semantic": "test"},
+        "status": "PASS",
+        "heading_count": 0,
+        "paragraph_count": 1,
+        "list_item_count": 0,
+        "table_count": 0,
+        "row_count": 0,
+        "cell_count": 0,
+        "source_span_count": 1,
+        "preserved_span_count": 1,
+        "excluded_span_count": 0,
+        "unmatched_span_count": 0,
+        "duplicated_span_count": 0,
+        "degraded_block_count": 0,
+        "source_text_coverage": 1.0,
+        "removed_elements": [],
+        "degraded_blocks": [],
+        "table_results": [],
+        "ocr_corrections": [],
+        "ocr_correction_applied_count": 0,
+        "ocr_correction_rejected_count": 0,
+        "warning_codes": [],
+        "thresholds": {
+            "overlap_weight": 0.55,
+            "text_similarity_weight": 0.35,
+            "order_weight": 0.1,
+            "acceptance_score": 0.72,
+            "page_edge_band": 0.1,
+            "repeat_ratio": 0.6,
+        },
+    }
+
+
 def capturing_processing_service(
     tmp_path: Path,
     *,
@@ -308,16 +346,20 @@ def test_processing_passes_none_when_base_quality_has_no_repair_hash_or_file(
     assert captured["trusted_semantic_repair"] is None
 
 
-def test_processing_passes_only_hash_verified_base_repair_to_processor(
+def test_processing_passes_only_hash_verified_base_semantic_artifacts_to_processor(
     tmp_path: Path,
 ) -> None:
     repair_text = json.dumps(valid_repair_record()) + "\n"
+    fidelity_text = json.dumps(valid_fidelity_report()) + "\n"
     quality_text = json.dumps(
         {
             "quality_artifact_hashes": {
                 "semantic-structure-repair.json": hashlib.sha256(
                     repair_text.encode()
-                ).hexdigest()
+                ).hexdigest(),
+                "semantic-fidelity.json": hashlib.sha256(
+                    fidelity_text.encode()
+                ).hexdigest(),
             }
         }
     )
@@ -326,6 +368,7 @@ def test_processing_passes_only_hash_verified_base_repair_to_processor(
         files={
             "products/sales-order/quality/quality-report.json": quality_text,
             "products/sales-order/quality/semantic-structure-repair.json": repair_text,
+            "products/sales-order/quality/semantic-fidelity.json": fidelity_text,
         },
     )
     service, captured = capturing_processing_service(tmp_path, git=git)
@@ -333,6 +376,7 @@ def test_processing_passes_only_hash_verified_base_repair_to_processor(
     service.run(request(tmp_path))
 
     assert captured["trusted_semantic_repair"] == valid_repair_record()
+    assert captured["trusted_semantic_fidelity"] == valid_fidelity_report()
     assert git.revision_reads == [
         (
             NEW_SHA,
@@ -341,6 +385,10 @@ def test_processing_passes_only_hash_verified_base_repair_to_processor(
         (
             NEW_SHA,
             "products/sales-order/quality/semantic-structure-repair.json",
+        ),
+        (
+            NEW_SHA,
+            "products/sales-order/quality/semantic-fidelity.json",
         ),
     ]
 
@@ -420,9 +468,11 @@ def test_processing_never_reads_repair_from_mutable_checkout(tmp_path: Path) -> 
     service.run(request(tmp_path))
 
     assert captured["trusted_semantic_repair"] is None
+    assert captured["trusted_semantic_fidelity"] is None
     assert git.revision_reads == [
         (OLD_SHA, "products/sales-order/quality/quality-report.json"),
         (OLD_SHA, "products/sales-order/quality/semantic-structure-repair.json"),
+        (OLD_SHA, "products/sales-order/quality/semantic-fidelity.json"),
     ]
 
 

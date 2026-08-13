@@ -70,8 +70,9 @@ from ard_ossie.renderers import (
     render_product_markdown,
     render_semantic_markdown,
 )
+from ard_ossie.semantic.correction import OcrCorrectionPlanner
 from ard_ossie.semantic.models import (
-    ExtractionMode,
+    SemanticFidelityReport,
     SemanticStructureRepairRecord,
 )
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
@@ -186,6 +187,7 @@ def process_product(
     pr_number: int | None = None,
     warnings_as_errors: bool = False,
     trusted_semantic_repair: dict[str, object] | None = None,
+    trusted_semantic_fidelity: dict[str, object] | None = None,
 ) -> ProcessResult:
     root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
@@ -197,6 +199,7 @@ def process_product(
         provider=provider,
         parser=parser,
         trusted_semantic_repair=trusted_semantic_repair,
+        trusted_semantic_fidelity=trusted_semantic_fidelity,
     )
     product_document = active_parser.parse(manifest.by_role(SourceRole.PRODUCT_HTML))
     semantic_document = active_parser.parse(manifest.by_role(SourceRole.SEMANTIC_DOCUMENT))
@@ -463,6 +466,7 @@ def _processing_parser(
     provider: LLMProvider | None,
     parser: DoclingParser | None,
     trusted_semantic_repair: dict[str, object] | None,
+    trusted_semantic_fidelity: dict[str, object] | None,
 ) -> DoclingParser:
     if parser is not None:
         return parser
@@ -471,10 +475,22 @@ def _processing_parser(
         if trusted_semantic_repair is not None
         else None
     )
+    trusted_fidelity = (
+        SemanticFidelityReport.model_validate(trusted_semantic_fidelity)
+        if trusted_semantic_fidelity is not None
+        else None
+    )
     planner = SemanticStructureRepairPlanner(provider) if provider is not None else None
+    correction_planner = (
+        OcrCorrectionPlanner(provider)
+        if provider is not None or trusted_fidelity is not None
+        else None
+    )
     return DoclingParser(
         structure_repair_planner=planner,
         trusted_repair_record=trusted_record,
+        ocr_correction_planner=correction_planner,
+        trusted_fidelity_report=trusted_fidelity,
     )
 
 
@@ -1014,11 +1030,11 @@ def _semantic_findings(document: ParsedDocument) -> list[QualityFinding]:
     if fidelity is None:
         return []
     findings: list[QualityFinding] = []
-    if fidelity.extraction_mode is ExtractionMode.OCR:
+    for code in dict.fromkeys(fidelity.warning_codes):
         findings.append(
             QualityFinding(
-                code="SEMANTIC_OCR_FALLBACK",
-                message="Semantic PDF used whole-document OCR text",
+                code=code,
+                message="Semantic OCR correction requires review",
                 path="sources.semantic_document",
             )
         )

@@ -102,11 +102,12 @@ class ConfiguredRepairProvider:
     def health_check(self) -> bool:
         return True
 
-    def capabilities(self) -> dict[str, str]:
+    def capabilities(self) -> dict[str, str | bool]:
         return {
             "structured_output": "json_schema",
             "provider": "openai_compatible",
             "model": self.model,
+            "vision": True,
         }
 
     def generate_text(self, *, messages: list[dict[str, str]]) -> LLMResult:

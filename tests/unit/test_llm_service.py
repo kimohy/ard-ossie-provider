@@ -161,6 +161,7 @@ def test_successful_repair_records_count_and_keeps_same_metadata() -> None:
     assert output.metadata.profile == "safe-profile"
     assert output.metadata.model == "safe-model"
     assert output.metadata.repair_count == 1
+    assert output.repair_validation_codes == ["LLM_INVALID_JSON"]
 
 
 def test_adapter_output_error_can_be_repaired_without_exposing_rejected_body() -> None:

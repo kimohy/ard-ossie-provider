@@ -19,6 +19,7 @@ from ard_ossie.semantic.models import (
     LosslessBlock,
     NativeDocument,
     NativeTable,
+    OcrCorrectionPageAudit,
     ParagraphBlock,
     ReconciledDocument,
     RemovedElementAudit,
@@ -43,7 +44,6 @@ from ard_ossie.semantic.sources import (
     SemanticSourceError,
     extract_docx_native,
     extract_ocr_native,
-    extract_pdf_native,
 )
 from ard_ossie.semantic.structure import (
     ReconciliationResult,
@@ -54,6 +54,7 @@ from ard_ossie.semantic.structure import (
 
 if TYPE_CHECKING:
     from ard_ossie.docling_parser import Evidence
+    from ard_ossie.semantic.correction import OcrCorrectionPlanner
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,8 @@ def parse_semantic_document(
     full_page_ocr_converter: Any | None = None,
     repair_planner: SemanticStructureRepairPlanner | None = None,
     trusted_record: SemanticStructureRepairRecord | None = None,
+    correction_planner: OcrCorrectionPlanner | None = None,
+    trusted_fidelity: SemanticFidelityReport | None = None,
     pdfium: Any | None = None,
 ) -> SemanticParseResult:
     """Parse a PDF or DOCX without allowing structural hints to author text."""
@@ -81,6 +84,21 @@ def parse_semantic_document(
         full_page_ocr_converter=full_page_ocr_converter,
         pdfium=pdfium,
     )
+    correction_audits: tuple[OcrCorrectionPageAudit, ...] = ()
+    correction_warnings: tuple[str, ...] = ()
+    if native.extraction_mode is ExtractionMode.OCR:
+        if correction_planner is None:
+            correction_warnings = ("SEMANTIC_OCR_CORRECTION_UNAVAILABLE",)
+        else:
+            correction = correction_planner.correct(
+                source,
+                native,
+                trusted_fidelity=trusted_fidelity,
+                pdfium=pdfium,
+            )
+            native = correction.document
+            correction_audits = correction.audits
+            correction_warnings = correction.warning_codes
     reconciled = reconcile_structure(native, skeleton)
     completed, repair_record = _repair_and_degrade(
         native,
@@ -91,7 +109,14 @@ def parse_semantic_document(
     )
     coverage = validate_source_coverage(native, completed)
     markdown = render_semantic_markdown(completed, native.span_catalog())
-    fidelity = _build_fidelity(native, completed, coverage, repair_record)
+    fidelity = _build_fidelity(
+        native,
+        completed,
+        coverage,
+        repair_record,
+        correction_audits=correction_audits,
+        correction_warnings=correction_warnings,
+    )
     excluded_ids = {item.span_id for item in completed.excluded_spans}
     has_content = any(
         not span.text.isspace() for span in native.spans if span.span_id not in excluded_ids
@@ -114,18 +139,14 @@ def _native_and_structure(
 ) -> tuple[NativeDocument, StructureDocument]:
     suffix = source.path.suffix.casefold()
     if suffix == ".pdf":
-        native = extract_pdf_native(source, pdfium=pdfium)
-        if native is None:
-            ocr_document = _convert_with_full_page_ocr(
-                source,
-                full_page_ocr_converter=full_page_ocr_converter,
-            )
-            native = extract_ocr_native(source, ocr_document)
-            if not native.spans:
-                raise SemanticSourceError("SEMANTIC_OCR_UNREADABLE")
-            skeleton = build_docling_skeleton(ocr_document)
-        else:
-            skeleton = _ordinary_structure(source, converter=converter)
+        ocr_document = _convert_with_full_page_ocr(
+            source,
+            full_page_ocr_converter=full_page_ocr_converter,
+        )
+        native = extract_ocr_native(source, ocr_document)
+        if not native.spans:
+            raise SemanticSourceError("SEMANTIC_OCR_UNREADABLE")
+        skeleton = build_docling_skeleton(ocr_document)
     elif suffix == ".docx":
         native = extract_docx_native(source)
         skeleton = _ordinary_structure(source, converter=converter)
@@ -206,8 +227,16 @@ def _repair_and_degrade(
     excluded = list(reconciled.excluded_spans)
     unresolved = tuple(reconciled.unresolved_span_ids)
     repair_record: SemanticStructureRepairRecord | None = None
-    reason = "provider_unavailable"
-    if unresolved and repair_planner is not None:
+    reason = (
+        "structure_unresolved"
+        if native.extraction_mode is ExtractionMode.OCR
+        else "provider_unavailable"
+    )
+    if (
+        unresolved
+        and native.extraction_mode is not ExtractionMode.OCR
+        and repair_planner is not None
+    ):
         try:
             application = repair_planner.repair(
                 native,
@@ -730,6 +759,9 @@ def _build_fidelity(
     document: ReconciledDocument,
     coverage: CoverageResult,
     repair_record: SemanticStructureRepairRecord | None,
+    *,
+    correction_audits: tuple[OcrCorrectionPageAudit, ...] = (),
+    correction_warnings: tuple[str, ...] = (),
 ) -> SemanticFidelityReport:
     catalog = native.span_catalog()
     degraded = [block for block in document.blocks if isinstance(block, LosslessBlock)]
@@ -741,7 +773,9 @@ def _build_fidelity(
         parser_versions=dict(native.parser_versions),
         status=(
             "WARN"
-            if native.extraction_mode is ExtractionMode.OCR or degraded
+            if degraded
+            or correction_warnings
+            or (native.extraction_mode is ExtractionMode.OCR and not correction_audits)
             else "PASS"
         ),
         heading_count=sum(isinstance(block, HeadingBlock) for block in document.blocks),
@@ -783,6 +817,18 @@ def _build_fidelity(
             for block in degraded
         ],
         table_results=table_results,
+        ocr_corrections=list(correction_audits),
+        ocr_correction_applied_count=sum(
+            patch.outcome in {"applied", "reused"}
+            for page in correction_audits
+            for patch in page.patches
+        ),
+        ocr_correction_rejected_count=sum(
+            patch.outcome == "rejected"
+            for page in correction_audits
+            for patch in page.patches
+        ),
+        warning_codes=list(dict.fromkeys(correction_warnings)),
     )
 
 

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from ard_ossie.semantic.correction import has_raw_html
 from ard_ossie.semantic.models import (
     MAX_LIST_DEPTH,
     HeadingBlock,
@@ -44,6 +45,12 @@ class SemanticCoverageError(ValueError):
     ) -> None:
         self.code = code
         super().__init__(code)
+
+
+class SemanticRawHtmlError(ValueError):
+    def __init__(self) -> None:
+        self.code = "SEMANTIC_RAW_HTML_OUTPUT"
+        super().__init__(self.code)
 
 
 _COMMONMARK_ESCAPABLE_PUNCTUATION = string.punctuation.replace("\\", "")
@@ -117,7 +124,10 @@ def render_semantic_markdown(
         chunks.append(_render_block(block, spans))
     flush_list()
 
-    return "\n\n".join(chunks) + "\n"
+    rendered = "\n\n".join(chunk.rstrip("\n") for chunk in chunks) + "\n"
+    if has_raw_html(rendered):
+        raise SemanticRawHtmlError
+    return rendered
 
 
 def _allocated_span_ids(blocks: tuple[SemanticBlock, ...]) -> list[SpanId]:
@@ -138,7 +148,7 @@ def _render_block(block: SemanticBlock, spans: Mapping[SpanId, SourceSpan]) -> s
     if isinstance(block, TableBlock):
         return _render_table(block, spans)
     if isinstance(block, LosslessBlock):
-        return f"<pre>{_escape_html(_resolve(block.span_ids, spans))}</pre>"
+        return _escape_inline(_resolve(block.span_ids, spans))
     raise TypeError(f"Unsupported semantic block: {type(block)!r}")
 
 
@@ -196,11 +206,11 @@ def _resolve_table_value(
         for span_id in span_ids:
             span = spans[span_id]
             if span.paragraph_break_before and values:
-                values.append("<br>")
-            values.append(_escape_table_value(span.text))
+                values.append("\n")
+            values.append(span.text)
     except KeyError as exc:
         raise SemanticCoverageError("SEMANTIC_SOURCE_TEXT_LOSS") from exc
-    return "".join(values)
+    return _escape_table_value("".join(values))
 
 
 def _escape_markdown(value: str) -> str:
@@ -212,7 +222,7 @@ def _escape_markdown(value: str) -> str:
 
 def _escape_inline(value: str) -> str:
     normalized = value.replace("\r\n", "\n").replace("\r", "\n")
-    return "<br>".join(_escape_inline_line(line) for line in normalized.split("\n"))
+    return "\\\n".join(_escape_inline_line(line) for line in normalized.split("\n"))
 
 
 def _escape_inline_line(value: str) -> str:
@@ -233,11 +243,9 @@ def _encode_boundary_whitespace(value: str) -> str:
 
 
 def _escape_table_value(value: str) -> str:
-    return _escape_inline(value)
-
-
-def _escape_html(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    joined = " ".join(line.strip(" \t") for line in normalized.split("\n"))
+    return _escape_markdown(joined)
 
 
 def _validate_render_table_limits(block: TableBlock) -> None:

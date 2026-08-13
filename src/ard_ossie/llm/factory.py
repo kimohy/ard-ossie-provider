@@ -58,6 +58,7 @@ class LLMProviderFactory:
             "timeout_seconds": profile.timeout_seconds,
             "max_output_tokens": profile.max_output_tokens,
             "temperature": profile.temperature,
+            "vision": profile.vision,
         }
         if isinstance(profile, OpenAICompatibleProfile):
             provider = self._openai_constructor(
@@ -109,11 +110,13 @@ def _required_value(environment: Mapping[str, str], name: str) -> str:
 
 def _validate_capability(profile: LLMProfile, provider: LLMProvider) -> None:
     try:
-        capability = provider.capabilities().get("structured_output")
+        capabilities = provider.capabilities()
+        capability = capabilities.get("structured_output")
+        vision = capabilities.get("vision")
     except Exception:
         raise _configuration_error("LLM_PROVIDER_CAPABILITY_UNSUPPORTED") from None
     expected = "json_schema" if profile.structured_output == "native" else "prompt_json"
-    if capability != expected:
+    if capability != expected or vision is not profile.vision:
         raise _configuration_error("LLM_PROVIDER_CAPABILITY_UNSUPPORTED")
 
 
