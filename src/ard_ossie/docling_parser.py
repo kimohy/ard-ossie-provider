@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, JsonValue
 
-from ard_ossie.ingestion import SourceFile, SourceRole
+from ard_ossie.ingestion import SourceFile, SourceRole, materialized_source_path
 from ard_ossie.models import Sha256, StrictModel
+from ard_ossie.semantic.models import SemanticFidelityReport, SemanticStructureRepairRecord
+
+if TYPE_CHECKING:
+    from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 
 
 class Evidence(StrictModel):
@@ -21,11 +24,11 @@ class ParsedDocument(StrictModel):
     role: SourceRole
     source_hash: Sha256
     markdown: str
+    semantic_has_content: bool | None = Field(default=None, exclude=True)
     evidence: list[Evidence] = Field(default_factory=list)
     excluded_product_fact_evidence: list[Evidence] = Field(default_factory=list, exclude=True)
-
-
-EmbeddedPdfParser = Callable[[SourceFile], ParsedDocument | None]
+    semantic_fidelity: SemanticFidelityReport | None = Field(default=None, exclude=True)
+    semantic_repair: SemanticStructureRepairRecord | None = Field(default=None, exclude=True)
 
 
 class DoclingParser:
@@ -33,21 +36,44 @@ class DoclingParser:
         self,
         *,
         converter: Any | None = None,
-        embedded_pdf_parser: EmbeddedPdfParser | None = None,
+        full_page_ocr_converter: Any | None = None,
+        structure_repair_planner: SemanticStructureRepairPlanner | None = None,
+        trusted_repair_record: SemanticStructureRepairRecord | None = None,
+        pdfium: Any | None = None,
     ) -> None:
         self._converter = converter
-        self._embedded_pdf_parser = embedded_pdf_parser or _parse_embedded_pdf
+        self._full_page_ocr_converter = full_page_ocr_converter
+        self._structure_repair_planner = structure_repair_planner
+        self._trusted_repair_record = trusted_repair_record
+        self._pdfium = pdfium
 
     def parse(self, source: SourceFile) -> ParsedDocument:
         if source.role is SourceRole.DICTIONARY_EXCEL:
             raise ValueError("dictionary Excel is handled by the cell-preserving adapter")
-        if source.role is SourceRole.SEMANTIC_DOCUMENT and source.path.suffix.lower() == ".pdf":
-            embedded = self._embedded_pdf_parser(source)
-            if embedded is not None:
-                return embedded
+        if source.role is SourceRole.SEMANTIC_DOCUMENT:
+            from ard_ossie.semantic.parser import parse_semantic_document
+
+            semantic = parse_semantic_document(
+                source,
+                converter=self._converter,
+                full_page_ocr_converter=self._full_page_ocr_converter,
+                repair_planner=self._structure_repair_planner,
+                trusted_record=self._trusted_repair_record,
+                pdfium=self._pdfium,
+            )
+            return ParsedDocument(
+                role=source.role,
+                source_hash=source.sha256,
+                markdown=semantic.markdown,
+                semantic_has_content=semantic.has_content,
+                evidence=list(semantic.evidence),
+                semantic_fidelity=semantic.fidelity,
+                semantic_repair=semantic.repair_record,
+            )
 
         converter = self._converter or _new_converter()
-        result = converter.convert(str(source.path))
+        with materialized_source_path(source) as private_path:
+            result = converter.convert(str(private_path))
         document = result.document
         markdown = document.export_to_markdown()
         evidence = _collect_evidence(document, source)
@@ -130,64 +156,6 @@ _AI_GENERATED_LABEL = re.compile(
     r"(?:\(\s*)?AI\s*(?:자동\s*생성|generated)(?:\s*\))?",
     re.IGNORECASE,
 )
-
-
-def _parse_embedded_pdf(
-    source: SourceFile,
-    *,
-    pdfium: Any | None = None,
-) -> ParsedDocument | None:
-    if pdfium is None:
-        import pypdfium2
-
-        pdfium = pypdfium2
-
-    try:
-        document = pdfium.PdfDocument(source.path)
-    except pdfium.PdfiumError:
-        return None
-
-    pages: list[str] = []
-    evidence: list[Evidence] = []
-    try:
-        if len(document) == 0:
-            return None
-        for page_index in range(len(document)):
-            page = document[page_index]
-            try:
-                text_page = page.get_textpage()
-                try:
-                    text = text_page.get_text_range()
-                finally:
-                    text_page.close()
-            finally:
-                page.close()
-            normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-            if not normalized:
-                return None
-            pages.append(normalized)
-            evidence.append(
-                Evidence(
-                    source_hash=source.sha256,
-                    role=source.role,
-                    locator={
-                        "document": source.relative_path,
-                        "page": page_index + 1,
-                    },
-                    excerpt=normalized[:500],
-                )
-            )
-    except pdfium.PdfiumError:
-        return None
-    finally:
-        document.close()
-
-    return ParsedDocument(
-        role=source.role,
-        source_hash=source.sha256,
-        markdown="\n\n".join(pages),
-        evidence=evidence,
-    )
 
 
 def _partition_product_fact_evidence(

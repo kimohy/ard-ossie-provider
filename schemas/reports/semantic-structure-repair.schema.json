@@ -1,0 +1,329 @@
+{
+  "$defs": {
+    "RepairBlock": {
+      "additionalProperties": false,
+      "properties": {
+        "cells": {
+          "items": {
+            "$ref": "#/$defs/RepairCell"
+          },
+          "maxItems": 100000,
+          "title": "Cells",
+          "type": "array"
+        },
+        "column_count": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Column Count"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "exclusion_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "page_header",
+                "page_footer",
+                "page_number"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Exclusion Kind"
+        },
+        "heading_level": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Heading Level"
+        },
+        "kind": {
+          "enum": [
+            "heading",
+            "paragraph",
+            "list_item",
+            "table",
+            "exclude"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "list_depth": {
+          "anyOf": [
+            {
+              "maximum": 32,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "List Depth"
+        },
+        "list_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "ordered",
+                "unordered"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "List Kind"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "row_count": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Row Count"
+        },
+        "span_ids": {
+          "items": {
+            "pattern": "^span_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Span Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "order",
+        "span_ids",
+        "heading_level",
+        "list_kind",
+        "list_depth",
+        "row_count",
+        "column_count",
+        "cells",
+        "exclusion_kind",
+        "confidence"
+      ],
+      "title": "RepairBlock",
+      "type": "object"
+    },
+    "RepairCell": {
+      "additionalProperties": false,
+      "properties": {
+        "column_header": {
+          "title": "Column Header",
+          "type": "boolean"
+        },
+        "end_column": {
+          "exclusiveMinimum": 0,
+          "maximum": 256,
+          "title": "End Column",
+          "type": "integer"
+        },
+        "end_row": {
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "End Row",
+          "type": "integer"
+        },
+        "span_ids": {
+          "items": {
+            "pattern": "^span_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Span Ids",
+          "type": "array"
+        },
+        "start_column": {
+          "maximum": 256,
+          "minimum": 0,
+          "title": "Start Column",
+          "type": "integer"
+        },
+        "start_row": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Start Row",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_row",
+        "end_row",
+        "start_column",
+        "end_column",
+        "span_ids",
+        "column_header"
+      ],
+      "title": "RepairCell",
+      "type": "object"
+    },
+    "RepairPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "items": {
+            "$ref": "#/$defs/RepairBlock"
+          },
+          "title": "Blocks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "blocks"
+      ],
+      "title": "RepairPlan",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/kimohy/ard-ossie-provider/schemas/reports/semantic-structure-repair.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applied_orders": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Applied Orders",
+      "type": "array"
+    },
+    "model": {
+      "title": "Model",
+      "type": "string"
+    },
+    "ordered_span_hashes": {
+      "items": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Ordered Span Hashes",
+      "type": "array"
+    },
+    "outcome": {
+      "enum": [
+        "applied",
+        "reused",
+        "rejected",
+        "degraded"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "parser_version": {
+      "title": "Parser Version",
+      "type": "string"
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RepairPlan"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "plan_hash": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Plan Hash"
+    },
+    "prompt_version": {
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "provider": {
+      "title": "Provider",
+      "type": "string"
+    },
+    "provider_error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Provider Error Code"
+    },
+    "rejected_orders": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Rejected Orders",
+      "type": "array"
+    },
+    "schema_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Schema Hash",
+      "type": "string"
+    },
+    "source_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Hash",
+      "type": "string"
+    },
+    "validation_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Validation Codes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_hash",
+    "ordered_span_hashes",
+    "parser_version",
+    "prompt_version",
+    "schema_hash",
+    "provider",
+    "model",
+    "outcome",
+    "plan",
+    "provider_error_code",
+    "validation_codes",
+    "applied_orders",
+    "rejected_orders",
+    "plan_hash"
+  ],
+  "title": "SemanticStructureRepairRecord",
+  "type": "object"
+}

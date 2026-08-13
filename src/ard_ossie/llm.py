@@ -298,7 +298,12 @@ class OpenAICompatibleProvider:
         return True
 
     def capabilities(self) -> dict[str, JsonValue]:
-        return {"api_style": "chat_completions", "structured_output": "json_schema"}
+        return {
+            "api_style": "chat_completions",
+            "structured_output": "json_schema",
+            "provider": "openai_compatible",
+            "model": self.model,
+        }
 
     def generate_structured(
         self,

@@ -45,8 +45,26 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "status": {
-      "$ref": "#/$defs/QualityStatus"
+    "artifact_hashes": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Artifact Hashes",
+      "type": "object"
+    },
+    "completeness": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Completeness",
+      "type": "number"
+    },
+    "hard_errors": {
+      "items": {
+        "$ref": "#/$defs/QualityFinding"
+      },
+      "title": "Hard Errors",
+      "type": "array"
     },
     "product_id": {
       "anyOf": [
@@ -73,18 +91,16 @@
       ],
       "title": "Product Version"
     },
-    "completeness": {
-      "maximum": 1,
-      "minimum": 0,
-      "title": "Completeness",
-      "type": "number"
-    },
-    "hard_errors": {
-      "items": {
-        "$ref": "#/$defs/QualityFinding"
+    "quality_artifact_hashes": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
       },
-      "title": "Hard Errors",
-      "type": "array"
+      "title": "Quality Artifact Hashes",
+      "type": "object"
+    },
+    "status": {
+      "$ref": "#/$defs/QualityStatus"
     },
     "warnings": {
       "items": {
@@ -92,14 +108,6 @@
       },
       "title": "Warnings",
       "type": "array"
-    },
-    "artifact_hashes": {
-      "additionalProperties": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "title": "Artifact Hashes",
-      "type": "object"
     }
   },
   "required": [

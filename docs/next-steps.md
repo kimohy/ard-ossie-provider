@@ -10,6 +10,7 @@
 | bootstrap 검증 | PR #1의 검토 대상 head `c6812b3dddcd2c79556514cecbee153732d41f34`에서 run #4의 `static`, `pytest`, `wheel`, aggregate 성공 |
 | 운영 설정 | labels, 두 Environments, LLM Secret/Variables, Actions 권한과 `main` 보호 규칙 적용·read-back 검증 완료 |
 | 영구 gate 전환 | [정리 PR #2](https://github.com/kimohy/ard-ossie-provider/pull/2)에서 일회성 workflow를 제거하고 같은 head의 `ard/quality-gate`, `ard/changeset` 성공 후 병합 |
+| 시멘틱 문서 구조 충실도 | 완료 — PDFium/OOXML 원문 권위와 Docling 구조를 결합해 평문 결합 한계를 해소하고, 불변 span ID 기반 복구와 lossless `WARN` fallback을 감사 보고서로 검증 |
 | 다음 작업 | P1 Issue 기반 합성 데이터 acceptance |
 
 `ard-initial-bootstrap.yml`은 영구 required status가 아직 없던 PR #1만 검증하기 위한 일회성 workflow였습니다. PR #1 병합 뒤 운영 설정과 정상 gate를 검증한 [정리 PR #2](https://github.com/kimohy/ard-ossie-provider/pull/2)에서 제거했으므로, 현재 운영자가 이 workflow를 다시 실행하거나 복원해서는 안 됩니다. 이후 모든 검증은 기본 브랜치의 영구 `ARD repository change gate`를 사용합니다.
@@ -52,7 +53,7 @@ P0는 2026-08-11에 연속 실행했습니다. PR #1의 정확한 head에서 boo
 - [ ] write 이상 권한의 관리자가 `ard:approved`를 적용합니다.
 - [ ] `ard/issue-<number>-<product-key>` 브랜치와 하나의 Draft PR이 생성되는지 확인합니다.
 - [ ] HTML은 일반 Git 파일로, DOCX/PDF와 XLSX는 Git LFS 객체로 저장되는지 확인합니다.
-- [ ] 다섯 generated 산출물과 다섯 quality 보고서가 같은 PR에 커밋되는지 확인합니다.
+- [ ] 다섯 generated 산출물과 필수 quality 보고서들이 같은 PR에 커밋되고, 구조 복구를 요청하거나 재사용한 경우에만 `semantic-structure-repair.json`도 포함되는지 확인합니다.
 - [ ] 제품·테이블·컬럼·metric·relationship ID와 `v1`이 Registry/생성물 사이에서 일치하는지 확인합니다.
 - [ ] hard error가 0이고 `ard/quality-gate`, `ard/changeset`이 정확한 head에 success인지 확인합니다.
 

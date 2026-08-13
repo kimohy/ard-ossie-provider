@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import tempfile
 import zipfile
 from pathlib import Path
@@ -13,6 +14,7 @@ from ard_ossie.impact import ChangeSetRecord, ChangeSetStatus
 from ard_ossie.models import ProductRecord, StrictModel, TableRecord
 from ard_ossie.pipeline import QualityReport
 from ard_ossie.registry import Registry
+from ard_ossie.semantic.models import SemanticFidelityReport
 
 
 class ReleaseBlocked(ValueError):
@@ -36,13 +38,15 @@ _GENERATED_ASSETS = (
     "ossie-model.json",
     "source-manifest.json",
 )
-_QUALITY_ASSETS = (
+_REQUIRED_QUALITY_ASSETS = (
     "quality-report.json",
     "duplicate-report.json",
     "version-report.json",
     "impact-report.json",
     "llm-suggestions.json",
+    "semantic-fidelity.json",
 )
+_OPTIONAL_QUALITY_ASSETS = ("semantic-structure-repair.json",)
 
 
 def build_release_plan(
@@ -98,12 +102,8 @@ def resolve_release_plan(
     quality_path = product_root / "quality" / "quality-report.json"
     if not quality_path.is_file():
         raise ReleaseBlocked("QUALITY_REPORT_MISSING")
-    try:
-        quality = QualityReport.model_validate_json(
-            quality_path.read_text(encoding="utf-8")
-        )
-    except (OSError, ValidationError, ValueError) as error:
-        raise ReleaseBlocked("QUALITY_REPORT_INVALID") from error
+    snapshots = _snapshot_release_entries(product_root, require_complete=False)
+    quality = _parse_quality_report(snapshots["quality/quality-report.json"])
     if quality.product_id != product.product_id:
         raise ReleaseBlocked("QUALITY_REPORT_PRODUCT_MISMATCH")
     if quality.product_version != product.version:
@@ -128,15 +128,15 @@ def resolve_release_plan(
                     f"{required_product_id}:v{readiness.version}"
                 )
 
-    artifact_hashes = _verify_release_files(
-        product_root,
-        quality.model_dump(mode="json"),
-    )
+    _require_release_snapshot_entries(snapshots)
+    quality_data = quality.model_dump(mode="json")
+    artifact_hashes = _verify_release_snapshots(snapshots, quality_data)
+    _verify_semantic_fidelity_snapshot(snapshots["quality/semantic-fidelity.json"])
     return build_release_plan(
         product,
         tables,
         changeset=changeset,
-        quality_report=quality.model_dump(mode="json"),
+        quality_report=quality_data,
         artifact_hashes=artifact_hashes,
     )
 
@@ -144,10 +144,11 @@ def resolve_release_plan(
 def build_release_bundle(product_root: str | Path, output_path: str | Path) -> Path:
     root = Path(product_root)
     output = Path(output_path)
-    entries = _release_bundle_entries(root)
-    missing = [path.relative_to(root).as_posix() for path in entries if not path.is_file()]
-    if missing:
-        raise ReleaseBlocked(f"RELEASE_ARTIFACT_MISSING: {missing[0]}")
+    snapshots = _snapshot_release_entries(root)
+    quality = _parse_quality_report(snapshots["quality/quality-report.json"])
+    quality_data = quality.model_dump(mode="json")
+    _require_quality_pass(quality_data)
+    _verify_semantic_fidelity_snapshot(snapshots["quality/semantic-fidelity.json"])
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -164,21 +165,43 @@ def build_release_bundle(product_root: str | Path, output_path: str | Path) -> P
             compression=zipfile.ZIP_DEFLATED,
             compresslevel=9,
         ) as archive:
-            for path in sorted(
-                entries,
-                key=lambda item: item.relative_to(root).as_posix(),
-            ):
-                name = path.relative_to(root).as_posix()
+            for name, payload in sorted(snapshots.items()):
                 info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o100644 << 16
-                archive.writestr(info, path.read_bytes())
+                archive.writestr(info, payload)
         temporary.replace(output)
         temporary = None
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return output
+
+
+def verify_release_bundle(
+    bundle: str | Path | bytes,
+    expected_hashes: dict[str, str],
+) -> bytes:
+    try:
+        payload = bundle if isinstance(bundle, bytes) else Path(bundle).read_bytes()
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)) or set(names) != set(expected_hashes):
+                raise ReleaseBlocked(
+                    "RELEASE_BUNDLE_CONTENT_MISMATCH: "
+                    "release bundle entries do not match the verified plan"
+                )
+            for name, digest in expected_hashes.items():
+                if hashlib.sha256(archive.read(name)).hexdigest() != digest:
+                    raise ReleaseBlocked(
+                        f"RELEASE_BUNDLE_HASH_MISMATCH: "
+                        f"release bundle source changed after planning: {name}"
+                    )
+    except ReleaseBlocked:
+        raise
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
+        raise ReleaseBlocked("RELEASE_BUNDLE_INVALID: release bundle is malformed") from error
+    return payload
 
 
 def release_source_paths(product_root: str | Path) -> tuple[Path, ...]:
@@ -189,8 +212,18 @@ def release_source_paths(product_root: str | Path) -> tuple[Path, ...]:
 def _release_bundle_entries(root: Path) -> tuple[Path, ...]:
     return (
         *(root / "generated" / name for name in _GENERATED_ASSETS),
-        *(root / "quality" / name for name in _QUALITY_ASSETS),
+        *(root / "quality" / name for name in _quality_asset_names(root)),
     )
+
+
+def _quality_asset_names(root: Path) -> tuple[str, ...]:
+    quality = root / "quality"
+    present_optional = tuple(
+        name
+        for name in _OPTIONAL_QUALITY_ASSETS
+        if (quality / name).exists() or (quality / name).is_symlink()
+    )
+    return (*_REQUIRED_QUALITY_ASSETS, *present_optional)
 
 
 def verify_tag_target(tag: str, *, expected_commit: str, existing_target: str | None) -> None:
@@ -200,18 +233,96 @@ def verify_tag_target(tag: str, *, expected_commit: str, existing_target: str | 
         )
 
 
-def _verify_release_files(product_root: Path, quality: dict[str, Any]) -> dict[str, str]:
+def _snapshot_release_entries(
+    product_root: Path,
+    *,
+    require_complete: bool = True,
+) -> dict[str, bytes]:
+    entries = _release_bundle_entries(product_root)
+    present = tuple(path for path in entries if path.is_file())
+    if require_complete:
+        present_names = {
+            path.relative_to(product_root).as_posix() for path in present
+        }
+        _require_release_snapshot_entries(present_names)
+    return {
+        path.relative_to(product_root).as_posix(): path.read_bytes()
+        for path in sorted(
+            present,
+            key=lambda item: item.relative_to(product_root).as_posix(),
+        )
+    }
+
+
+def _require_release_snapshot_entries(snapshots: dict[str, bytes] | set[str]) -> None:
+    present = set(snapshots)
+    required = (
+        *(f"generated/{name}" for name in _GENERATED_ASSETS),
+        *(f"quality/{name}" for name in _REQUIRED_QUALITY_ASSETS),
+    )
+    missing = [name for name in required if name not in present]
+    if missing:
+        raise ReleaseBlocked(f"RELEASE_ARTIFACT_MISSING: {missing[0]}")
+
+
+def _parse_quality_report(payload: bytes) -> QualityReport:
+    try:
+        return QualityReport.model_validate_json(payload)
+    except (ValidationError, ValueError) as error:
+        raise ReleaseBlocked("QUALITY_REPORT_INVALID") from error
+
+
+def _require_quality_pass(quality: dict[str, Any]) -> None:
+    if quality.get("status") == "FAIL" or quality.get("hard_errors"):
+        raise ReleaseBlocked("QUALITY_GATE_FAILED")
+
+
+def _verify_release_snapshots(
+    snapshots: dict[str, bytes],
+    quality: dict[str, Any],
+) -> dict[str, str]:
     expected = quality.get("artifact_hashes", {})
     if set(expected) != set(_GENERATED_ASSETS):
         raise ReleaseBlocked("QUALITY_ARTIFACT_HASH_SET_MISMATCH")
+    quality_names = tuple(
+        name
+        for name in (*_REQUIRED_QUALITY_ASSETS, *_OPTIONAL_QUALITY_ASSETS)
+        if f"quality/{name}" in snapshots
+    )
+    expected_quality = quality.get("quality_artifact_hashes", {})
+    quality_siblings = set(quality_names) - {"quality-report.json"}
+    if set(expected_quality) != quality_siblings:
+        raise ReleaseBlocked("QUALITY_ARTIFACT_HASH_SET_MISMATCH")
     hashes: dict[str, str] = {}
-    for directory, names in (("generated", _GENERATED_ASSETS), ("quality", _QUALITY_ASSETS)):
+    for directory, names in (
+        ("generated", _GENERATED_ASSETS),
+        ("quality", quality_names),
+    ):
         for name in names:
-            path = product_root / directory / name
-            if not path.is_file():
-                raise ReleaseBlocked(f"RELEASE_ARTIFACT_MISSING: {directory}/{name}")
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            hashes[f"{directory}/{name}"] = digest
+            entry_name = f"{directory}/{name}"
+            digest = hashlib.sha256(snapshots[entry_name]).hexdigest()
+            hashes[entry_name] = digest
             if directory == "generated" and expected[name] != digest:
                 raise ReleaseBlocked(f"RELEASE_ARTIFACT_HASH_MISMATCH: {name}")
+            if (
+                directory == "quality"
+                and name != "quality-report.json"
+                and expected_quality[name] != digest
+            ):
+                raise ReleaseBlocked(f"RELEASE_ARTIFACT_HASH_MISMATCH: {name}")
     return hashes
+
+
+def _verify_semantic_fidelity_snapshot(payload: bytes) -> SemanticFidelityReport:
+    try:
+        fidelity = SemanticFidelityReport.model_validate_json(payload)
+    except (ValidationError, ValueError) as error:
+        raise ReleaseBlocked("SEMANTIC_FIDELITY_REPORT_INVALID") from error
+    if (
+        fidelity.status == "FAIL"
+        or fidelity.unmatched_span_count > 0
+        or fidelity.duplicated_span_count > 0
+        or fidelity.source_text_coverage < 1.0
+    ):
+        raise ReleaseBlocked("SEMANTIC_FIDELITY_GATE_FAILED")
+    return fidelity

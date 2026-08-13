@@ -55,6 +55,24 @@ class ReleaseAssetState:
 
 
 @dataclass(frozen=True)
+class ReleaseAssetPayload:
+    name: str
+    payload: bytes
+
+    def __post_init__(self) -> None:
+        if (
+            not self.name
+            or self.name in {".", ".."}
+            or "/" in self.name
+            or "\\" in self.name
+            or "\x00" in self.name
+        ):
+            raise ValueError("release asset name must be a plain file name")
+        if not isinstance(self.payload, bytes):
+            raise TypeError("release asset payload must be immutable bytes")
+
+
+@dataclass(frozen=True)
 class ReleaseState:
     id: int
     tag: str
@@ -165,7 +183,7 @@ class GitHubPort(Protocol):
         self,
         tag: str,
         title: str,
-        asset: Path,
+        asset: ReleaseAssetPayload | Path,
         sha256: str,
     ) -> MutationRecord: ...
 

@@ -271,6 +271,22 @@ def test_provider_omits_sampling_parameters_from_structured_request() -> None:
     assert {"temperature", "top_p"}.isdisjoint(client.completions.last_request)
 
 
+def test_provider_capabilities_expose_audit_identity() -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://llm.example.com/v1",
+        api_key=SecretStr("secret-value"),
+        model="example-model",
+        client=FakeClient(),
+    )
+
+    assert provider.capabilities() == {
+        "api_style": "chat_completions",
+        "structured_output": "json_schema",
+        "provider": "openai_compatible",
+        "model": "example-model",
+    }
+
+
 def test_provider_rejects_schema_invalid_response() -> None:
     provider = OpenAICompatibleProvider(
         base_url="https://llm.example.com/v1",

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import errno
 import hashlib
+import inspect
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import tempfile
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -23,7 +27,7 @@ from ard_ossie.excel_adapter import DictionaryTable, ParsedDictionary, parse_dic
 from ard_ossie.identity import DuplicateDecision, DuplicateReport, classify_product, classify_table
 from ard_ossie.ids import new_id
 from ard_ossie.impact import analyze_table_change
-from ard_ossie.ingestion import SourceManifest, SourceRole, scan_sources
+from ard_ossie.ingestion import SourceManifest, SourceRole, scan_sources, source_bytes
 from ard_ossie.ir import (
     ColumnIR,
     MetricIR,
@@ -64,6 +68,11 @@ from ard_ossie.renderers import (
     render_product_markdown,
     render_semantic_markdown,
 )
+from ard_ossie.semantic.models import (
+    ExtractionMode,
+    SemanticStructureRepairRecord,
+)
+from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 from ard_ossie.versioning import VersionDecision, VersionOutcome, plan_version
 
 
@@ -110,6 +119,7 @@ class QualityReport(StrictModel):
     hard_errors: list[QualityFinding]
     warnings: list[QualityFinding]
     artifact_hashes: dict[str, Sha256]
+    quality_artifact_hashes: dict[str, Sha256] = Field(default_factory=dict)
 
 
 class TableConfig(StrictModel):
@@ -171,18 +181,27 @@ def process_product(
     parser: DoclingParser | None = None,
     pr_number: int | None = None,
     warnings_as_errors: bool = False,
+    trusted_semantic_repair: dict[str, object] | None = None,
 ) -> ProcessResult:
-    root = Path(product_path).resolve()
+    root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
     registry_initially_exists, registry_snapshot = _snapshot_registry(registry_path)
     registry = _load_registry_snapshot(registry_snapshot)
     config = _load_config(root / "product.yaml")
     manifest = scan_sources(root / "sources")
-    active_parser = parser or DoclingParser()
+    active_parser = _processing_parser(
+        provider=provider,
+        parser=parser,
+        trusted_semantic_repair=trusted_semantic_repair,
+    )
     product_document = active_parser.parse(manifest.by_role(SourceRole.PRODUCT_HTML))
     semantic_document = active_parser.parse(manifest.by_role(SourceRole.SEMANTIC_DOCUMENT))
     dictionary_source = manifest.by_role(SourceRole.DICTIONARY_EXCEL)
-    dictionary = parse_dictionary(dictionary_source.path, source_hash=dictionary_source.sha256)
+    dictionary = parse_dictionary(
+        dictionary_source.path,
+        source_hash=dictionary_source.sha256,
+        source_bytes=source_bytes(dictionary_source),
+    )
 
     existing_product = _resolve_existing_product(config, registry)
     product_id = config.product_id
@@ -305,8 +324,10 @@ def process_product(
         )
     )
     hard_errors.extend(relationship_findings)
+    hard_errors.extend(_semantic_hard_findings(semantic_document))
     warnings = _completeness_findings(config, table_irs, semantic_document)
     warnings.extend(prepared_metrics.findings)
+    warnings.extend(_semantic_findings(semantic_document))
     if warnings_as_errors and warnings:
         hard_errors.append(
             QualityFinding(
@@ -336,6 +357,8 @@ def process_product(
             table_records,
             suggestion_batch,
             product_document,
+            semantic_document,
+            secure_direct=True,
         )
         raise PipelineValidationError(
             "; ".join(item.code for item in hard_errors),
@@ -350,7 +373,7 @@ def process_product(
         description=config.description,
         product_facts=product_facts,
         synonyms=config.synonyms,
-        instructions=semantic_document.markdown.strip(),
+        instructions=semantic_document.markdown,
         source_hashes=source_hashes,
         tables=table_irs,
         relationships=relationships,
@@ -405,6 +428,7 @@ def process_product(
             table_records,
             suggestion_batch,
             product_document,
+            semantic_document,
         )
         _require_registry_state(
             registry_path,
@@ -426,6 +450,26 @@ def process_product(
         product_version=config.version,
         generated_dir=root / "generated",
         quality_report=quality,
+    )
+
+
+def _processing_parser(
+    *,
+    provider: LLMProvider | None,
+    parser: DoclingParser | None,
+    trusted_semantic_repair: dict[str, object] | None,
+) -> DoclingParser:
+    if parser is not None:
+        return parser
+    trusted_record = (
+        SemanticStructureRepairRecord.model_validate(trusted_semantic_repair)
+        if trusted_semantic_repair is not None
+        else None
+    )
+    planner = SemanticStructureRepairPlanner(provider) if provider is not None else None
+    return DoclingParser(
+        structure_repair_planner=planner,
+        trusted_repair_record=trusted_record,
     )
 
 
@@ -451,10 +495,10 @@ def _require_registry_state(path: Path, *, expected_exists: bool | None) -> None
 
 
 def _snapshot_registry(path: Path) -> tuple[bool, dict[Path, bytes]]:
-    directory_flag = getattr(os, "O_DIRECTORY", 0)
-    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
-    if not directory_flag or not nofollow_flag:
+    if not _secure_registry_directory_fd_supported():
         return _snapshot_registry_portable(path)
+    directory_flag = os.O_DIRECTORY
+    nofollow_flag = os.O_NOFOLLOW
     try:
         descriptor = os.open(path, os.O_RDONLY | directory_flag | nofollow_flag)
     except FileNotFoundError:
@@ -467,6 +511,13 @@ def _snapshot_registry(path: Path) -> tuple[bool, dict[Path, bytes]]:
         return True, _read_registry_directory(descriptor, Path())
     finally:
         os.close(descriptor)
+
+
+def _secure_registry_directory_fd_supported() -> bool:
+    return bool(
+        getattr(os, "O_DIRECTORY", 0)
+        and getattr(os, "O_NOFOLLOW", 0)
+    )
 
 
 def _read_registry_directory(
@@ -933,7 +984,10 @@ def _completeness_findings(
         findings.append(
             QualityFinding(code="MISSING_PRODUCT_DESCRIPTION", message="Description is missing")
         )
-    if not semantic_document.markdown.strip():
+    if semantic_document.semantic_has_content is False or (
+        semantic_document.semantic_has_content is None
+        and not semantic_document.markdown.strip()
+    ):
         findings.append(
             QualityFinding(code="EMPTY_SEMANTIC_DOCUMENT", message="Semantic document is empty")
         )
@@ -956,6 +1010,50 @@ def _completeness_findings(
                     )
                 )
     return findings
+
+
+def _semantic_findings(document: ParsedDocument) -> list[QualityFinding]:
+    fidelity = document.semantic_fidelity
+    if fidelity is None:
+        return []
+    findings: list[QualityFinding] = []
+    if fidelity.extraction_mode is ExtractionMode.OCR:
+        findings.append(
+            QualityFinding(
+                code="SEMANTIC_OCR_FALLBACK",
+                message="Semantic PDF used whole-document OCR text",
+                path="sources.semantic_document",
+            )
+        )
+    if fidelity.degraded_block_count > 0:
+        findings.append(
+            QualityFinding(
+                code="SEMANTIC_STRUCTURE_DEGRADED",
+                message="Unresolved semantic structure was preserved losslessly",
+                path="generated.data-semantic.md",
+            )
+        )
+    return findings
+
+
+def _semantic_hard_findings(document: ParsedDocument) -> list[QualityFinding]:
+    fidelity = document.semantic_fidelity
+    if fidelity is None:
+        return []
+    if (
+        fidelity.status == "FAIL"
+        or fidelity.unmatched_span_count > 0
+        or fidelity.duplicated_span_count > 0
+        or fidelity.source_text_coverage < 1.0
+    ):
+        return [
+            QualityFinding(
+                code="SEMANTIC_FIDELITY_FAILED",
+                message="Semantic source text was lost or duplicated",
+                path="quality.semantic-fidelity.json",
+            )
+        ]
+    return []
 
 
 def _completeness_score(config: ProductConfig, tables: list[TableIR]) -> float:
@@ -1699,29 +1797,10 @@ def _write_quality(
     tables: list[TableRecord],
     suggestions: SuggestionBatch,
     product_document: ParsedDocument,
+    semantic_document: ParsedDocument,
+    *,
+    secure_direct: bool = False,
 ) -> None:
-    quality = root / "quality"
-    quality.mkdir(parents=True, exist_ok=True)
-    (quality / "quality-report.json").write_text(
-        _json_text(report.model_dump(mode="json")), encoding="utf-8"
-    )
-    (quality / "duplicate-report.json").write_text(
-        _json_text(TypeAdapter(list[DuplicateReport]).dump_python(duplicates, mode="json")),
-        encoding="utf-8",
-    )
-    (quality / "version-report.json").write_text(
-        _json_text(TypeAdapter(list[VersionDecision]).dump_python(versions, mode="json")),
-        encoding="utf-8",
-    )
-    (quality / "impact-report.json").write_text(
-        _json_text(
-            {
-                "product_ids": [product_id],
-                "table_ids": sorted(table.table_id for table in tables),
-            }
-        ),
-        encoding="utf-8",
-    )
     suggestion_payload = suggestions.model_dump(mode="json")
     evidence_catalog = _product_evidence_catalog(product_document)
     suggestion_payload["product_facts"] = [
@@ -1736,10 +1815,443 @@ def _write_quality(
         }
         for fact in suggestions.product_facts
     ]
-    (quality / "llm-suggestions.json").write_text(
-        _json_text(suggestion_payload),
-        encoding="utf-8",
+    if semantic_document.semantic_fidelity is None:
+        raise PipelineValidationError("SEMANTIC_FIDELITY_REPORT_REQUIRED")
+    sibling_payloads = {
+        "duplicate-report.json": _json_text(
+            TypeAdapter(list[DuplicateReport]).dump_python(duplicates, mode="json")
+        ),
+        "version-report.json": _json_text(
+            TypeAdapter(list[VersionDecision]).dump_python(versions, mode="json")
+        ),
+        "impact-report.json": _json_text(
+            {
+                "product_ids": [product_id],
+                "table_ids": sorted(table.table_id for table in tables),
+            }
+        ),
+        "llm-suggestions.json": _json_text(suggestion_payload),
+        "semantic-fidelity.json": _json_text(
+            semantic_document.semantic_fidelity.model_dump(mode="json")
+        ),
+    }
+    if semantic_document.semantic_repair is not None:
+        sibling_payloads["semantic-structure-repair.json"] = _json_text(
+            semantic_document.semantic_repair.model_dump(mode="json")
+        )
+    report.quality_artifact_hashes = {
+        name: hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        for name, payload in sorted(sibling_payloads.items())
+    }
+
+    payloads = {
+        **sibling_payloads,
+        "quality-report.json": _json_text(report.model_dump(mode="json")),
+    }
+    if secure_direct:
+        _secure_write_quality(root, payloads)
+        return
+    quality = root / "quality"
+    quality.mkdir(parents=True, exist_ok=True)
+    stale_repair = quality / "semantic-structure-repair.json"
+    if semantic_document.semantic_repair is None and stale_repair.exists():
+        stale_repair.unlink()
+    for name, payload in payloads.items():
+        (quality / name).write_bytes(payload.encode("utf-8"))
+
+
+_QUALITY_DESTINATIONS = frozenset(
+    {
+        "quality-report.json",
+        "duplicate-report.json",
+        "version-report.json",
+        "impact-report.json",
+        "llm-suggestions.json",
+        "semantic-fidelity.json",
+        "semantic-structure-repair.json",
+    }
+)
+_SECURE_QUALITY_DIR_FD_SUPPORTED = all(
+    function in os.supports_dir_fd
+    for function in (os.open, os.stat, os.mkdir, os.unlink)
+) and os.stat in os.supports_follow_symlinks
+try:
+    _REPLACE_PARAMETERS = inspect.signature(os.replace).parameters
+except (TypeError, ValueError):
+    _REPLACE_PARAMETERS = {}
+_SECURE_QUALITY_REPLACE_KEYWORDS_SUPPORTED = {
+    "src_dir_fd",
+    "dst_dir_fd",
+}.issubset(_REPLACE_PARAMETERS)
+_SECURE_QUALITY_RENAME_AT_SUPPORTED = os.rename in os.supports_dir_fd
+
+
+def _secure_quality_replace_dir_fd_supported() -> bool:
+    return (
+        _SECURE_QUALITY_REPLACE_KEYWORDS_SUPPORTED
+        and _SECURE_QUALITY_RENAME_AT_SUPPORTED
     )
+
+
+def _secure_quality_directory_fd_supported() -> bool:
+    return bool(
+        getattr(os, "O_DIRECTORY", 0)
+        and getattr(os, "O_NOFOLLOW", 0)
+        and _SECURE_QUALITY_DIR_FD_SUPPORTED
+    )
+
+
+def _secure_write_quality(product_root: Path, payloads: dict[str, str]) -> None:
+    if (
+        not _secure_quality_directory_fd_supported()
+        or not _secure_quality_replace_dir_fd_supported()
+    ):
+        _validate_quality_tree_portable(product_root)
+        raise PipelineSecurityError("SECURE_QUALITY_WRITE_UNAVAILABLE")
+
+    anchors = _open_directory_chain(product_root)
+    try:
+        _append_quality_directory_anchor(anchors)
+        directory_descriptor = anchors[-1][2]
+        _require_directory_chain_identity(anchors)
+        _validate_quality_destinations_at(directory_descriptor)
+        temporary_names = _stage_quality_payloads_at(directory_descriptor, payloads)
+        try:
+            _require_directory_chain_identity(anchors)
+            destination_stats = _validate_quality_destinations_at(directory_descriptor)
+            for name, temporary_name in temporary_names.items():
+                _replace_quality_destination_at(
+                    directory_descriptor,
+                    temporary_name,
+                    name,
+                    destination_stats[name],
+                )
+            if "semantic-structure-repair.json" not in payloads:
+                _unlink_quality_destination_at(
+                    directory_descriptor,
+                    "semantic-structure-repair.json",
+                    destination_stats["semantic-structure-repair.json"],
+                )
+            _require_directory_chain_identity(anchors)
+            os.fsync(directory_descriptor)
+            temporary_names.clear()
+        finally:
+            for temporary_name in temporary_names.values():
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary_name, dir_fd=directory_descriptor)
+    finally:
+        for _parent_descriptor, _name, descriptor, _expected in reversed(anchors):
+            os.close(descriptor)
+
+
+def _open_directory_chain(
+    product_root: Path,
+) -> list[tuple[int | None, str | None, int, os.stat_result]]:
+    if not product_root.is_absolute():
+        raise PipelineSecurityError("QUALITY_PATH_CHANGED")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    root_descriptor = os.open(os.path.sep, flags)
+    anchors: list[tuple[int | None, str | None, int, os.stat_result]] = [
+        (None, None, root_descriptor, os.fstat(root_descriptor))
+    ]
+    try:
+        for component in product_root.parts[1:]:
+            parent_descriptor = anchors[-1][2]
+            before = _directory_component_stat(parent_descriptor, component)
+            _require_quality_path_type(before, directory=True)
+            descriptor = _open_directory_component(
+                parent_descriptor,
+                component,
+                before,
+            )
+            after = os.fstat(descriptor)
+            try:
+                _require_same_quality_directory(after, before)
+            except Exception:
+                os.close(descriptor)
+                raise
+            anchors.append((parent_descriptor, component, descriptor, after))
+        return anchors
+    except Exception:
+        for _parent, _name, descriptor, _expected in reversed(anchors):
+            os.close(descriptor)
+        raise
+
+
+def _append_quality_directory_anchor(
+    anchors: list[tuple[int | None, str | None, int, os.stat_result]],
+) -> None:
+    parent_descriptor = anchors[-1][2]
+    try:
+        before = os.stat("quality", dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        try:
+            os.mkdir("quality", mode=0o755, dir_fd=parent_descriptor)
+        except FileExistsError as error:
+            current = _directory_component_stat(parent_descriptor, "quality")
+            _require_quality_path_type(current, directory=True)
+            raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+        except OSError as error:
+            if _is_path_race_error(error):
+                raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+            raise
+        before = _directory_component_stat(parent_descriptor, "quality")
+    except OSError as error:
+        if _is_path_race_error(error):
+            raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+        raise
+    _require_quality_path_type(before, directory=True)
+    descriptor = _open_directory_component(parent_descriptor, "quality", before)
+    after = os.fstat(descriptor)
+    try:
+        _require_same_quality_directory(after, before)
+    except Exception:
+        os.close(descriptor)
+        raise
+    anchors.append((parent_descriptor, "quality", descriptor, after))
+
+
+def _directory_component_stat(parent_descriptor: int, name: str) -> os.stat_result:
+    try:
+        return os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except OSError as error:
+        if _is_path_race_error(error):
+            raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+        raise
+
+
+def _open_directory_component(
+    parent_descriptor: int,
+    name: str,
+    expected: os.stat_result,
+) -> int:
+    try:
+        return os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+    except OSError as error:
+        try:
+            current = _directory_component_stat(parent_descriptor, name)
+        except PipelineSecurityError:
+            raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+        _require_quality_path_type(current, directory=True)
+        _require_same_quality_directory(current, expected)
+        if _is_path_race_error(error):
+            raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+        raise
+
+
+def _require_directory_chain_identity(
+    anchors: list[tuple[int | None, str | None, int, os.stat_result]],
+) -> None:
+    for parent_descriptor, name, descriptor, expected in anchors:
+        _require_same_quality_directory(os.fstat(descriptor), expected)
+        if parent_descriptor is None or name is None:
+            continue
+        current = _directory_component_stat(parent_descriptor, name)
+        _require_quality_path_type(current, directory=True)
+        _require_same_quality_directory(current, expected)
+
+
+def _raise_quality_lstat_error(error: OSError, code: str) -> None:
+    if _is_path_race_error(error):
+        raise PipelineSecurityError(code) from error
+    raise error
+
+
+def _is_path_race_error(error: OSError) -> bool:
+    path_race_errnos = {
+        errno.ENOENT,
+        errno.ENOTDIR,
+        errno.ELOOP,
+        getattr(errno, "ESTALE", -1),
+    }
+    return error.errno in path_race_errnos
+
+
+def _require_quality_path_type(
+    path_stat: os.stat_result,
+    *,
+    directory: bool,
+) -> None:
+    if _is_link_or_reparse_point(path_stat):
+        raise PipelineSecurityError("SYMLINK_NOT_ALLOWED")
+    predicate = stat.S_ISDIR if directory else stat.S_ISREG
+    if not predicate(path_stat.st_mode):
+        raise PipelineSecurityError("READ_PATH_TYPE_NOT_ALLOWED")
+
+
+def _require_same_quality_directory(
+    current_stat: os.stat_result,
+    expected_stat: os.stat_result,
+) -> None:
+    if _quality_directory_identity(current_stat) != _quality_directory_identity(expected_stat):
+        raise PipelineSecurityError("QUALITY_PATH_CHANGED")
+
+
+def _quality_directory_identity(path_stat: os.stat_result) -> tuple[int, int, int]:
+    return (
+        stat.S_IFMT(path_stat.st_mode),
+        path_stat.st_dev,
+        path_stat.st_ino,
+    )
+
+
+def _validate_quality_destinations_at(
+    directory_descriptor: int,
+) -> dict[str, os.stat_result | None]:
+    destinations: dict[str, os.stat_result | None] = {}
+    for name in sorted(_QUALITY_DESTINATIONS):
+        destination_stat = _quality_destination_stat_at(directory_descriptor, name)
+        if destination_stat is not None:
+            _require_quality_path_type(destination_stat, directory=False)
+        destinations[name] = destination_stat
+    return destinations
+
+
+def _quality_destination_stat_at(
+    directory_descriptor: int,
+    name: str,
+) -> os.stat_result | None:
+    try:
+        return os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _raise_quality_lstat_error(error, "QUALITY_PATH_CHANGED")
+
+
+def _stage_quality_payloads_at(
+    directory_descriptor: int,
+    payloads: dict[str, str],
+) -> dict[str, str]:
+    temporary_names: dict[str, str] = {}
+    complete = False
+    try:
+        for name, payload in payloads.items():
+            temporary_name = f".{name}.{secrets.token_hex(16)}.tmp"
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            flags |= getattr(os, "O_BINARY", 0)
+            file_descriptor = os.open(
+                temporary_name,
+                flags,
+                0o600,
+                dir_fd=directory_descriptor,
+            )
+            temporary_names[name] = temporary_name
+            try:
+                _write_all(file_descriptor, payload.encode("utf-8"))
+                os.fsync(file_descriptor)
+            finally:
+                os.close(file_descriptor)
+        complete = True
+        return temporary_names
+    finally:
+        if not complete:
+            for temporary_name in temporary_names.values():
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary_name, dir_fd=directory_descriptor)
+
+
+def _write_all(file_descriptor: int, payload: bytes) -> None:
+    remaining = memoryview(payload)
+    while remaining:
+        written = os.write(file_descriptor, remaining)
+        if written == 0:
+            raise OSError("quality artifact write made no progress")
+        remaining = remaining[written:]
+
+
+def _replace_quality_destination_at(
+    directory_descriptor: int,
+    temporary_name: str,
+    name: str,
+    expected_stat: os.stat_result | None,
+) -> None:
+    try:
+        os.replace(
+            temporary_name,
+            name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+        )
+    except OSError as error:
+        _raise_quality_mutation_error(
+            directory_descriptor,
+            name,
+            expected_stat,
+            error,
+        )
+
+
+def _unlink_quality_destination_at(
+    directory_descriptor: int,
+    name: str,
+    expected_stat: os.stat_result | None,
+) -> None:
+    if expected_stat is None:
+        return
+    try:
+        os.unlink(name, dir_fd=directory_descriptor)
+    except OSError as error:
+        _raise_quality_mutation_error(
+            directory_descriptor,
+            name,
+            expected_stat,
+            error,
+        )
+
+
+def _raise_quality_mutation_error(
+    directory_descriptor: int,
+    name: str,
+    expected_stat: os.stat_result | None,
+    error: OSError,
+) -> None:
+    current_stat = _quality_destination_stat_at(directory_descriptor, name)
+    if current_stat is not None:
+        _require_quality_path_type(current_stat, directory=False)
+    if (expected_stat is None) != (current_stat is None):
+        raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+    if (
+        expected_stat is not None
+        and current_stat is not None
+        and _path_identity(current_stat) != _path_identity(expected_stat)
+    ):
+        raise PipelineSecurityError("QUALITY_PATH_CHANGED") from error
+    raise error
+
+
+def _validate_quality_tree_portable(product_root: Path) -> None:
+    current = Path(os.path.sep)
+    for component in product_root.parts[1:]:
+        current /= component
+        try:
+            current_stat = current.lstat()
+        except OSError as error:
+            _raise_quality_lstat_error(error, "QUALITY_PATH_CHANGED")
+        _require_quality_path_type(current_stat, directory=True)
+
+    quality = product_root / "quality"
+    try:
+        quality_stat = quality.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        _raise_quality_lstat_error(error, "QUALITY_PATH_CHANGED")
+    _require_quality_path_type(quality_stat, directory=True)
+    for name in sorted(_QUALITY_DESTINATIONS):
+        try:
+            destination_stat = (quality / name).lstat()
+        except FileNotFoundError:
+            continue
+        _require_quality_path_type(destination_stat, directory=False)
 
 
 def _promote_directories(

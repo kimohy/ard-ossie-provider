@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import time
@@ -13,6 +15,7 @@ from ard_ossie.application.contracts import (
     ExitCode,
     MutationRecord,
     WorkflowConfigurationError,
+    WorkflowConflict,
     WorkflowError,
     WorkflowPartialError,
     WorkflowResult,
@@ -126,6 +129,12 @@ class ProcessingService:
                 "changeset processing requires the canonical tracking branch",
             )
         try:
+            base_sha = self.git.remote_branch_sha(pull_request.base_branch)
+            trusted_semantic_repair = _trusted_semantic_repair(
+                self.git,
+                base_sha=base_sha,
+                product_key=request.product_key,
+            )
             provider = self.provider_factory()
             processed = self.processor(
                 product,
@@ -133,6 +142,7 @@ class ProcessingService:
                 provider=provider,
                 pr_number=request.pr_number,
                 warnings_as_errors=request.warnings_as_errors,
+                trusted_semantic_repair=trusted_semantic_repair,
             )
         except PipelineSecurityError as error:
             raise WorkflowSecurityError(
@@ -610,6 +620,83 @@ def _artifact_paths(repository: Path, product: Path) -> list[str]:
                 if path.is_file()
             )
     return artifacts
+
+
+def _trusted_semantic_repair(
+    git: GitPort,
+    *,
+    base_sha: str | None,
+    product_key: str,
+) -> dict[str, object] | None:
+    if not isinstance(base_sha, str) or re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
+        raise _semantic_repair_trust_mismatch()
+    quality_root = Path("products") / product_key / "quality"
+    quality_bytes = _read_revision_bytes_optional(
+        git,
+        base_sha,
+        quality_root / "quality-report.json",
+    )
+    repair_bytes = _read_revision_bytes_optional(
+        git,
+        base_sha,
+        quality_root / "semantic-structure-repair.json",
+    )
+    if quality_bytes is None and repair_bytes is None:
+        return None
+    if quality_bytes is None:
+        raise _semantic_repair_trust_mismatch()
+    try:
+        quality = json.loads(quality_bytes.decode("utf-8", errors="strict"))
+    except (TypeError, UnicodeDecodeError, ValueError) as error:
+        raise _semantic_repair_trust_mismatch() from error
+    if not isinstance(quality, dict):
+        raise _semantic_repair_trust_mismatch()
+    quality_hashes = quality.get("quality_artifact_hashes", {})
+    if not isinstance(quality_hashes, dict):
+        raise _semantic_repair_trust_mismatch()
+    repair_hash_name = "semantic-structure-repair.json"
+    repair_hash_present = repair_hash_name in quality_hashes
+    expected_hash = quality_hashes.get(repair_hash_name)
+    if repair_bytes is None:
+        if not repair_hash_present:
+            return None
+        raise _semantic_repair_trust_mismatch()
+    if not isinstance(expected_hash, str) or (
+        hashlib.sha256(repair_bytes).hexdigest() != expected_hash
+    ):
+        raise _semantic_repair_trust_mismatch()
+    try:
+        repair = json.loads(repair_bytes.decode("utf-8", errors="strict"))
+    except (TypeError, UnicodeDecodeError, ValueError) as error:
+        raise _semantic_repair_trust_mismatch() from error
+    if not isinstance(repair, dict):
+        raise _semantic_repair_trust_mismatch()
+    return repair
+
+
+def _read_revision_bytes_optional(
+    git: GitPort,
+    revision: str,
+    path: Path,
+) -> bytes | None:
+    try:
+        binary_reader = getattr(git, "read_bytes_at", None)
+        if binary_reader is not None:
+            return binary_reader(revision, path)
+        # Compatibility for injected pre-binary GitPort implementations. The
+        # production GitCli always uses the raw-byte path above.
+        return git.read_text_at(revision, path).encode("utf-8")
+    except WorkflowConflict as error:
+        if error.code == "REVISION_FILE_NOT_FOUND":
+            return None
+        raise
+
+
+def _semantic_repair_trust_mismatch() -> WorkflowSecurityError:
+    return WorkflowSecurityError(
+        "SEMANTIC_REPAIR_TRUST_MISMATCH",
+        "trusted semantic repair record failed hash or JSON verification",
+    )
 
 
 def _error_code(error: Exception) -> str:

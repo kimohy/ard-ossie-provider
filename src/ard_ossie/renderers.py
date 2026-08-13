@@ -96,8 +96,8 @@ def _product_sections(product: ProductIR) -> list[dict[str, object]]:
 
 
 def render_semantic_markdown(product: ProductIR) -> str:
-    template = _ENVIRONMENT.get_template("data-semantic.md.j2")
-    return template.render(product=product).strip() + "\n"
+    instructions = product.instructions or ""
+    return instructions if instructions.endswith("\n") else instructions + "\n"
 
 
 def render_dictionary_json(product: ProductIR) -> str:
