@@ -11,13 +11,17 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import ard_ossie.application.repository_checks as repository_checks
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.application.contracts import (
     WorkflowSecurityError,
     WorkflowTransientError,
     WorkflowValidationError,
 )
-from ard_ossie.application.model_schema_verification import MODEL_SCHEMA_CATALOG
+from ard_ossie.application.model_schema_verification import (
+    MODEL_SCHEMA_CATALOG,
+    ModelSchemaVerificationError,
+)
 from ard_ossie.application.repository_checks import (
     RepositoryCheckRequest,
     RepositoryCheckService,
@@ -423,6 +427,50 @@ def test_model_schema_verifier_rejects_receipt_omitting_present_optional_group(
         match="REPOSITORY_MODEL_SCHEMAS_RECEIPT_INVALID",
     ):
         tools.run("model-schemas")
+
+
+def test_model_schema_verifier_maps_partial_optional_group_to_workflow_error(
+    tmp_path: Path,
+) -> None:
+    partial = tmp_path / "schemas" / "reports" / "semantic-fidelity.schema.json"
+    partial.parent.mkdir(parents=True)
+    partial.write_text("{}", encoding="utf-8")
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
+        RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner()).run(
+            "model-schemas"
+        )
+
+
+def test_model_schema_verifier_maps_catalog_access_error_to_workflow_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "schemas").mkdir()
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    def reject_catalog_access(_: Path):
+        raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH")
+
+    monkeypatch.setattr(
+        repository_checks,
+        "active_model_schema_catalog",
+        reject_catalog_access,
+    )
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
+        RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner()).run(
+            "model-schemas"
+        )
 
 
 def test_model_schema_verifier_rejects_trusted_helper_mutation(

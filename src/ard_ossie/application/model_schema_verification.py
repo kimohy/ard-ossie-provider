@@ -4,6 +4,7 @@ import argparse
 import importlib
 import json
 import os
+import stat
 import sys
 from collections.abc import Sequence
 from contextlib import redirect_stderr, redirect_stdout
@@ -86,14 +87,21 @@ class ModelSchemaVerificationError(RuntimeError):
 
 
 def verify_model_schemas(repository: Path) -> None:
+    _verify_model_schemas(repository)
+
+
+def _verify_model_schemas(
+    repository: Path,
+) -> tuple[ModelSchemaReference, ...]:
     root = _candidate_root(repository)
+    catalog = active_model_schema_catalog(repository)
     with (
         open(os.devnull, "w", encoding="utf-8") as sink,  # noqa: PTH123
         redirect_stdout(sink),
         redirect_stderr(sink),
     ):
         strict_model = _strict_model_class()
-        for reference in active_model_schema_catalog(repository):
+        for reference in catalog:
             schema = _load_schema(root, reference.schema_path)
             model = _load_model(reference, strict_model)
             try:
@@ -109,6 +117,7 @@ def verify_model_schemas(repository: Path) -> None:
                     "SCHEMA_SYNCHRONIZATION_FAILED",
                     reference.schema_path,
                 )
+    return catalog
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -120,9 +129,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if (arguments.result is None) != (arguments.nonce is None):
             raise ModelSchemaVerificationError("MODEL_SCHEMA_RECEIPT_INVALID")
-        verify_model_schemas(arguments.repository)
+        catalog = _verify_model_schemas(arguments.repository)
         if arguments.result is not None:
-            _write_receipt(arguments.result, arguments.nonce, arguments.repository)
+            _write_receipt(arguments.result, arguments.nonce, catalog)
     except ModelSchemaVerificationError as error:
         print(str(error), file=sys.stderr)
         return 10
@@ -142,7 +151,7 @@ def active_model_schema_catalog(repository: Path) -> tuple[ModelSchemaReference,
     active = list(MODEL_SCHEMA_CATALOG)
     for group in OPTIONAL_MODEL_SCHEMA_GROUPS:
         present = tuple(
-            _schema_exists(schemas, reference.schema_path) for reference in group
+            _schema_is_present(schemas, reference.schema_path) for reference in group
         )
         if all(present):
             active.extend(group)
@@ -162,12 +171,29 @@ def _schema_catalog_root(repository: Path) -> Path:
     return root
 
 
-def _schema_exists(schemas: Path, schema_path: Path) -> bool:
+def _schema_is_present(schemas: Path, schema_path: Path) -> bool:
+    candidate = schemas
+    for index, part in enumerate(schema_path.parts):
+        candidate /= part
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError as error:
+            raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH") from error
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH")
+        if index < len(schema_path.parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
+            raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH")
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH")
     try:
-        resolved = (schemas / schema_path).resolve(strict=True)
-    except OSError:
-        return False
-    return resolved.is_file() and resolved.is_relative_to(schemas)
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH") from error
+    if resolved != candidate or not resolved.is_relative_to(schemas):
+        raise ModelSchemaVerificationError("SCHEMA_CATALOG_MISMATCH")
+    return True
 
 
 def _strict_model_class() -> type[Any]:
@@ -228,12 +254,16 @@ def _load_model(
     return model
 
 
-def _write_receipt(result: Path, nonce: str, repository: Path) -> None:
+def _write_receipt(
+    result: Path,
+    nonce: str,
+    catalog: tuple[ModelSchemaReference, ...],
+) -> None:
     receipt = {
         "nonce": nonce,
         "schemas": [
             reference.schema_path.as_posix()
-            for reference in active_model_schema_catalog(repository)
+            for reference in catalog
         ],
         "status": "success",
     }

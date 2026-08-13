@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -96,6 +97,131 @@ def test_active_model_schema_catalog_rejects_partial_optional_group(
 
     with pytest.raises(ModelSchemaVerificationError, match="SCHEMA_CATALOG_MISMATCH"):
         active_model_schema_catalog(tmp_path)
+
+
+def test_active_model_schema_catalog_rejects_dangling_optional_schema_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required = ModelSchemaReference(
+        Path("required.schema.json"), "json", "JSONDecoder"
+    )
+    optional_group = (
+        ModelSchemaReference(
+            Path("reports/first.schema.json"), "json", "JSONDecoder"
+        ),
+        ModelSchemaReference(
+            Path("reports/second.schema.json"), "json", "JSONDecoder"
+        ),
+    )
+    dangling = tmp_path / "schemas" / optional_group[0].schema_path
+    dangling.parent.mkdir(parents=True)
+    dangling.symlink_to(tmp_path / "missing.schema.json")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(verification, "MODEL_SCHEMA_CATALOG", (required,))
+    monkeypatch.setattr(verification, "OPTIONAL_MODEL_SCHEMA_GROUPS", (optional_group,))
+
+    with pytest.raises(ModelSchemaVerificationError, match="SCHEMA_CATALOG_MISMATCH"):
+        active_model_schema_catalog(tmp_path)
+
+
+def test_active_model_schema_catalog_rejects_optional_schema_resolution_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required = ModelSchemaReference(
+        Path("required.schema.json"), "json", "JSONDecoder"
+    )
+    optional_group = (
+        ModelSchemaReference(
+            Path("reports/first.schema.json"), "json", "JSONDecoder"
+        ),
+        ModelSchemaReference(
+            Path("reports/second.schema.json"), "json", "JSONDecoder"
+        ),
+    )
+    target = tmp_path / "schemas" / optional_group[0].schema_path
+    target.parent.mkdir(parents=True)
+    target.write_text("{}", encoding="utf-8")
+    original_resolve = Path.resolve
+
+    def fail_optional_resolution(path: Path, *args: object, **kwargs: object) -> Path:
+        if path == target:
+            raise PermissionError("injected optional schema access failure")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "resolve", fail_optional_resolution)
+    monkeypatch.setattr(verification, "MODEL_SCHEMA_CATALOG", (required,))
+    monkeypatch.setattr(verification, "OPTIONAL_MODEL_SCHEMA_GROUPS", (optional_group,))
+
+    with pytest.raises(ModelSchemaVerificationError, match="SCHEMA_CATALOG_MISMATCH"):
+        active_model_schema_catalog(tmp_path)
+
+
+def test_model_schema_helper_rejects_partial_optional_group_before_model_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schemas = tmp_path / "schemas"
+    shutil.copytree(Path(__file__).parents[2] / "schemas", schemas)
+    partial = schemas / "reports" / "semantic-fidelity.schema.json"
+    partial.write_text("{}", encoding="utf-8")
+    imported = tmp_path / "candidate-imported"
+
+    def import_candidate_model() -> type[Any]:
+        imported.write_text("unexpected import", encoding="utf-8")
+        return object
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(verification, "_strict_model_class", import_candidate_model)
+
+    with pytest.raises(ModelSchemaVerificationError, match="SCHEMA_CATALOG_MISMATCH"):
+        verify_model_schemas(tmp_path)
+
+    assert not imported.exists()
+
+
+def test_model_schema_helper_receipt_retains_catalog_verified_before_model_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required = ModelSchemaReference(Path("required.schema.json"), "json", "Required")
+    optional_group = (
+        ModelSchemaReference(Path("reports/first.schema.json"), "json", "First"),
+        ModelSchemaReference(Path("reports/second.schema.json"), "json", "Second"),
+    )
+    schemas = tmp_path / "schemas"
+    for reference in optional_group:
+        path = schemas / reference.schema_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+
+    class Model:
+        @classmethod
+        def model_json_schema(cls) -> dict[str, object]:
+            return {}
+
+    def load_model(*_: object) -> type[Model]:
+        for reference in optional_group:
+            (schemas / reference.schema_path).unlink(missing_ok=True)
+        return Model
+
+    result = tmp_path / "receipt.json"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(verification, "MODEL_SCHEMA_CATALOG", (required,))
+    monkeypatch.setattr(verification, "OPTIONAL_MODEL_SCHEMA_GROUPS", (optional_group,))
+    monkeypatch.setattr(verification, "_strict_model_class", lambda: Model)
+    monkeypatch.setattr(verification, "_load_schema", lambda *_: {})
+    monkeypatch.setattr(verification, "_load_model", load_model)
+
+    assert main(["--repository", str(tmp_path), "--result", str(result), "--nonce", "n"]) == 0
+
+    assert json.loads(result.read_text(encoding="utf-8"))["schemas"] == [
+        "required.schema.json",
+        "reports/first.schema.json",
+        "reports/second.schema.json",
+    ]
 
 
 def test_model_schema_helper_accepts_current_candidate_models(

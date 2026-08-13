@@ -265,11 +265,18 @@ class RepositoryVerificationTools:
             )
 
     def _require_model_schema_receipt(self, result_path: Path, nonce: str) -> None:
+        try:
+            catalog = active_model_schema_catalog(self.paths.root)
+        except ModelSchemaVerificationError as error:
+            raise WorkflowValidationError(
+                "SCHEMA_CATALOG_MISMATCH",
+                "checked-in model schema catalog differs from the verifier catalog",
+            ) from error
         expected = {
             "nonce": nonce,
             "schemas": [
                 reference.schema_path.as_posix()
-                for reference in active_model_schema_catalog(self.paths.root)
+                for reference in catalog
             ],
             "status": "success",
         }
