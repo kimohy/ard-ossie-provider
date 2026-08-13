@@ -13,6 +13,8 @@ from io import BytesIO
 from typing import Any
 from xml.etree import ElementTree
 
+from pydantic import ValidationError
+
 from ard_ossie.ingestion import SourceFile, source_bytes
 from ard_ossie.semantic.models import (
     MAX_TABLE_CELLS,
@@ -791,7 +793,7 @@ def extract_ocr_native(source: SourceFile, document: Any) -> NativeDocument:
     for item, _level in document.iterate_items():
         page, bbox = _item_location(item, document)
         if _is_table_item(item):
-            table, group, table_spans = _ocr_table(
+            table, table_groups, table_spans = _ocr_table(
                 item=item,
                 document=document,
                 page=page,
@@ -802,8 +804,9 @@ def extract_ocr_native(source: SourceFile, document: Any) -> NativeDocument:
                 table_index=len(tables),
             )
             spans.extend(table_spans)
-            tables.append(table)
-            groups.append(group)
+            if table is not None:
+                tables.append(table)
+            groups.extend(table_groups)
             continue
 
         value = getattr(item, "orig", None)
@@ -861,7 +864,7 @@ def _ocr_table(
     ordinal_start: int,
     order: int,
     table_index: int,
-) -> tuple[NativeTable, NativeGroup, list[SourceSpan]]:
+) -> tuple[NativeTable | None, list[NativeGroup], list[SourceSpan]]:
     row_count = int(item.data.num_rows)
     column_count = int(item.data.num_cols)
     _require_table_dimensions(row_count, column_count)
@@ -874,7 +877,7 @@ def _ocr_table(
         raise SemanticSourceError("SEMANTIC_TABLE_CELLS_LIMIT_EXCEEDED")
     cells = _unique_table_cells(raw_cells)
     spans: list[SourceSpan] = []
-    native_cells: list[NativeTableCell] = []
+    cell_records: list[tuple[Any, SourceBox | None, tuple[str, ...]]] = []
     for cell in cells:
         text = normalize_line_endings(str(getattr(cell, "text", "")))
         cell_bbox = _normalized_docling_box(getattr(cell, "bbox", None), document, page)
@@ -889,7 +892,10 @@ def _ocr_table(
             )
             spans.append(span)
             span_ids = (span.span_id,)
-        native_cells.append(
+        cell_records.append((cell, cell_bbox, span_ids))
+
+    try:
+        native_cells = tuple(
             NativeTableCell(
                 start_row=int(cell.start_row_offset_idx),
                 end_row=int(cell.end_row_offset_idx),
@@ -899,13 +905,29 @@ def _ocr_table(
                 column_header=bool(getattr(cell, "column_header", False)),
                 bbox=cell_bbox,
             )
+            for cell, cell_bbox, span_ids in cell_records
         )
-    table = NativeTable(
-        order=table_index,
-        row_count=row_count,
-        column_count=column_count,
-        cells=tuple(native_cells),
-    )
+        table = NativeTable(
+            order=table_index,
+            row_count=row_count,
+            column_count=column_count,
+            cells=native_cells,
+        )
+    except ValidationError:
+        return (
+            None,
+            [
+                NativeGroup(
+                    order=order + index,
+                    kind="paragraph",
+                    span_ids=(span.span_id,),
+                    page=span.page,
+                    bbox=span.bbox,
+                )
+                for index, span in enumerate(spans)
+            ],
+            spans,
+        )
     group = NativeGroup(
         order=order,
         kind="table",
@@ -914,7 +936,7 @@ def _ocr_table(
         bbox=bbox,
         table_index=table_index,
     )
-    return table, group, spans
+    return table, [group], spans
 
 
 def _unique_table_cells(cells: Any) -> list[Any]:
