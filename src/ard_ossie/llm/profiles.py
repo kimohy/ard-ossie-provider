@@ -35,6 +35,7 @@ class _BaseProfile(StrictModel):
     provider: ProviderName
     model: str
     structured_output: StructuredOutput
+    vision: bool
     timeout_seconds: int | None = Field(default=None, gt=0, le=600)
     max_output_tokens: int | None = Field(default=None, gt=0, le=65_536)
     temperature: float | None = Field(default=None, ge=0, le=2)

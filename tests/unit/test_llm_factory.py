@@ -43,8 +43,8 @@ def test_factory_reads_only_selected_profile_environment() -> None:
     captured: dict[str, object] = {}
 
     class Provider:
-        def capabilities(self) -> dict[str, str]:
-            return {"structured_output": "json_schema"}
+        def capabilities(self) -> dict[str, str | bool]:
+            return {"structured_output": "json_schema", "vision": True}
 
     def construct(**kwargs: object) -> object:
         captured.update(kwargs)
@@ -60,6 +60,7 @@ def test_factory_reads_only_selected_profile_environment() -> None:
     assert reads.reads == ["ARD_LLM_BASE_URL", "ARD_LLM_API_KEY"]
     assert captured["model"] == "gpt-5.6-terra"
     assert captured["profile"] == "openai-compatible-default"
+    assert captured["vision"] is True
     assert captured["api_key"].get_secret_value() == "secret"
 
 

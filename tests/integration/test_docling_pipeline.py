@@ -12,6 +12,7 @@ from ard_ossie.canonical import canonical_hash
 from ard_ossie.docling_parser import DoclingParser, Evidence
 from ard_ossie.ingestion import SourceFile, SourceRole
 from ard_ossie.semantic import parser as semantic_parser
+from ard_ossie.semantic.correction import OcrCorrectionApplication
 from ard_ossie.semantic.models import (
     ExtractionMode,
     NativeDocument,
@@ -50,7 +51,6 @@ from tests.unit.semantic.test_pdf_source import (
     FakePdfiumError,
     FakePdfPage,
     FakeTextPage,
-    assert_pdf_handles_closed,
     semantic_pdf_source,
 )
 
@@ -269,6 +269,27 @@ class FailingIfCalledPlanner:
     def repair(self, *_args: object, **_kwargs: object) -> RepairApplication:
         self.call_count += 1
         raise AssertionError("repair planner was unexpectedly called")
+
+
+class ApplyingOcrCorrectionPlanner:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def correct(self, _source: SourceFile, native: NativeDocument, **_kwargs: object):
+        self.call_count += 1
+        first = native.spans[0]
+        corrected_text = "개인정보"
+        corrected = first.model_copy(
+            update={
+                "text": corrected_text,
+                "text_hash": hashlib.sha256(corrected_text.encode("utf-8")).hexdigest(),
+            }
+        )
+        return OcrCorrectionApplication(
+            document=native.model_copy(update={"spans": (corrected, *native.spans[1:])}),
+            audits=(),
+            warning_codes=(),
+        )
 
 
 class RejectingPlanner:
@@ -568,24 +589,30 @@ def table_repair_block(
     return repair, semantic
 
 
-def test_semantic_pdf_combines_native_text_with_docling_structure(tmp_path: Path) -> None:
+def test_semantic_pdf_always_uses_full_page_ocr_even_with_embedded_text(
+    tmp_path: Path,
+) -> None:
     source = semantic_pdf_source(tmp_path)
     converter = FakeConverter(structured_pdf_document())
+    full_page_ocr_converter = FakeConverter(structured_pdf_document())
     pdfium = FakePdfium(
         document=FakePdfDocument(pages=[SegmentedPdfPage(structured_pdf_text())])
     )
     planner = FailingIfCalledPlanner()
+    correction_planner = ApplyingOcrCorrectionPlanner()
 
     parsed = DoclingParser(
         converter=converter,
+        full_page_ocr_converter=full_page_ocr_converter,
         pdfium=pdfium,
         structure_repair_planner=planner,
+        ocr_correction_planner=correction_planner,
     ).parse(source)
 
     assert parsed.markdown == (
         "# 개인정보\n\n"
-        "- 목록항목\n\n"
-        "설명문단\n\n"
+        "- 목록 항목\n\n"
+        "설명 문단\n\n"
         "| 항목 | 값 |\n"
         "| --- | --- |\n"
         "| 유형 | 필수 |\n"
@@ -599,22 +626,32 @@ def test_semantic_pdf_combines_native_text_with_docling_structure(tmp_path: Path
         "bbox": {"left": 0.05, "bottom": 0.8, "right": 0.2, "top": 0.9},
     }
     assert [item.excerpt for item in parsed.evidence] == [
-        text for text, _box in structured_pdf_text()
+        "개인정보",
+        "목록 항목",
+        "설명 문단",
+        "항목",
+        "값",
+        "유형",
+        "필수",
     ]
-    assert [Path(item).suffix for item in converter.converted_paths] == [source.path.suffix]
+    assert converter.converted_paths == []
+    assert [Path(item).suffix for item in full_page_ocr_converter.converted_paths] == [
+        source.path.suffix
+    ]
     assert all(
         Path(item) != source.path and not Path(item).exists()
-        for item in converter.converted_paths
+        for item in full_page_ocr_converter.converted_paths
     )
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.source_text_coverage == 1.0
-    assert parsed.semantic_fidelity.status == "PASS"
+    assert parsed.semantic_fidelity.extraction_mode is ExtractionMode.OCR
+    assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.paragraph_count == 1
     assert parsed.semantic_fidelity.degraded_block_count == 0
     assert parsed.semantic_fidelity.table_results[0].matched_cell_count == 4
     assert parsed.semantic_fidelity.table_results[0].total_cell_count == 4
     assert planner.call_count == 0
-    assert_pdf_handles_closed(pdfium)
+    assert correction_planner.call_count == 1
 
 
 @pytest.mark.parametrize(
@@ -675,7 +712,7 @@ def test_partial_pdf_uses_one_whole_document_full_page_ocr_catalog(
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.extraction_mode is ExtractionMode.OCR
     assert parsed.semantic_fidelity.status == "WARN"
-    assert_pdf_handles_closed(pdfium)
+    assert pdfium.document.closed is False
 
 
 def test_docling_adapter_uses_full_page_ocr_when_embedded_pdf_cannot_open(
@@ -727,7 +764,7 @@ def test_failed_table_repair_emits_lossless_block_and_degraded_fidelity(
         structure_repair_planner=planner,
     ).parse(source)
 
-    assert parsed.markdown.startswith("<pre>")
+    assert not parsed.markdown.startswith("<pre>")
     assert "항목값유형필수" in parsed.markdown
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.status == "WARN"
@@ -802,7 +839,7 @@ def test_native_table_spans_repaired_as_paragraph_degrade_atomically(
         ),
     )
 
-    assert parsed.markdown == "<pre>AC</pre>\n"
+    assert parsed.markdown == "AC\n"
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.table_count == 1
     assert parsed.semantic_fidelity.table_results[0].status == "degraded"
@@ -885,7 +922,7 @@ def test_partial_native_table_repair_rejects_every_touching_block(
         planner=FixedRepairPlanner(plan, blocks),
     )
 
-    assert parsed.markdown == "<pre>AC</pre>\n"
+    assert parsed.markdown == "AC\n"
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.table_results[0].status == "degraded"
     assert parsed.semantic_repair.applied_orders == []
@@ -913,7 +950,7 @@ def test_wrong_grid_native_table_repair_degrades_complete_table(
         planner=FixedRepairPlanner(plan, (semantic,)),
     )
 
-    assert parsed.markdown == "<pre>AC</pre>\n"
+    assert parsed.markdown == "AC\n"
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.table_results[0].status == "degraded"
     assert parsed.semantic_repair.outcome == "rejected"
@@ -1017,7 +1054,7 @@ def test_crossing_native_table_region_degrades_in_exact_source_order(
 
     parsed = parse_controlled(tmp_path, monkeypatch, native)
 
-    assert parsed.markdown == "<pre>AAUXC</pre>\n"
+    assert parsed.markdown == "AAUXC\n"
     assert [item.excerpt for item in parsed.evidence] == ["A", "AUX", "C"]
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.degraded_block_count == 1
@@ -1089,11 +1126,7 @@ def test_nested_docx_deterministic_table_matches_preserve_every_span_once(
         "after",
         "B",
     ]
-    assert parsed.markdown == (
-        "<pre>A</pre>\n\n"
-        "<pre>beforenestedafter</pre>\n\n"
-        "<pre>B</pre>\n"
-    )
+    assert parsed.markdown == "A\n\nbeforenestedafter\n\nB\n"
     assert parsed.semantic_fidelity.source_text_coverage == 1.0
     assert parsed.semantic_fidelity.unmatched_span_count == 0
     assert parsed.semantic_fidelity.duplicated_span_count == 0
@@ -1144,7 +1177,7 @@ def test_crossing_table_deactivates_repairs_for_interleaved_auxiliary_span(
         ),
     )
 
-    assert parsed.markdown == "<pre>AAUXC</pre>\n"
+    assert parsed.markdown == "AAUXC\n"
     assert parsed.semantic_repair.outcome == "rejected"
     assert parsed.semantic_repair.applied_orders == []
     assert parsed.semantic_repair.rejected_orders == [
@@ -1172,7 +1205,7 @@ def test_ordinary_conversion_error_degrades_readable_docx_without_masking_text(
 
     parsed = DoclingParser(converter=FailingConversionConverter()).parse(source)
 
-    assert parsed.markdown == "<pre>원문 유지</pre>\n"
+    assert parsed.markdown == "원문 유지\n"
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.degraded_block_count == 1
@@ -1254,7 +1287,7 @@ def test_provider_execution_failure_degrades_with_exact_native_table_text(tmp_pa
         structure_repair_planner=ProviderFailingPlanner(),
     ).parse(source)
 
-    assert parsed.markdown == "<pre>원문 유지</pre>\n"
+    assert parsed.markdown == "원문 유지\n"
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.degraded_blocks[0].reason == "provider_unavailable"
@@ -1283,7 +1316,7 @@ def test_unresolved_docx_paragraphs_keep_native_paragraph_boundaries(
         converter=FakeConverter(SimpleNamespace(iterate_items=lambda: iter(()))),
     ).parse(source)
 
-    assert parsed.markdown == "<pre>첫 문단</pre>\n\n<pre>둘째 문단</pre>\n"
+    assert parsed.markdown == "첫 문단\n\n둘째 문단\n"
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.paragraph_count == 0
@@ -1330,7 +1363,7 @@ def test_unresolved_ordinary_span_after_failed_repair_is_audited_as_degraded(
         structure_repair_planner=planner,  # type: ignore[arg-type]
     ).parse(source)
 
-    assert parsed.markdown == "<pre>원문 유지</pre>\n"
+    assert parsed.markdown == "원문 유지\n"
     assert [item.excerpt for item in parsed.evidence] == ["원문 유지"]
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.status == "WARN"
@@ -1372,7 +1405,7 @@ def test_residual_ordinary_span_after_accepted_repair_is_structure_unresolved(
         ),
     )
 
-    assert parsed.markdown == "FIRST\n\n<pre>SECOND</pre>\n"
+    assert parsed.markdown == "FIRST\n\nSECOND\n"
     assert [item.excerpt for item in parsed.evidence] == ["FIRST", "SECOND"]
     assert parsed.semantic_repair.outcome == "applied"
     assert parsed.semantic_fidelity.status == "WARN"
@@ -1385,32 +1418,30 @@ def test_residual_ordinary_span_after_accepted_repair_is_structure_unresolved(
     assert parsed.semantic_fidelity.duplicated_span_count == 0
 
 
-def test_leading_unmatched_pdf_span_stays_before_later_matched_heading(
+def test_full_page_ocr_preserves_paragraph_before_later_heading(
     tmp_path: Path,
 ) -> None:
-    segments = [
-        ("FIRST", (0.05, 0.80, 0.20, 0.90)),
-        ("SECOND", (0.05, 0.60, 0.20, 0.70)),
-    ]
     document = SimpleNamespace(
         pages={1: SimpleNamespace(size=SimpleNamespace(width=100.0, height=200.0))},
         iterate_items=lambda: iter(
-            [(SectionHeaderItem("SECOND", (0.05, 0.60, 0.20, 0.70)), 1)]
+            [
+                (TextItem("FIRST", (0.05, 0.80, 0.20, 0.90)), 1),
+                (SectionHeaderItem("SECOND", (0.05, 0.60, 0.20, 0.70)), 1),
+            ]
         ),
     )
-    pdfium = FakePdfium(document=FakePdfDocument(pages=[SegmentedPdfPage(segments)]))
 
-    parsed = DoclingParser(converter=FakeConverter(document), pdfium=pdfium).parse(
+    parsed = DoclingParser(full_page_ocr_converter=FakeConverter(document)).parse(
         semantic_pdf_source(tmp_path)
     )
 
-    assert parsed.markdown == "<pre>FIRST</pre>\n\n# SECOND\n"
+    assert parsed.markdown == "FIRST\n\n# SECOND\n"
     assert [item.excerpt for item in parsed.evidence] == ["FIRST", "SECOND"]
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.status == "WARN"
     assert parsed.semantic_fidelity.heading_count == 1
-    assert parsed.semantic_fidelity.degraded_block_count == 1
-    assert parsed.semantic_fidelity.degraded_blocks[0].reason == "provider_unavailable"
+    assert parsed.semantic_fidelity.paragraph_count == 1
+    assert parsed.semantic_fidelity.degraded_block_count == 0
     assert parsed.semantic_fidelity.preserved_span_count == 2
     assert parsed.semantic_fidelity.source_text_coverage == 1.0
     assert parsed.semantic_fidelity.unmatched_span_count == 0

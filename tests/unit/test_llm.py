@@ -280,6 +280,7 @@ def test_provider_capabilities_expose_audit_identity() -> None:
         "structured_output": "json_schema",
         "provider": "openai_compatible",
         "model": "example-model",
+        "vision": False,
     }
 
 

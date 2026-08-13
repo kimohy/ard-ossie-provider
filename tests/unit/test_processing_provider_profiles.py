@@ -12,8 +12,8 @@ class FakeProvider:
         self.api = kwargs["api"]
         self.profile = kwargs["profile"]
 
-    def capabilities(self) -> dict[str, str]:
-        return {"structured_output": "json_schema"}
+    def capabilities(self) -> dict[str, str | bool]:
+        return {"structured_output": "json_schema", "vision": True}
 
 
 def environment(**overrides: str) -> Mapping[str, str]:

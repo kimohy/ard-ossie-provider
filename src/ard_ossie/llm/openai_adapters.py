@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -25,7 +26,9 @@ from openai import (
 from pydantic import JsonValue, SecretStr
 
 from ard_ossie.llm.contracts import (
+    LLMImagePart,
     LLMMetadata,
+    LLMMultimodalMessage,
     LLMResult,
     ProviderExecutionError,
     ProviderFailureKind,
@@ -61,6 +64,7 @@ class OpenAICompatibleProvider:
         timeout_seconds: int = 120,
         max_output_tokens: int = 4096,
         temperature: float = 0,
+        vision: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -70,6 +74,7 @@ class OpenAICompatibleProvider:
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
+        self.vision = vision
         self._clock = clock
         if api not in ("chat_completions", "responses"):
             raise ProviderExecutionError(
@@ -110,6 +115,7 @@ class OpenAICompatibleProvider:
             "structured_output": "json_schema",
             "provider": self.provider_name,
             "model": self.model,
+            "vision": self.vision,
         }
 
     def generate_text(
@@ -129,10 +135,23 @@ class OpenAICompatibleProvider:
         structured = _parse_structured(result.text, schema, rejected_result=result)
         return result.model_copy(update={"structured": structured})
 
+    def generate_multimodal_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[LLMMultimodalMessage],
+    ) -> LLMResult:
+        result = self._generate(
+            messages=_openai_multimodal_messages(messages, api=self.api),
+            schema=schema,
+        )
+        structured = _parse_structured(result.text, schema, rejected_result=result)
+        return result.model_copy(update={"structured": structured})
+
     def _generate(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, object]],
         schema: dict[str, object] | None,
     ) -> LLMResult:
         started = self._clock()
@@ -181,7 +200,7 @@ class OpenAICompatibleProvider:
     def _chat_request(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, object]],
         schema: dict[str, object] | None,
     ) -> object:
         request: dict[str, object] = {
@@ -205,7 +224,7 @@ class OpenAICompatibleProvider:
     def _responses_request(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, object]],
         schema: dict[str, object] | None,
     ) -> object:
         request: dict[str, object] = {
@@ -241,6 +260,7 @@ class AzureOpenAIProvider(OpenAICompatibleProvider):
         timeout_seconds: int = 120,
         max_output_tokens: int = 4096,
         temperature: float = 0,
+        vision: bool = False,
         client: Any | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -267,8 +287,37 @@ class AzureOpenAIProvider(OpenAICompatibleProvider):
             timeout_seconds=timeout_seconds,
             max_output_tokens=max_output_tokens,
             temperature=temperature,
+            vision=vision,
             clock=clock,
         )
+
+
+def _openai_multimodal_messages(
+    messages: list[LLMMultimodalMessage],
+    *,
+    api: APIStyle,
+) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for message in messages:
+        content: list[dict[str, object]] = []
+        for part in message.content:
+            if isinstance(part, LLMImagePart):
+                encoded = base64.b64encode(part.data).decode("ascii")
+                data_url = f"data:{part.mime_type};base64,{encoded}"
+                content.append(
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                    if api == "chat_completions"
+                    else {"type": "input_image", "image_url": data_url}
+                )
+            else:
+                content.append(
+                    {
+                        "type": "text" if api == "chat_completions" else "input_text",
+                        "text": part.text,
+                    }
+                )
+        output.append({"role": message.role, "content": content})
+    return output
 
 
 def _parse_structured(

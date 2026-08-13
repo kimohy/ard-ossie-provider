@@ -134,6 +134,51 @@ def test_openai_responses_uses_json_schema_and_normalizes_structured_result() ->
     }
 
 
+def test_openai_chat_preserves_image_in_multimodal_structured_request() -> None:
+    from ard_ossie.llm import LLMImagePart, LLMMultimodalMessage, LLMTextPart
+
+    client = chat_client('{"patches":[]}')
+    provider = OpenAICompatibleProvider(
+        base_url="https://llm.example.com/v1",
+        api_key=SecretStr("secret-value"),
+        model="example-model",
+        profile="vision-profile",
+        client=client,
+    )
+    schema = {
+        "type": "object",
+        "properties": {"patches": {"type": "array", "items": False}},
+        "required": ["patches"],
+        "additionalProperties": False,
+    }
+    message = LLMMultimodalMessage(
+        role="user",
+        content=(
+            LLMTextPart(text="Correct only the supplied OCR spans."),
+            LLMImagePart(
+                mime_type="image/png",
+                data=b"\x89PNG\r\n\x1a\nfixture",
+            ),
+        ),
+    )
+
+    result = provider.generate_multimodal_structured(
+        schema=schema,
+        messages=[message],
+    )
+
+    assert result.structured == {"patches": []}
+    content = client.chat.completions.calls[0]["messages"][0]["content"]
+    assert content[0] == {
+        "type": "text",
+        "text": "Correct only the supplied OCR spans.",
+    }
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"] == (
+        "data:image/png;base64,iVBORw0KGgpmaXh0dXJl"
+    )
+
+
 def test_azure_adapter_is_distinct_and_uses_deployment_as_model() -> None:
     client = chat_client("hello")
     provider = AzureOpenAIProvider(

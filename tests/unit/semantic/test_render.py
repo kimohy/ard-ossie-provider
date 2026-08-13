@@ -5,6 +5,7 @@ import hashlib
 import pytest
 from markdown_it import MarkdownIt
 
+from ard_ossie.semantic.correction import has_raw_html
 from ard_ossie.semantic.models import (
     ExcludedSpan,
     ExtractionMode,
@@ -128,7 +129,9 @@ def test_renderer_escapes_all_commonmark_ascii_punctuation_without_creating_bloc
 
     assert all(f"\\{character}" in rendered for character in ASCII_ESCAPABLE_PUNCTUATION)
     assert [token.type for token in tokens] == ["paragraph_open", "inline", "paragraph_close"]
-    assert MarkdownIt("commonmark").render(rendered).startswith("<p>~~~<br>===<br>&amp;amp;")
+    assert MarkdownIt("commonmark").render(rendered).startswith(
+        "<p>~~~<br />\n===<br />\n&amp;amp;"
+    )
 
 
 def test_renderer_encodes_inline_line_endings_without_extra_block_boundaries() -> None:
@@ -145,7 +148,8 @@ def test_renderer_encodes_inline_line_endings_without_extra_block_boundaries() -
 
     rendered = render_semantic_markdown(semantic, native.span_catalog())
 
-    assert rendered == "# heading<br>\n\nfirst<br>second<br>\n\n- item<br>continued<br>\n"
+    assert rendered == "# heading\\\n\nfirst\\\nsecond\\\n\n- item\\\ncontinued\\\n"
+    assert "<br>" not in rendered
     assert "\n\n\n" not in rendered
     assert [token.type for token in MarkdownIt("commonmark").parse(rendered)] == [
         "heading_open",
@@ -250,14 +254,19 @@ def test_renderer_expands_merged_cells_without_duplicating_source_coverage() -> 
     )
 
 
-def test_renderer_converts_multiline_table_cells_to_breaks() -> None:
-    """Internal cell lines must not create invalid multi-line GFM rows."""
-    header = source_span(0, "설명")
-    body = source_span(1, "첫 줄\r\n둘째 줄\r셋째 줄")
-    native = native_document(header, body)
+def test_renderer_is_html_free_and_joins_multiline_table_cells() -> None:
+    unresolved = source_span(0, "<pre>원문<br></pre>")
+    header = source_span(1, "설명")
+    body = source_span(2, "첫 줄\r\n 둘째 | 줄 \r 셋째 \\값")
+    native = native_document(unresolved, header, body)
     semantic = document(
-        TableBlock(
+        LosslessBlock(
             order=0,
+            span_ids=(unresolved.span_id,),
+            reason="structure_unresolved",
+        ),
+        TableBlock(
+            order=1,
             row_count=2,
             column_count=1,
             cells=(
@@ -273,9 +282,17 @@ def test_renderer_converts_multiline_table_cells_to_breaks() -> None:
         )
     )
 
-    assert render_semantic_markdown(semantic, native.span_catalog()) == (
-        "| 설명 |\n| --- |\n| 첫 줄<br>둘째 줄<br>셋째 줄 |\n"
+    rendered = render_semantic_markdown(semantic, native.span_catalog())
+
+    assert rendered == (
+        r"\<pre\>원문\<br\>\<\/pre\>" + "\n\n"
+        "| 설명 |\n"
+        "| --- |\n"
+        r"| 첫 줄 둘째 \| 줄 셋째 \\값 |" + "\n"
     )
+    assert "<pre>" not in rendered
+    assert "<br>" not in rendered
+    assert has_raw_html(rendered) is False
 
 
 def test_renderer_inserts_owned_break_between_distinct_table_cell_paragraphs() -> None:
@@ -301,7 +318,7 @@ def test_renderer_inserts_owned_break_between_distinct_table_cell_paragraphs() -
     )
 
     assert render_semantic_markdown(semantic, native.span_catalog()) == (
-        "|  |\n| --- |\n| first paragraph<br>second paragraph |\n"
+        "|  |\n| --- |\n| first paragraph second paragraph |\n"
     )
 
 
@@ -451,7 +468,7 @@ def test_renderer_keeps_additional_header_rows_as_source_rows() -> None:
 
 
 def test_lossless_block_escapes_html_without_changing_exact_resolved_text() -> None:
-    """Unresolved tables must stay safe in HTML and round-trip after entity decoding."""
+    """Unresolved source text remains an escaped ordinary Markdown paragraph."""
     unresolved = source_span(0, "A  B\n<1 & 2>")
     native = native_document(unresolved)
     semantic = document(
@@ -463,7 +480,7 @@ def test_lossless_block_escapes_html_without_changing_exact_resolved_text() -> N
     )
 
     assert render_semantic_markdown(semantic, native.span_catalog()) == (
-        "<pre>A  B\n&lt;1 &amp; 2&gt;</pre>\n"
+        "A  B\\\n\\<1 \\& 2\\>\n"
     )
 
 

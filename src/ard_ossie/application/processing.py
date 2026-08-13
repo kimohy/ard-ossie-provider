@@ -130,7 +130,7 @@ class ProcessingService:
             )
         try:
             base_sha = self.git.remote_branch_sha(pull_request.base_branch)
-            trusted_semantic_repair = _trusted_semantic_repair(
+            trusted_semantic_repair, trusted_semantic_fidelity = _trusted_semantic_artifacts(
                 self.git,
                 base_sha=base_sha,
                 product_key=request.product_key,
@@ -143,6 +143,7 @@ class ProcessingService:
                 pr_number=request.pr_number,
                 warnings_as_errors=request.warnings_as_errors,
                 trusted_semantic_repair=trusted_semantic_repair,
+                trusted_semantic_fidelity=trusted_semantic_fidelity,
             )
         except PipelineSecurityError as error:
             raise WorkflowSecurityError(
@@ -623,6 +624,20 @@ def _trusted_semantic_repair(
     base_sha: str | None,
     product_key: str,
 ) -> dict[str, object] | None:
+    repair, _fidelity = _trusted_semantic_artifacts(
+        git,
+        base_sha=base_sha,
+        product_key=product_key,
+    )
+    return repair
+
+
+def _trusted_semantic_artifacts(
+    git: GitPort,
+    *,
+    base_sha: str | None,
+    product_key: str,
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
     if not isinstance(base_sha, str) or re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
         raise _semantic_repair_trust_mismatch()
     quality_root = Path("products") / product_key / "quality"
@@ -636,8 +651,13 @@ def _trusted_semantic_repair(
         base_sha,
         quality_root / "semantic-structure-repair.json",
     )
-    if quality_bytes is None and repair_bytes is None:
-        return None
+    fidelity_bytes = _read_revision_bytes_optional(
+        git,
+        base_sha,
+        quality_root / "semantic-fidelity.json",
+    )
+    if quality_bytes is None and repair_bytes is None and fidelity_bytes is None:
+        return None, None
     if quality_bytes is None:
         raise _semantic_repair_trust_mismatch()
     try:
@@ -649,24 +669,41 @@ def _trusted_semantic_repair(
     quality_hashes = quality.get("quality_artifact_hashes", {})
     if not isinstance(quality_hashes, dict):
         raise _semantic_repair_trust_mismatch()
-    repair_hash_name = "semantic-structure-repair.json"
-    repair_hash_present = repair_hash_name in quality_hashes
-    expected_hash = quality_hashes.get(repair_hash_name)
-    if repair_bytes is None:
-        if not repair_hash_present:
+    return (
+        _verified_semantic_artifact(
+            repair_bytes,
+            quality_hashes,
+            name="semantic-structure-repair.json",
+        ),
+        _verified_semantic_artifact(
+            fidelity_bytes,
+            quality_hashes,
+            name="semantic-fidelity.json",
+        ),
+    )
+
+
+def _verified_semantic_artifact(
+    payload: bytes | None,
+    quality_hashes: dict[object, object],
+    *,
+    name: str,
+) -> dict[str, object] | None:
+    hash_present = name in quality_hashes
+    expected_hash = quality_hashes.get(name)
+    if payload is None:
+        if not hash_present:
             return None
         raise _semantic_repair_trust_mismatch()
-    if not isinstance(expected_hash, str) or (
-        hashlib.sha256(repair_bytes).hexdigest() != expected_hash
-    ):
+    if not isinstance(expected_hash, str) or hashlib.sha256(payload).hexdigest() != expected_hash:
         raise _semantic_repair_trust_mismatch()
     try:
-        repair = json.loads(repair_bytes.decode("utf-8", errors="strict"))
+        artifact = json.loads(payload.decode("utf-8", errors="strict"))
     except (TypeError, UnicodeDecodeError, ValueError) as error:
         raise _semantic_repair_trust_mismatch() from error
-    if not isinstance(repair, dict):
+    if not isinstance(artifact, dict):
         raise _semantic_repair_trust_mismatch()
-    return repair
+    return artifact
 
 
 def _read_revision_bytes_optional(
