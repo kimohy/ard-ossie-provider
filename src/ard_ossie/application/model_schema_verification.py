@@ -93,16 +93,19 @@ def verify_model_schemas(repository: Path) -> None:
 def _verify_model_schemas(
     repository: Path,
 ) -> tuple[ModelSchemaReference, ...]:
-    root = _candidate_root(repository)
-    catalog = active_model_schema_catalog(repository)
+    _, schemas = _candidate_schema_paths(repository)
+    catalog = _active_model_schema_catalog(schemas)
+    snapshot = tuple(
+        (reference, _load_schema(schemas, reference.schema_path))
+        for reference in catalog
+    )
     with (
         open(os.devnull, "w", encoding="utf-8") as sink,  # noqa: PTH123
         redirect_stdout(sink),
         redirect_stderr(sink),
     ):
         strict_model = _strict_model_class()
-        for reference in catalog:
-            schema = _load_schema(root, reference.schema_path)
+        for reference, schema in snapshot:
             model = _load_model(reference, strict_model)
             try:
                 generated = model.model_json_schema()
@@ -138,16 +141,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _candidate_root(repository: Path) -> Path:
-    root = _schema_catalog_root(repository)
+def _candidate_schema_paths(repository: Path) -> tuple[Path, Path]:
+    root, schemas = _schema_catalog_paths(repository)
     if root != Path.cwd().resolve():
         raise ModelSchemaVerificationError("MODEL_SCHEMA_REPOSITORY_INVALID")
-    return root
+    return root, schemas
 
 
 def active_model_schema_catalog(repository: Path) -> tuple[ModelSchemaReference, ...]:
-    root = _schema_catalog_root(repository)
-    schemas = (root / "schemas").resolve(strict=True)
+    _, schemas = _schema_catalog_paths(repository)
+    return _active_model_schema_catalog(schemas)
+
+
+def _active_model_schema_catalog(
+    schemas: Path,
+) -> tuple[ModelSchemaReference, ...]:
     active = list(MODEL_SCHEMA_CATALOG)
     for group in OPTIONAL_MODEL_SCHEMA_GROUPS:
         present = tuple(
@@ -160,7 +168,7 @@ def active_model_schema_catalog(repository: Path) -> tuple[ModelSchemaReference,
     return tuple(active)
 
 
-def _schema_catalog_root(repository: Path) -> Path:
+def _schema_catalog_paths(repository: Path) -> tuple[Path, Path]:
     try:
         root = repository.expanduser().resolve(strict=True)
         schemas = (root / "schemas").resolve(strict=True)
@@ -168,7 +176,7 @@ def _schema_catalog_root(repository: Path) -> Path:
         raise ModelSchemaVerificationError("MODEL_SCHEMA_REPOSITORY_INVALID") from error
     if not schemas.is_dir() or not schemas.is_relative_to(root):
         raise ModelSchemaVerificationError("MODEL_SCHEMA_REPOSITORY_INVALID")
-    return root
+    return root, schemas
 
 
 def _schema_is_present(schemas: Path, schema_path: Path) -> bool:
@@ -207,9 +215,8 @@ def _strict_model_class() -> type[Any]:
     return model
 
 
-def _load_schema(root: Path, schema_path: Path) -> object:
+def _load_schema(schemas: Path, schema_path: Path) -> object:
     try:
-        schemas = (root / "schemas").resolve(strict=True)
         resolved = (schemas / schema_path).resolve(strict=True)
         if not resolved.is_relative_to(schemas):
             raise OSError("schema path escaped root")

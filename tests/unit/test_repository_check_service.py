@@ -473,6 +473,73 @@ def test_model_schema_verifier_maps_catalog_access_error_to_workflow_error(
         )
 
 
+def test_model_schema_verifier_maps_schema_root_access_error_to_workflow_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    original_resolve = Path.resolve
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    def reject_schema_root_resolution(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> Path:
+        if path == schemas:
+            raise PermissionError("injected schemas resolution failure")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", reject_schema_root_resolution)
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH"):
+        RepositoryVerificationTools(RepositoryPaths(tmp_path), Runner()).run(
+            "model-schemas"
+        )
+
+
+def test_repository_check_records_schema_root_access_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    paths = RepositoryPaths(tmp_path)
+    original_resolve = Path.resolve
+
+    class Runner:
+        def run(self, request):
+            write_model_schema_receipt(request)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    def reject_schema_root_resolution(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> Path:
+        if path == schemas:
+            raise PermissionError("injected schemas resolution failure")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", reject_schema_root_resolution)
+    tools = RepositoryVerificationTools(paths, Runner())
+    git = FakeGit((Path("src/ard_ossie/models.py"),))
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_CATALOG_MISMATCH") as raised:
+        RepositoryCheckService(paths, git, tools).run(
+            request(tmp_path).model_copy(update={"verification_group": "model-schemas"})
+        )
+
+    assert raised.value.outputs["verifiers"] == [
+        {"name": "model-schemas", "status": "failure", "code": "SCHEMA_CATALOG_MISMATCH"}
+    ]
+
+
 def test_model_schema_verifier_rejects_trusted_helper_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
