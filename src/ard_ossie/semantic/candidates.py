@@ -9,13 +9,20 @@ from pydantic import Field, StringConstraints, model_validator
 from ard_ossie.canonical import canonical_hash
 from ard_ossie.models import Sha256
 from ard_ossie.semantic.evidence import AtomId, HypothesisId, RegionId
-from ard_ossie.semantic.models import ImmutableStrictModel
+from ard_ossie.semantic.models import (
+    MAX_TABLE_CELLS,
+    MAX_TABLE_COLUMNS,
+    MAX_TABLE_GRID_AREA,
+    MAX_TABLE_ROWS,
+    ImmutableStrictModel,
+)
 
 CandidateId = Annotated[str, StringConstraints(pattern=r"^candidate_[0-9a-f]{16}$")]
 CandidateSetId = Annotated[
     str,
     StringConstraints(pattern=r"^candidate_set_[0-9a-f]{16}$"),
 ]
+CellId = Annotated[str, StringConstraints(pattern=r"^cell_[0-9a-f]{16}$")]
 
 
 class SpacingBoundary(ImmutableStrictModel):
@@ -135,12 +142,63 @@ class ContinuationCandidate(ImmutableStrictModel):
         return self
 
 
+class TableCellCandidate(ImmutableStrictModel):
+    cell_id: CellId
+    start_row: int = Field(ge=0, le=MAX_TABLE_ROWS)
+    end_row: int = Field(gt=0, le=MAX_TABLE_ROWS)
+    start_column: int = Field(ge=0, le=MAX_TABLE_COLUMNS)
+    end_column: int = Field(gt=0, le=MAX_TABLE_COLUMNS)
+    atom_ids: tuple[AtomId, ...] = ()
+    column_header: bool = False
+
+    @model_validator(mode="after")
+    def validate_cell(self) -> TableCellCandidate:
+        if self.start_row >= self.end_row or self.start_column >= self.end_column:
+            raise ValueError("TABLE_CELL_SPAN_INVALID")
+        if len(self.atom_ids) != len(set(self.atom_ids)):
+            raise ValueError("TABLE_CELL_ATOMS_DUPLICATE")
+        return self
+
+
+class TableCandidate(ImmutableStrictModel):
+    kind: Literal["table"] = "table"
+    candidate_id: CandidateId
+    region_id: RegionId
+    row_count: int = Field(gt=0, le=MAX_TABLE_ROWS)
+    column_count: int = Field(gt=0, le=MAX_TABLE_COLUMNS)
+    cells: tuple[TableCellCandidate, ...] = Field(min_length=1, max_length=MAX_TABLE_CELLS)
+    atom_ids: tuple[AtomId, ...] = Field(min_length=1)
+    score: float = Field(ge=0, le=1)
+    features: dict[str, float]
+
+    @model_validator(mode="after")
+    def validate_table(self) -> TableCandidate:
+        if self.row_count * self.column_count > MAX_TABLE_GRID_AREA:
+            raise ValueError("TABLE_GRID_AREA_LIMIT")
+        if any(
+            cell.end_row > self.row_count or cell.end_column > self.column_count
+            for cell in self.cells
+        ):
+            raise ValueError("TABLE_CELL_OUT_OF_BOUNDS")
+        cell_ids = [cell.cell_id for cell in self.cells]
+        if len(cell_ids) != len(set(cell_ids)):
+            raise ValueError("TABLE_CELL_IDS_DUPLICATE")
+        allocations = [atom_id for cell in self.cells for atom_id in cell.atom_ids]
+        if len(allocations) != len(set(allocations)):
+            raise ValueError("TABLE_ATOM_ALLOCATION_DUPLICATE")
+        if tuple(allocations) != self.atom_ids and set(allocations) != set(self.atom_ids):
+            raise ValueError("TABLE_ATOM_ALLOCATION_INCOMPLETE")
+        assert_table_grid_complete(self)
+        return self
+
+
 Candidate = Annotated[
     SpacingCandidate
     | RecognitionCandidate
     | BlockCandidate
     | ReadingOrderCandidate
-    | ContinuationCandidate,
+    | ContinuationCandidate
+    | TableCandidate,
     Field(discriminator="kind"),
 ]
 
@@ -155,6 +213,7 @@ class CandidateSet(ImmutableStrictModel):
         "block",
         "reading_order",
         "continuation",
+        "table",
     ]
     candidates: tuple[Candidate, ...] = Field(min_length=1, max_length=5)
 
@@ -189,6 +248,28 @@ def make_candidate_set_id(
         }
     )
     return f"candidate_set_{digest[:16]}"
+
+
+def make_cell_id(region_id: RegionId, payload: object) -> str:
+    digest = canonical_hash({"region_id": region_id, "payload": payload})
+    return f"cell_{digest[:16]}"
+
+
+def assert_table_grid_complete(candidate: TableCandidate) -> None:
+    occupied: dict[tuple[int, int], CellId] = {}
+    for cell in candidate.cells:
+        for row in range(cell.start_row, cell.end_row):
+            for column in range(cell.start_column, cell.end_column):
+                if (row, column) in occupied:
+                    raise ValueError("TABLE_GRID_OVERLAP")
+                occupied[(row, column)] = cell.cell_id
+    expected = {
+        (row, column)
+        for row in range(candidate.row_count)
+        for column in range(candidate.column_count)
+    }
+    if set(occupied) != expected:
+        raise ValueError("TABLE_GRID_NOT_PARTITIONED")
 
 
 def make_spacing_candidate(

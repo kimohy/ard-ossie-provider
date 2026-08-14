@@ -13,12 +13,21 @@ from ard_ossie.semantic.candidates import (
     ContinuationCandidate,
     ReadingOrderCandidate,
     RecognitionCandidate,
+    TableCandidate,
+    TableCellCandidate,
     make_candidate_id,
     make_candidate_set_id,
+    make_cell_id,
 )
-from ard_ossie.semantic.evidence import EvidenceDocument, ExtractedEvidence, RegionId
-from ard_ossie.semantic.layout import LayoutDocument, LayoutRegion
-from ard_ossie.semantic.structure import StructureDocument
+from ard_ossie.semantic.evidence import (
+    EvidenceAtom,
+    EvidenceDocument,
+    ExtractedEvidence,
+    RegionId,
+)
+from ard_ossie.semantic.layout import LayoutDocument, LayoutLine, LayoutRegion
+from ard_ossie.semantic.models import SourceBox
+from ard_ossie.semantic.structure import StructureDocument, StructureTable
 
 _HEADING_NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*)(?:[.)]|\s)")
 _ORDERED_LIST = re.compile(r"^(\s*)(?:\d+[.)]|[a-zA-Z][.)])\s+")
@@ -173,6 +182,40 @@ def build_continuation_candidate_sets(layout: LayoutDocument) -> tuple[Candidate
     return tuple(result)
 
 
+def build_table_candidate_set(
+    region: LayoutRegion,
+    evidence: EvidenceDocument,
+    layout: LayoutDocument,
+    hints: StructureDocument,
+) -> CandidateSet:
+    if evidence.source_hash != layout.source_hash:
+        raise ValueError("TABLE_SOURCE_HASH_MISMATCH")
+    layout_regions = {item.region_id: item for item in layout.regions}
+    if layout_regions.get(region.region_id) != region:
+        raise ValueError("TABLE_REGION_UNKNOWN")
+    atom_catalog = {atom.atom_id: atom for atom in evidence.atoms}
+    if len(region.atom_ids) != len(set(region.atom_ids)) or not set(region.atom_ids).issubset(
+        atom_catalog
+    ):
+        raise ValueError("TABLE_REGION_ATOM_INVALID")
+    line_catalog = {line.line_id: line for line in layout.lines}
+    try:
+        lines = tuple(line_catalog[line_id] for line_id in region.line_ids)
+    except KeyError as error:
+        raise ValueError("TABLE_REGION_LINE_UNKNOWN") from error
+    if not lines:
+        raise ValueError("TABLE_REGION_LINES_EMPTY")
+
+    table_hint = _matching_table_hint(region, hints)
+    geometry = _geometry_table_candidate(region, lines, atom_catalog, table_hint)
+    candidates = [geometry]
+    split = _split_spanning_cells(region, geometry, atom_catalog, lines)
+    if split is not None and split.candidate_id != geometry.candidate_id:
+        candidates.append(split)
+    ordered = tuple(sorted(candidates, key=lambda item: (-item.score, item.candidate_id))[:5])
+    return _candidate_set(layout.source_hash, region.region_id, "table", ordered)
+
+
 def _block_features(
     region: LayoutRegion,
     text: str,
@@ -282,6 +325,358 @@ def _heading_level(number: str | None) -> int:
     if len(segments) > 1:
         return min(6, len(segments))
     return min(6, max(1, int(segments[0])))
+
+
+def _matching_table_hint(
+    region: LayoutRegion,
+    hints: StructureDocument,
+) -> StructureTable | None:
+    matches = [
+        block
+        for block in hints.blocks
+        if block.kind == "table"
+        and block.table is not None
+        and block.page == region.page
+        and block.bbox is not None
+        and _overlaps(region, block.bbox)
+    ]
+    if not matches:
+        return None
+    return min(matches, key=lambda item: item.order).table
+
+
+def _geometry_table_candidate(
+    region: LayoutRegion,
+    lines: tuple[LayoutLine, ...],
+    atom_catalog: dict[str, EvidenceAtom],
+    table_hint: StructureTable | None,
+) -> TableCandidate:
+    row_groups = _row_groups(lines)
+    column_anchors = _column_anchors(lines, table_hint)
+    row_count = table_hint.row_count if table_hint is not None else len(row_groups)
+    column_count = table_hint.column_count if table_hint is not None else len(column_anchors)
+    if row_count <= 0 or column_count <= 0:
+        raise ValueError("TABLE_GRID_DIMENSIONS_INVALID")
+
+    if table_hint is not None:
+        cell_specs = _hinted_cell_specs(
+            lines,
+            table_hint,
+            row_count=row_count,
+            column_count=column_count,
+        )
+        score = 0.94
+        features = {"geometry_grid": 0.82, "docling_grid_agreement": 0.94}
+    else:
+        cell_specs = _geometric_cell_specs(
+            lines,
+            row_groups,
+            column_anchors,
+            row_count=row_count,
+            column_count=column_count,
+        )
+        score = 0.82
+        features = {"geometry_grid": 0.82, "docling_grid_agreement": 0.0}
+    cells = _complete_cells(region.region_id, cell_specs, row_count, column_count)
+    return _make_table_candidate(
+        region,
+        row_count=row_count,
+        column_count=column_count,
+        cells=cells,
+        score=score,
+        features=features,
+    )
+
+
+def _row_groups(lines: tuple[LayoutLine, ...]) -> tuple[tuple[LayoutLine, ...], ...]:
+    remaining = set(range(len(lines)))
+    groups: list[tuple[LayoutLine, ...]] = []
+    while remaining:
+        component = {min(remaining)}
+        changed = True
+        while changed:
+            changed = False
+            for index in tuple(remaining - component):
+                if any(
+                    _vertical_overlap(lines[index].bbox, lines[member].bbox)
+                    for member in component
+                ):
+                    component.add(index)
+                    changed = True
+        remaining -= component
+        groups.append(tuple(lines[index] for index in sorted(component)))
+    return tuple(
+        sorted(
+            groups,
+            key=lambda group: (
+                -max(line.bbox.top for line in group),
+                min(line.bbox.left for line in group),
+            ),
+        )
+    )
+
+
+def _column_anchors(
+    lines: tuple[LayoutLine, ...],
+    table_hint: StructureTable | None,
+) -> tuple[float, ...]:
+    positions = [line.bbox.left for line in lines]
+    if table_hint is not None:
+        positions.extend(cell.bbox.left for cell in table_hint.cells if cell.bbox is not None)
+    clusters: list[list[float]] = []
+    for position in sorted(positions):
+        if not clusters or position - median(clusters[-1]) > 0.04:
+            clusters.append([position])
+        else:
+            clusters[-1].append(position)
+    anchors = [median(cluster) for cluster in clusters]
+    if table_hint is not None and len(anchors) > table_hint.column_count:
+        anchors = anchors[: table_hint.column_count]
+    if table_hint is not None and len(anchors) < table_hint.column_count:
+        left = min(positions)
+        right = max(
+            [line.bbox.right for line in lines]
+            + [cell.bbox.right for cell in table_hint.cells if cell.bbox is not None]
+        )
+        step = (right - left) / table_hint.column_count
+        anchors = [left + step * index for index in range(table_hint.column_count)]
+    return tuple(anchors)
+
+
+def _geometric_cell_specs(
+    lines: tuple[LayoutLine, ...],
+    row_groups: tuple[tuple[LayoutLine, ...], ...],
+    column_anchors: tuple[float, ...],
+    *,
+    row_count: int,
+    column_count: int,
+) -> list[tuple[int, int, int, int, tuple[str, ...], bool]]:
+    row_by_line = {
+        line.line_id: row
+        for row, group in enumerate(row_groups[:row_count])
+        for line in group
+    }
+    grouped: dict[tuple[int, int, int, int], list[str]] = defaultdict(list)
+    for line in lines:
+        row = row_by_line[line.line_id]
+        start_column = _nearest_anchor(line.bbox.left, column_anchors)
+        end_column = max(
+            start_column + 1,
+            sum(anchor < line.bbox.right - 0.02 for anchor in column_anchors),
+        )
+        end_column = min(column_count, end_column)
+        grouped[(row, row + 1, start_column, end_column)].extend(line.atom_ids)
+    return [
+        (*coordinates, tuple(atom_ids), coordinates[0] == 0)
+        for coordinates, atom_ids in sorted(grouped.items())
+    ]
+
+
+def _hinted_cell_specs(
+    lines: tuple[LayoutLine, ...],
+    table_hint: StructureTable,
+    *,
+    row_count: int,
+    column_count: int,
+) -> list[tuple[int, int, int, int, tuple[str, ...], bool]]:
+    assignments: dict[int, list[str]] = defaultdict(list)
+    for line in lines:
+        eligible = [
+            (index, cell)
+            for index, cell in enumerate(table_hint.cells)
+            if cell.bbox is not None and _box_overlap_area(line.bbox, cell.bbox) > 0
+        ]
+        if not eligible:
+            raise ValueError("TABLE_HINT_LINE_UNALLOCATED")
+        best_index, _best_cell = max(
+            eligible,
+            key=lambda item: (_box_overlap_area(line.bbox, item[1].bbox), -item[0]),
+        )
+        assignments[best_index].extend(line.atom_ids)
+    specs = [
+        (
+            cell.start_row,
+            cell.end_row,
+            cell.start_column,
+            cell.end_column,
+            tuple(assignments[index]),
+            cell.column_header,
+        )
+        for index, cell in enumerate(table_hint.cells)
+    ]
+    if any(
+        start_row < 0
+        or end_row > row_count
+        or start_column < 0
+        or end_column > column_count
+        for start_row, end_row, start_column, end_column, _atom_ids, _header in specs
+    ):
+        raise ValueError("TABLE_HINT_CELL_OUT_OF_BOUNDS")
+    return specs
+
+
+def _complete_cells(
+    region_id: RegionId,
+    specs: list[tuple[int, int, int, int, tuple[str, ...], bool]],
+    row_count: int,
+    column_count: int,
+) -> tuple[TableCellCandidate, ...]:
+    occupied = {
+        (row, column)
+        for start_row, end_row, start_column, end_column, _atom_ids, _header in specs
+        for row in range(start_row, end_row)
+        for column in range(start_column, end_column)
+    }
+    complete_specs = [*specs]
+    for row in range(row_count):
+        for column in range(column_count):
+            if (row, column) not in occupied:
+                complete_specs.append((row, row + 1, column, column + 1, (), row == 0))
+    return tuple(
+        TableCellCandidate(
+            cell_id=make_cell_id(
+                region_id,
+                {
+                    "start_row": start_row,
+                    "end_row": end_row,
+                    "start_column": start_column,
+                    "end_column": end_column,
+                    "atom_ids": atom_ids,
+                },
+            ),
+            start_row=start_row,
+            end_row=end_row,
+            start_column=start_column,
+            end_column=end_column,
+            atom_ids=atom_ids,
+            column_header=column_header,
+        )
+        for start_row, end_row, start_column, end_column, atom_ids, column_header in sorted(
+            complete_specs,
+            key=lambda item: (item[0], item[2], item[1], item[3]),
+        )
+    )
+
+
+def _split_spanning_cells(
+    region: LayoutRegion,
+    candidate: TableCandidate,
+    atom_catalog: dict[str, EvidenceAtom],
+    lines: tuple[LayoutLine, ...],
+) -> TableCandidate | None:
+    spanning = [cell for cell in candidate.cells if cell.end_column - cell.start_column > 1]
+    if not spanning:
+        return None
+    anchors = _column_anchors(lines, None)
+    specs: list[tuple[int, int, int, int, tuple[str, ...], bool]] = []
+    changed = False
+    for cell in candidate.cells:
+        if cell.end_column - cell.start_column <= 1:
+            specs.append(
+                (
+                    cell.start_row,
+                    cell.end_row,
+                    cell.start_column,
+                    cell.end_column,
+                    cell.atom_ids,
+                    cell.column_header,
+                )
+            )
+            continue
+        assignments: dict[int, list[str]] = defaultdict(list)
+        for atom_id in cell.atom_ids:
+            atom = atom_catalog[atom_id]
+            if atom.bbox is None:
+                assignments[cell.start_column].append(atom_id)
+                continue
+            center = (atom.bbox.left + atom.bbox.right) / 2
+            column = min(
+                cell.end_column - 1,
+                max(cell.start_column, _nearest_anchor(center, anchors)),
+            )
+            assignments[column].append(atom_id)
+        if len(assignments) <= 1:
+            specs.append(
+                (
+                    cell.start_row,
+                    cell.end_row,
+                    cell.start_column,
+                    cell.end_column,
+                    cell.atom_ids,
+                    cell.column_header,
+                )
+            )
+            continue
+        changed = True
+        for column in range(cell.start_column, cell.end_column):
+            specs.append(
+                (
+                    cell.start_row,
+                    cell.end_row,
+                    column,
+                    column + 1,
+                    tuple(assignments[column]),
+                    cell.column_header,
+                )
+            )
+    if not changed:
+        return None
+    cells = _complete_cells(region.region_id, specs, candidate.row_count, candidate.column_count)
+    return _make_table_candidate(
+        region,
+        row_count=candidate.row_count,
+        column_count=candidate.column_count,
+        cells=cells,
+        score=max(0.0, candidate.score - 0.06),
+        features={**candidate.features, "split_boundary_variant": 0.76},
+    )
+
+
+def _make_table_candidate(
+    region: LayoutRegion,
+    *,
+    row_count: int,
+    column_count: int,
+    cells: tuple[TableCellCandidate, ...],
+    score: float,
+    features: dict[str, float],
+) -> TableCandidate:
+    candidate_id = make_candidate_id(
+        "table",
+        region.region_id,
+        {
+            "row_count": row_count,
+            "column_count": column_count,
+            "cells": cells,
+        },
+    )
+    return TableCandidate(
+        candidate_id=candidate_id,
+        region_id=region.region_id,
+        row_count=row_count,
+        column_count=column_count,
+        cells=cells,
+        atom_ids=region.atom_ids,
+        score=score,
+        features=features,
+    )
+
+
+def _nearest_anchor(position: float, anchors: tuple[float, ...]) -> int:
+    return min(range(len(anchors)), key=lambda index: (abs(anchors[index] - position), index))
+
+
+def _vertical_overlap(first: SourceBox, second: SourceBox) -> bool:
+    return min(first.top, second.top) > max(first.bottom, second.bottom)
+
+
+def _box_overlap_area(first: SourceBox, second: SourceBox | None) -> float:
+    if second is None:
+        return 0.0
+    return max(0.0, min(first.right, second.right) - max(first.left, second.left)) * max(
+        0.0,
+        min(first.top, second.top) - max(first.bottom, second.bottom),
+    )
 
 
 def _bounded_topological_orders(
