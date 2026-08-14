@@ -1095,14 +1095,7 @@ def _semantic_repair_diagnostic(document: ParsedDocument) -> str:
         applied = 0
         rejected = 0
     else:
-        if repair.outcome == "reused":
-            attempts = 0
-        elif repair.outcome == "applied" or (
-            repair.outcome == "degraded" and repair.provider_error_code and codes
-        ):
-            attempts = len(codes) + 1
-        else:
-            attempts = len(codes) or 1
+        attempts = 0 if repair.outcome == "reused" else 2 if codes else 1
         provider = _safe_diagnostic_token(repair.provider)
         model = _safe_diagnostic_token(repair.model)
         applied = len(repair.applied_orders)

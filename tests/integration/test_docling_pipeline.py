@@ -339,6 +339,7 @@ class DetailedRejectingPlanner:
                 provider_error_code=None,
                 validation_codes=[
                     "SEMANTIC_REPAIR_MISSING_SPAN",
+                    "SEMANTIC_REPAIR_MISSING_SPAN",
                     "SEMANTIC_REPAIR_ORDER_INVALID",
                 ],
                 applied_orders=[],
@@ -1641,6 +1642,7 @@ def test_semantic_structure_degraded_finding_includes_safe_repair_diagnostics(
     assert "pages=1" in specific.message
     assert (
         "validation_codes=SEMANTIC_REPAIR_MISSING_SPAN,"
+        "SEMANTIC_REPAIR_MISSING_SPAN,"
         "SEMANTIC_REPAIR_ORDER_INVALID"
     ) in specific.message
     assert "provider=fake" in specific.message

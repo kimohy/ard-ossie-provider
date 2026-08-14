@@ -20,6 +20,8 @@ from ard_ossie.llm import (
 from ard_ossie.semantic.models import (
     ExtractionMode,
     NativeDocument,
+    NativeTable,
+    NativeTableCell,
     RepairPlan,
     SemanticStructureRepairRecord,
     SourceBox,
@@ -47,7 +49,11 @@ class RecordingProvider:
         capabilities_error: Exception | None = None,
     ) -> None:
         self.response = response
-        self.responses = [deepcopy(item) for item in responses] if responses else None
+        self.responses = (
+            [item if isinstance(item, Exception) else deepcopy(item) for item in responses]
+            if responses
+            else None
+        )
         self.error = error
         self.capabilities_error = capabilities_error
         self.calls: list[dict[str, object]] = []
@@ -78,7 +84,10 @@ class RecordingProvider:
             raise self.error
         if self.responses is not None:
             assert self.responses
-            return deepcopy(self.responses.pop(0))
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return deepcopy(response)
         assert self.response is not None
         return deepcopy(self.response)
 
@@ -179,6 +188,73 @@ def unresolved_fixture() -> tuple[NativeDocument, StructureDocument, tuple[str, 
         )
     )
     return native, skeleton, tuple(item.span_id for item in spans)
+
+
+def multipage_fixture() -> tuple[NativeDocument, StructureDocument, tuple[str, ...]]:
+    spans = (
+        span(0, "Page 1 heading", page=1),
+        span(1, "Page 1 body", page=1),
+        span(2, "Page 2 heading", page=2),
+        span(3, "Page 2 body", page=2),
+    )
+    native = NativeDocument(
+        source_hash=SOURCE_HASH,
+        extraction_mode=ExtractionMode.PDF_EMBEDDED,
+        page_count=2,
+        parser_versions={"pdf": "fixture-v1"},
+        spans=spans,
+        groups=(),
+        tables=(),
+    )
+    skeleton = StructureDocument(
+        blocks=(
+            StructureBlock(
+                kind="paragraph",
+                order=0,
+                page=1,
+                bbox=None,
+                text_hint="p1",
+            ),
+            StructureBlock(
+                kind="paragraph",
+                order=1,
+                page=2,
+                bbox=None,
+                text_hint="p2",
+            ),
+        )
+    )
+    return native, skeleton, tuple(item.span_id for item in spans)
+
+
+def three_page_fixture() -> tuple[NativeDocument, StructureDocument, tuple[str, ...]]:
+    native, skeleton, _span_ids = multipage_fixture()
+    extra_spans = (
+        span(4, "Page 3 heading", page=3),
+        span(5, "Page 3 body", page=3),
+    )
+    native = NativeDocument(
+        source_hash=SOURCE_HASH,
+        extraction_mode=ExtractionMode.PDF_EMBEDDED,
+        page_count=3,
+        parser_versions=native.parser_versions,
+        spans=(*native.spans, *extra_spans),
+        groups=(),
+        tables=(),
+    )
+    skeleton = StructureDocument(
+        blocks=(
+            *skeleton.blocks,
+            StructureBlock(
+                kind="paragraph",
+                order=2,
+                page=3,
+                bbox=None,
+                text_hint="p3",
+            ),
+        )
+    )
+    return native, skeleton, tuple(item.span_id for item in native.spans)
 
 
 def repair_block(
@@ -320,6 +396,241 @@ def test_valid_repair_uses_only_allowlisted_spans() -> None:
     assert application.record.ordered_span_hashes == [
         item.text_hash for item in native.spans
     ]
+
+
+def test_page_evidence_batches_merge_into_one_globally_ordered_plan() -> None:
+    native, skeleton, span_ids = multipage_fixture()
+    provider = RecordingProvider(
+        responses=[
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=40,
+                        span_ids=list(span_ids[:2]),
+                    )
+                ]
+            },
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=7,
+                        span_ids=list(span_ids[2:]),
+                    )
+                ]
+            },
+        ]
+    )
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native,
+        skeleton,
+        span_ids,
+        trusted_record=None,
+    )
+
+    assert application.record.outcome == "applied"
+    assert application.record.plan is not None
+    assert [block.order for block in application.record.plan.blocks] == [0, 1]
+    assert [
+        span_id
+        for block in application.record.plan.blocks
+        for span_id in block.span_ids
+    ] == list(span_ids)
+    assert len(provider.calls) == 2
+    payloads = [json.loads(call["messages"][1]["content"]) for call in provider.calls]
+    assert [
+        [item["span_id"] for item in payload["unresolved_spans"]]
+        for payload in payloads
+    ] == [list(span_ids[:2]), list(span_ids[2:])]
+    assert [
+        [hint["page"] for hint in payload["structural_hints"]]
+        for payload in payloads
+    ] == [[1], [2]]
+
+    reuse_provider = RecordingProvider({"blocks": []})
+    reused = SemanticStructureRepairPlanner(reuse_provider).repair(
+        native,
+        skeleton,
+        span_ids,
+        trusted_record=application.record,
+    )
+    assert reuse_provider.calls == []
+    assert reused.record.outcome == "reused"
+    assert reused.record.plan_hash == application.record.plan_hash
+    assert reused.blocks == application.blocks
+
+
+def test_native_table_connects_page_evidence_into_one_batch() -> None:
+    native, skeleton, span_ids = multipage_fixture()
+    table = NativeTable(
+        order=0,
+        row_count=2,
+        column_count=2,
+        cells=tuple(
+            NativeTableCell(
+                start_row=index // 2,
+                end_row=index // 2 + 1,
+                start_column=index % 2,
+                end_column=index % 2 + 1,
+                span_ids=(span_id,),
+                column_header=index < 2,
+            )
+            for index, span_id in enumerate(span_ids)
+        ),
+    )
+    native = native.model_copy(update={"tables": (table,)})
+    provider = RecordingProvider(valid_table_plan(span_ids))
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native,
+        skeleton,
+        span_ids,
+        trusted_record=None,
+    )
+
+    assert application.record.outcome == "applied"
+    assert len(provider.calls) == 1
+    assert isinstance(application.blocks[0], TableBlock)
+
+
+def test_only_invalid_evidence_batch_is_retried() -> None:
+    native, skeleton, span_ids = multipage_fixture()
+    provider = RecordingProvider(
+        responses=[
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=0,
+                        span_ids=list(span_ids[:2]),
+                    )
+                ]
+            },
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=0,
+                        span_ids=[span_ids[2]],
+                    )
+                ]
+            },
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=0,
+                        span_ids=list(span_ids[2:]),
+                    )
+                ]
+            },
+        ]
+    )
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native,
+        skeleton,
+        span_ids,
+        trusted_record=None,
+    )
+
+    assert len(provider.calls) == 3
+    assert application.record.outcome == "applied"
+    assert application.record.validation_codes == ["SEMANTIC_REPAIR_MISSING_SPAN"]
+    retry_payload = json.loads(provider.calls[2]["messages"][-1]["content"])
+    assert retry_payload["repair_retry"]["affected_span_ids"] == [span_ids[-1]]
+    first_payload = json.loads(provider.calls[0]["messages"][1]["content"])
+    assert [
+        item["span_id"] for item in first_payload["unresolved_spans"]
+    ] == list(span_ids[:2])
+
+
+def test_second_invalid_batch_response_rejects_all_batches() -> None:
+    native, skeleton, span_ids = multipage_fixture()
+    missing_page_2 = {
+        "blocks": [
+            repair_block(
+                kind="paragraph",
+                order=0,
+                span_ids=[span_ids[2]],
+            )
+        ]
+    }
+    provider = RecordingProvider(
+        responses=[
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=0,
+                        span_ids=list(span_ids[:2]),
+                    )
+                ]
+            },
+            missing_page_2,
+            missing_page_2,
+        ]
+    )
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native,
+        skeleton,
+        span_ids,
+        trusted_record=None,
+    )
+
+    assert len(provider.calls) == 3
+    assert application.blocks == ()
+    assert application.record.outcome == "rejected"
+    assert application.record.validation_codes == [
+        "SEMANTIC_REPAIR_MISSING_SPAN",
+        "SEMANTIC_REPAIR_MISSING_SPAN",
+    ]
+
+
+def test_provider_failure_in_one_batch_discards_valid_siblings() -> None:
+    native, skeleton, span_ids = three_page_fixture()
+    provider = RecordingProvider(
+        responses=[
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=0,
+                        span_ids=list(span_ids[:2]),
+                    )
+                ]
+            },
+            {
+                "blocks": [
+                    repair_block(
+                        kind="paragraph",
+                        order=0,
+                        span_ids=[span_ids[2]],
+                    )
+                ]
+            },
+            ProviderExecutionError(
+                "LLM_PROVIDER_TIMEOUT",
+                kind=ProviderFailureKind.TRANSIENT,
+            ),
+        ]
+    )
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native,
+        skeleton,
+        span_ids,
+        trusted_record=None,
+    )
+
+    assert len(provider.calls) == 3
+    assert application.blocks == ()
+    assert application.record.outcome == "degraded"
+    assert application.record.validation_codes == ["SEMANTIC_REPAIR_MISSING_SPAN"]
+    assert application.record.provider_error_code == "LLM_PROVIDER_TIMEOUT"
 
 
 def test_raw_provider_llm_result_repair_plan_applies_blocks() -> None:
@@ -640,25 +951,29 @@ def test_repeated_page_edge_exclusions_are_independently_verified() -> None:
         tables=(),
     )
     span_ids = tuple(item.span_id for item in spans)
-    response = {
-        "blocks": [
-            repair_block(
-                kind="exclude",
-                order=index,
-                span_ids=[span_id],
-                exclusion_kind="page_header",
-            )
-            for index, span_id in enumerate(span_ids)
-        ]
-    }
+    responses = [
+        {
+            "blocks": [
+                repair_block(
+                    kind="exclude",
+                    order=index,
+                    span_ids=[span_id],
+                    exclusion_kind="page_header",
+                )
+            ]
+        }
+        for index, span_id in enumerate(span_ids)
+    ]
+    provider = RecordingProvider(responses=responses)
 
-    application = SemanticStructureRepairPlanner(RecordingProvider(response)).repair(
+    application = SemanticStructureRepairPlanner(provider).repair(
         native, StructureDocument(blocks=()), span_ids, trusted_record=None
     )
 
     assert application.blocks == ()
     assert application.record.outcome == "applied"
     assert application.record.validation_codes == []
+    assert len(provider.calls) == 3
 
 
 def test_provider_error_is_recorded_without_raising() -> None:
