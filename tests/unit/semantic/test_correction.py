@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 
 import pytest
 
 from ard_ossie.ingestion import SourceFile, SourceRole
+from ard_ossie.llm import LLMMetadata, LLMResult, LLMTextPart
 from ard_ossie.semantic.models import (
     ExtractionMode,
     NativeDocument,
@@ -250,6 +252,126 @@ def test_incomplete_document_evidence_rejects_all_correction_before_provider(
     assert application.document == native
     assert application.warning_codes == ("SEMANTIC_OCR_CORRECTION_EVIDENCE_UNAVAILABLE",)
     assert application.audits == ()
+
+
+@pytest.mark.parametrize("extraction_mode", [ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR])
+def test_pdf_extraction_modes_receive_the_same_image_grounded_correction(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    extraction_mode: ExtractionMode,
+) -> None:
+    from ard_ossie.semantic import correction
+
+    payload = b"%PDF-1.7 fixture"
+    source_hash = hashlib.sha256(payload).hexdigest()
+    path = tmp_path / "semantic.pdf"
+    path.write_bytes(payload)
+    source = SourceFile(
+        role=SourceRole.SEMANTIC_DOCUMENT,
+        path=path,
+        relative_path="semantic/semantic.pdf",
+        sha256=source_hash,
+        size_bytes=len(payload),
+        snapshot=payload,
+    )
+    text = "개 인정보"
+    span = SourceSpan(
+        span_id=make_span_id(source_hash, 0),
+        ordinal=0,
+        page=1,
+        bbox=SourceBox(left=0.1, bottom=0.2, right=0.8, top=0.3),
+        text=text,
+        text_hash=hashlib.sha256(text.encode()).hexdigest(),
+    )
+    native = NativeDocument(
+        source_hash=source_hash,
+        extraction_mode=extraction_mode,
+        page_count=1,
+        parser_versions={"fixture": "1"},
+        spans=(span,),
+        groups=(),
+        tables=(),
+    )
+
+    class CorrectingProvider:
+        system_prompt = ""
+
+        def capabilities(self) -> dict[str, object]:
+            return {
+                "provider": "openai_compatible",
+                "model": "test-model",
+                "vision": True,
+            }
+
+        def generate_multimodal_structured(self, **kwargs: object) -> LLMResult:
+            messages = kwargs["messages"]
+            assert isinstance(messages, list)
+            system_part = messages[0].content[0]
+            user_part = messages[1].content[0]
+            assert isinstance(system_part, LLMTextPart)
+            assert isinstance(user_part, LLMTextPart)
+            self.system_prompt = system_part.text
+            request = json.loads(user_part.text)
+            return LLMResult(
+                text="",
+                structured={
+                    "request_hash": request["request_hash"],
+                    "patches": [
+                        {
+                            "span_id": span.span_id,
+                            "original_text_hash": span.text_hash,
+                            "corrected_text": "개인정보",
+                            "correction_kind": "spacing",
+                            "bbox": span.bbox.model_dump(mode="json"),
+                            "confidence": 0.99,
+                        }
+                    ],
+                },
+                metadata=LLMMetadata(
+                    profile="test-profile",
+                    provider="openai_compatible",
+                    model="test-model",
+                    elapsed_ms=1,
+                ),
+            )
+
+    provider = CorrectingProvider()
+    monkeypatch.setattr(correction, "render_pdf_page_images", lambda *_args, **_kwargs: (b"png",))
+
+    application = correction.OcrCorrectionPlanner(provider).correct(source, native)
+
+    assert application.document.spans[0].text == "개인정보"
+    assert application.warning_codes == ()
+    assert application.audits[0].outcome == "applied"
+    assert "extracted PDF span catalog" in provider.system_prompt
+    assert "OCR span catalog" not in provider.system_prompt
+
+
+def test_docx_extraction_skips_visual_correction() -> None:
+    from ard_ossie.semantic import correction
+
+    native = NativeDocument(
+        source_hash=SOURCE_HASH,
+        extraction_mode=ExtractionMode.DOCX_XML,
+        page_count=0,
+        parser_versions={},
+        spans=(_span(),),
+        groups=(),
+        tables=(),
+    )
+
+    class NeverProvider:
+        def capabilities(self) -> dict[str, object]:
+            raise AssertionError("DOCX must not request visual correction")
+
+    application = correction.OcrCorrectionPlanner(NeverProvider()).correct(
+        object(),  # type: ignore[arg-type]
+        native,
+    )
+
+    assert application.document == native
+    assert application.audits == ()
+    assert application.warning_codes == ()
 
 
 def test_repair_prompt_binding_controls_trusted_reuse() -> None:

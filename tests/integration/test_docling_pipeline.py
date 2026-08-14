@@ -589,7 +589,7 @@ def table_repair_block(
     return repair, semantic
 
 
-def test_semantic_pdf_always_uses_full_page_ocr_even_with_embedded_text(
+def test_semantic_pdf_prefers_embedded_text_and_still_applies_visual_correction(
     tmp_path: Path,
 ) -> None:
     source = semantic_pdf_source(tmp_path)
@@ -611,8 +611,8 @@ def test_semantic_pdf_always_uses_full_page_ocr_even_with_embedded_text(
 
     assert parsed.markdown == (
         "# 개인정보\n\n"
-        "- 목록 항목\n\n"
-        "설명 문단\n\n"
+        "- 목록항목\n\n"
+        "설명문단\n\n"
         "| 항목 | 값 |\n"
         "| --- | --- |\n"
         "| 유형 | 필수 |\n"
@@ -627,25 +627,25 @@ def test_semantic_pdf_always_uses_full_page_ocr_even_with_embedded_text(
     }
     assert [item.excerpt for item in parsed.evidence] == [
         "개인정보",
-        "목록 항목",
-        "설명 문단",
+        "목록항목",
+        "설명문단",
         "항목",
         "값",
         "유형",
         "필수",
     ]
-    assert converter.converted_paths == []
-    assert [Path(item).suffix for item in full_page_ocr_converter.converted_paths] == [
+    assert [Path(item).suffix for item in converter.converted_paths] == [
         source.path.suffix
     ]
     assert all(
         Path(item) != source.path and not Path(item).exists()
-        for item in full_page_ocr_converter.converted_paths
+        for item in converter.converted_paths
     )
+    assert full_page_ocr_converter.converted_paths == []
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.source_text_coverage == 1.0
-    assert parsed.semantic_fidelity.extraction_mode is ExtractionMode.OCR
-    assert parsed.semantic_fidelity.status == "WARN"
+    assert parsed.semantic_fidelity.extraction_mode is ExtractionMode.PDF_EMBEDDED
+    assert parsed.semantic_fidelity.status == "PASS"
     assert parsed.semantic_fidelity.paragraph_count == 1
     assert parsed.semantic_fidelity.degraded_block_count == 0
     assert parsed.semantic_fidelity.table_results[0].matched_cell_count == 4
@@ -712,7 +712,7 @@ def test_partial_pdf_uses_one_whole_document_full_page_ocr_catalog(
     assert parsed.semantic_fidelity is not None
     assert parsed.semantic_fidelity.extraction_mode is ExtractionMode.OCR
     assert parsed.semantic_fidelity.status == "WARN"
-    assert pdfium.document.closed is False
+    assert pdfium.document.closed is True
 
 
 def test_docling_adapter_uses_full_page_ocr_when_embedded_pdf_cannot_open(
@@ -1457,8 +1457,9 @@ def test_full_page_ocr_converter_forces_ocr_for_every_pdf_page(
 
     captured: dict[str, object] = {}
 
-    class FakeOcrAutoOptions:
-        def __init__(self, *, force_full_page_ocr: bool) -> None:
+    class FakeEasyOcrOptions:
+        def __init__(self, *, lang: list[str], force_full_page_ocr: bool) -> None:
+            self.lang = lang
             self.force_full_page_ocr = force_full_page_ocr
 
     class FakePipelineOptions:
@@ -1475,7 +1476,7 @@ def test_full_page_ocr_converter_forces_ocr_for_every_pdf_page(
             captured.update(format_options)
 
     monkeypatch.setattr(base_models, "InputFormat", SimpleNamespace(PDF="pdf"))
-    monkeypatch.setattr(pipeline_options, "OcrAutoOptions", FakeOcrAutoOptions)
+    monkeypatch.setattr(pipeline_options, "EasyOcrOptions", FakeEasyOcrOptions)
     monkeypatch.setattr(pipeline_options, "PdfPipelineOptions", FakePipelineOptions)
     monkeypatch.setattr(document_converter, "DocumentConverter", CapturingConverter)
     monkeypatch.setattr(document_converter, "PdfFormatOption", FakePdfFormatOption)
@@ -1485,6 +1486,7 @@ def test_full_page_ocr_converter_forces_ocr_for_every_pdf_page(
     options = captured["pdf"].pipeline_options
     assert options.do_ocr is True
     assert options.ocr_options.force_full_page_ocr is True
+    assert options.ocr_options.lang == ["ko", "en"]
 
 
 def test_docling_adapter_records_item_evidence_without_page_provenance(

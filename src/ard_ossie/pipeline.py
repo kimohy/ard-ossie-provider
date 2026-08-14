@@ -72,6 +72,7 @@ from ard_ossie.renderers import (
 )
 from ard_ossie.semantic.correction import OcrCorrectionPlanner
 from ard_ossie.semantic.models import (
+    ExtractionMode,
     SemanticFidelityReport,
     SemanticStructureRepairRecord,
 )
@@ -1053,20 +1054,62 @@ def _semantic_hard_findings(document: ParsedDocument) -> list[QualityFinding]:
     fidelity = document.semantic_fidelity
     if fidelity is None:
         return []
+    findings: list[QualityFinding] = []
     if (
         fidelity.status == "FAIL"
         or fidelity.unmatched_span_count > 0
         or fidelity.duplicated_span_count > 0
         or fidelity.source_text_coverage < 1.0
     ):
-        return [
+        findings.append(
             QualityFinding(
                 code="SEMANTIC_FIDELITY_FAILED",
                 message="Semantic source text was lost or duplicated",
                 path="quality.semantic-fidelity.json",
             )
-        ]
-    return []
+        )
+    if fidelity.degraded_block_count > 0:
+        reasons = ",".join(sorted({item.reason for item in fidelity.degraded_blocks}))
+        findings.append(
+            QualityFinding(
+                code="SEMANTIC_STRUCTURE_DEGRADED",
+                message=(
+                    f"Semantic structure remains unresolved: {reasons} "
+                    f"({fidelity.degraded_block_count} block(s))"
+                ),
+                path="generated.data-semantic.md",
+            )
+        )
+    if fidelity.extraction_mode in {
+        ExtractionMode.PDF_EMBEDDED,
+        ExtractionMode.OCR,
+    }:
+        expected_pages = set(range(1, fidelity.page_count + 1))
+        audited_pages = {item.page for item in fidelity.ocr_corrections}
+        failed_outcomes = {
+            item.outcome
+            for item in fidelity.ocr_corrections
+            if item.outcome not in {"applied", "reused"}
+        }
+        if (
+            fidelity.warning_codes
+            or fidelity.ocr_correction_rejected_count > 0
+            or audited_pages != expected_pages
+            or failed_outcomes
+        ):
+            details = [*fidelity.warning_codes, *sorted(failed_outcomes)]
+            if audited_pages != expected_pages:
+                missing = ",".join(str(page) for page in sorted(expected_pages - audited_pages))
+                details.append(f"missing_pages={missing or 'none'}")
+            findings.append(
+                QualityFinding(
+                    code="SEMANTIC_VISUAL_CORRECTION_FAILED",
+                    message="Semantic PDF visual correction is incomplete or rejected: "
+                    + ", ".join(details),
+                    path="quality.semantic-fidelity.json",
+                )
+            )
+    return findings
 
 
 def _completeness_score(config: ProductConfig, tables: list[TableIR]) -> float:
