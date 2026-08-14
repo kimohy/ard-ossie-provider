@@ -1,0 +1,50 @@
+{
+  "artifact_hashes": {
+    "data-dictionary.json": "20a2800a10aeb5b81cce854debf146b3aaad38e26340481332866fddb9d8464c",
+    "data-product.md": "e2a65cd43922ed84ee1edf722d35c8b7714656b2664950898fb810ac9c397848",
+    "data-semantic.md": "bf4599235143cd814eaad771812d8a843006aa485101411526b3c73b0b0db4d8",
+    "ossie-model.json": "01d348bdff2677f394f11e22a2fb713e45e370983a0e78aff9f5585ea44a7f8b",
+    "source-manifest.json": "d287d85ca10aa835addc1d40c62eb2b08ddcee1ef6abd52feec75419fa31084a"
+  },
+  "completeness": 1.0,
+  "hard_errors": [],
+  "llm_provenance": {
+    "elapsed_ms": 38593,
+    "finish_reason": "stop",
+    "input_tokens": 54251,
+    "model": "gpt-5.6-terra",
+    "output_tokens": 6711,
+    "profile": "openai-compatible-default",
+    "provider": "openai_compatible",
+    "repair_count": 0,
+    "request_id": "chatcmpl-ECcf0KtJPSG9T5CmdfjL6Yxq4tqTP",
+    "retry_count": 0
+  },
+  "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+  "product_version": 1,
+  "quality_artifact_hashes": {
+    "duplicate-report.json": "535b997b3c9014bc22126b98d27945767875da2050cccc3c48a410ec06fdc5da",
+    "impact-report.json": "5b20e06510c68c19a986361feb899885e4bc8827af0fcf4e969d97d02a7e6755",
+    "llm-suggestions.json": "84a2723d7ed9eaa3afefdd6d6b8e51689895420aaddaa875b9951237a4ddcccd",
+    "semantic-fidelity.json": "d55679a6227a48de4fbaa65f785fb82ee7e3627013eeba1c091c86d16194a839",
+    "version-report.json": "ef662a8f5321ae8967cea74b6243429df1a4c4446ec6be3157b589ed5e3cee5e"
+  },
+  "status": "WARN",
+  "warnings": [
+    {
+      "code": "SEMANTIC_OCR_CORRECTION_RECOGNITION_INVALID",
+      "message": "Semantic OCR correction requires review",
+      "path": "sources.semantic_document"
+    },
+    {
+      "code": "SEMANTIC_OCR_CORRECTION_TEXT_GROWTH_EXCEEDED",
+      "message": "Semantic OCR correction requires review",
+      "path": "sources.semantic_document"
+    },
+    {
+      "code": "SEMANTIC_STRUCTURE_DEGRADED",
+      "message": "Unresolved semantic structure was preserved losslessly",
+      "path": "generated.data-semantic.md"
+    }
+  ]
+}

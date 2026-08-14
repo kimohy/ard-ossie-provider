@@ -1,0 +1,1138 @@
+{
+  "metrics": [
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_campaign"
+      ],
+      "description": "Distinct count of campaigns.",
+      "evidence": [
+        {
+          "excerpt": "COUNT(DISTINCT campaign_id)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.5871975574429188,
+              "left": 0.478515625,
+              "right": 0.650390625,
+              "top": 0.6003023911806871
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "COUNT(DISTINCT campaign_id)",
+      "name": "Campaign Count",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Campaigns",
+        "Distinct Campaigns"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_campaign"
+      ],
+      "description": "Distinct count of campaigns whose status is Active.",
+      "evidence": [
+        {
+          "excerpt": "COUNT(DISTINCT campaign_id) WHERE campaign_status = Active",
+          "locator": {
+            "bbox": {
+              "bottom": 0.5413306136725325,
+              "left": 0.4778645833333333,
+              "right": 0.693359375,
+              "top": 0.5660282224918456
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "COUNT(DISTINCT CASE WHEN campaign_status = 'Active' THEN campaign_id END)",
+      "name": "Active Campaign Count",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Active Campaigns"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_creative"
+      ],
+      "description": "Distinct count of creatives.",
+      "evidence": [
+        {
+          "excerpt": "COUNT(DISTINCT creative_id)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.5201612787214593,
+              "left": 0.4778645833333333,
+              "right": 0.6380208333333334,
+              "top": 0.5317540024266099
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "COUNT(DISTINCT creative_id)",
+      "name": "Creative Count",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Creatives",
+        "Distinct Creatives"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Total delivered impressions.",
+      "evidence": [
+        {
+          "excerpt": "SUM(impression_count)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.483870946196996,
+              "left": 0.4772135416666667,
+              "right": 0.607421875,
+              "top": 0.49899189239399205
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(impression_count)",
+      "name": "Impressions",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Impression Count"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Total engagements.",
+      "evidence": [
+        {
+          "excerpt": "SUM(engagement_count)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.4495967261317603,
+              "left": 0.4778645833333333,
+              "right": 0.6165364583333334,
+              "top": 0.46471772370515047
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(engagement_count)",
+      "name": "Engagements",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Engagement Count"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Engagements divided by impressions, protected against a zero denominator.",
+      "evidence": [
+        {
+          "excerpt": "SUM(engagement_count) / NULLIF(SUM(impression_count),0)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.40372983373776833,
+              "left": 0.4772135416666667,
+              "right": 0.6608072916666666,
+              "top": 0.4304435036399148
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(engagement_count) / NULLIF(SUM(impression_count), 0)",
+      "name": "Engagement Rate",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Engagement Percentage"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Total spend units.",
+      "evidence": [
+        {
+          "excerpt": "SUM(spend_units)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.875504028114807,
+              "left": 0.4778645833333333,
+              "right": 0.5774739583333334,
+              "top": 0.8891129028114807
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(spend_units)",
+      "name": "Spend Units",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Spend"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_delivery"
+      ],
+      "description": "Spend units per engagement, protected against a zero denominator.",
+      "evidence": [
+        {
+          "excerpt": "SUM(spend_units) / NULLIF(SUM(engagement_count),0)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8281249871559015,
+              "left": 0.4778645833333333,
+              "right": 0.6705729166666666,
+              "top": 0.8548387084344421
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(spend_units) / NULLIF(SUM(engagement_count), 0)",
+      "name": "Spend per Engagement",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Cost per Engagement",
+        "CPE"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_outcome"
+      ],
+      "description": "Total interest signals.",
+      "evidence": [
+        {
+          "excerpt": "SUM(interest_signal_count)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8074596674755367,
+              "left": 0.4778645833333333,
+              "right": 0.6256510416666666,
+              "top": 0.8205645140574034
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(interest_signal_count)",
+      "name": "Interest Signals",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Interest Signal Count"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_outcome"
+      ],
+      "description": "Total action signals.",
+      "evidence": [
+        {
+          "excerpt": "SUM(action_signal_count)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.7857862787214595,
+              "left": 0.4778645833333333,
+              "right": 0.6171875,
+              "top": 0.7988911253033262
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(action_signal_count)",
+      "name": "Action Signals",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Action Signal Count"
+      ]
+    },
+    {
+      "confidence": 0.99,
+      "dataset_names": [
+        "marketing_outcome"
+      ],
+      "description": "Total modeled-value units.",
+      "evidence": [
+        {
+          "excerpt": "SUM(modeled_value_units)",
+          "locator": {
+            "bbox": {
+              "bottom": 0.7303427237051504,
+              "left": 0.478515625,
+              "right": 0.6256510416666666,
+              "top": 0.7434475574429187
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 5,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "expression": "SUM(modeled_value_units)",
+      "name": "Modeled Value Units",
+      "status": "ai_suggested",
+      "synonyms": [
+        "Synthetic Value",
+        "Modeled Value"
+      ]
+    }
+  ],
+  "product_facts": [
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "실제 운영 데이터 없이 캠페인, 소재, 집행, 성과 구조를 설명하는 가상 마케팅 광고 합성 데이터",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 60,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "description",
+      "value": "실제 운영 데이터 없이 캠페인, 소재, 집행, 성과 구조를 설명하는 가상 마케팅 광고 합성 데이터"
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "Marketing Insight",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 51,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "source_name",
+      "value": "Marketing Insight"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "정형",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 53,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "data_type",
+      "value": "정형"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 분석 저장소",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 55,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "storage_location",
+      "value": "가상 분석 저장소"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "가상 캠페인"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "광고 소재"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "집행 신호"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 57,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "tag",
+      "value": "성과 신호"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "Level 4 (Gold)",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 83,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "ai_readiness",
+      "value": "Level 4 (Gold)"
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "Synthetic Lab",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 86,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "owner",
+      "value": "Synthetic Lab"
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "가상 담당자/HE Lab(Synthetic Lab)",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 88,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "contact",
+      "value": "가상 담당자/HE Lab(Synthetic Lab)"
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "손님 이상",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 35,
+            "level": 6
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "access",
+      "value": "손님 이상"
+    },
+    {
+      "confidence": 0.97,
+      "evidence": [
+        {
+          "excerpt": "Y",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 116,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        },
+        {
+          "excerpt": "Y",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 118,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        },
+        {
+          "excerpt": "Y",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 120,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+        }
+      ],
+      "kind": "quality",
+      "value": "접근 권한 관리, 운영 관리, 메타 데이터 보유 여부가 모두 Y로 표시됨"
+    }
+  ],
+  "suggestions": [
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "synthetic_workspace.marketing_campaign",
+          "locator": {
+            "bbox": {
+              "bottom": 0.570060473098498,
+              "left": 0.08723958333333333,
+              "right": 0.3157552083333333,
+              "top": 0.5846773911806871
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        },
+        {
+          "excerpt": "Initiative",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8765120971885193,
+              "left": 0.6575520833333334,
+              "right": 0.7076822916666666,
+              "top": 0.8891129028114807
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7cad-9f99-382b8fe79d53.description",
+      "status": "ai_suggested",
+      "value": "Campaign initiatives and their objectives, media channels, market zones, planning attributes, and status."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "campaign_id",
+          "locator": {
+            "bbox": {
+              "bottom": 0.6118951405740346,
+              "left": 0.619140625,
+              "right": 0.6953125,
+              "top": 0.6290322506066525
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 3,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7cad-9f99-382b8fe79d53.columns.col_019ffe43-5838-7d35-bc7a-34bc386aceb8.description",
+      "status": "ai_suggested",
+      "value": "Unique identifier for a marketing campaign."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "Goal Group",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8321572506066525,
+              "left": 0.658203125,
+              "right": 0.724609375,
+              "top": 0.8472782224918455
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7cad-9f99-382b8fe79d53.columns.col_019ffe43-5838-7dcb-ad74-d3ddf021be9c.description",
+      "status": "ai_suggested",
+      "value": "Campaign objective group, such as Awareness, Interest, or Action."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "Media Group",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8114919309262876,
+              "left": 0.6575520833333334,
+              "right": 0.732421875,
+              "top": 0.8251007927788628
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7cad-9f99-382b8fe79d53.columns.col_019ffe43-5838-7a24-a065-839d04775470.description",
+      "status": "ai_suggested",
+      "value": "Media channel group, such as Search, Social, Video, or Display."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "synthetic_workspace.marketing_creative",
+          "locator": {
+            "bbox": {
+              "bottom": 0.5504032224918456,
+              "left": 0.087890625,
+              "right": 0.3040364583333333,
+              "top": 0.5625
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        },
+        {
+          "excerpt": "Variant",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8548387084344421,
+              "left": 0.6575520833333334,
+              "right": 0.701171875,
+              "top": 0.8669354730984979
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-716b-9a77-e2a14c1a28e9.description",
+      "status": "ai_suggested",
+      "value": "Creative variants associated with marketing campaigns, including format, message theme, and review status."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "creative_id",
+          "locator": {
+            "bbox": {
+              "bottom": 0.5498991686888416,
+              "left": 0.6341145833333334,
+              "right": 0.6966145833333334,
+              "top": 0.5635080562296139
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-716b-9a77-e2a14c1a28e9.columns.col_019ffe43-5838-74d8-90f7-155d18738aec.description",
+      "status": "ai_suggested",
+      "value": "Unique identifier for a creative variant."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "Creative Format",
+          "locator": {
+            "bbox": {
+              "bottom": 0.7691532224918455,
+              "left": 0.6588541666666666,
+              "right": 0.7473958333333334,
+              "top": 0.78125
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-716b-9a77-e2a14c1a28e9.columns.col_019ffe43-5838-73c8-9bba-d6f3093afe2f.description",
+      "status": "ai_suggested",
+      "value": "Creative format, such as Image, Short Video, or Text Card."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "synthetic_workspace.marketing_delivery",
+          "locator": {
+            "bbox": {
+              "bottom": 0.5277217775081544,
+              "left": 0.08854166666666667,
+              "right": 0.3033854166666667,
+              "top": 0.5408266112459228
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        },
+        {
+          "excerpt": "Serving",
+          "locator": {
+            "bbox": {
+              "bottom": 0.7106854730984979,
+              "left": 0.6575520833333334,
+              "right": 0.7018229166666666,
+              "top": 0.7268145012133049
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 2,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7e7f-b1ca-79772f066962.description",
+      "status": "ai_suggested",
+      "value": "Daily campaign-creative delivery serving data by audience cluster, including impressions, engagements, and spend."
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "event_date, campaign_id, creative_id",
+          "locator": {
+            "bbox": {
+              "bottom": 0.5161290024266099,
+              "left": 0.634765625,
+              "right": 0.7727864583333334,
+              "top": 0.5413306136725325
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7e7f-b1ca-79772f066962.columns.col_019ffe43-5838-704d-b841-09f5c2238738.description",
+      "status": "ai_suggested",
+      "value": "Date of the campaign and creative delivery event; part of the delivery table primary key."
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "Impressions",
+          "locator": {
+            "bbox": {
+              "bottom": 0.875504028114807,
+              "left": 0.6569010416666666,
+              "right": 0.7272135416666666,
+              "top": 0.8896169309262876
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 3,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7e7f-b1ca-79772f066962.columns.col_019ffe43-5838-76ea-8d1a-7be35ee8e39f.description",
+      "status": "ai_suggested",
+      "value": "Count of delivered impressions."
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "Engagements",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8533266112459228,
+              "left": 0.6575520833333334,
+              "right": 0.7356770833333334,
+              "top": 0.8669354730984979
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 3,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-7e7f-b1ca-79772f066962.columns.col_019ffe43-5838-70e4-bdeb-d30b53c88fdf.description",
+      "status": "ai_suggested",
+      "value": "Count of engagements generated by delivery."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "synthetic_workspace.marketing_outcome",
+          "locator": {
+            "bbox": {
+              "bottom": 0.49395161124592274,
+              "left": 0.087890625,
+              "right": 0.3098958333333333,
+              "top": 0.5070564449836911
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        },
+        {
+          "excerpt": "Outcome Signal",
+          "locator": {
+            "bbox": {
+              "bottom": 0.7978830562296138,
+              "left": 0.658203125,
+              "right": 0.7486979166666666,
+              "top": 0.8114919309262876
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 3,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-756c-a524-347dbb2f2df4.description",
+      "status": "ai_suggested",
+      "value": "Daily campaign outcome signals, including interest and action signals, modeled value, and attribution window."
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "event_date, campaign_id",
+          "locator": {
+            "bbox": {
+              "bottom": 0.4934475574429188,
+              "left": 0.6354166666666666,
+              "right": 0.7708333333333334,
+              "top": 0.5070564449836911
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 1,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-756c-a524-347dbb2f2df4.columns.col_019ffe43-5838-74dc-b8fb-92e02573f084.description",
+      "status": "ai_suggested",
+      "value": "Date of the campaign outcome record; part of the outcome table primary key."
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "Interest Event",
+          "locator": {
+            "bbox": {
+              "bottom": 0.8205645140574034,
+              "left": 0.658203125,
+              "right": 0.736328125,
+              "top": 0.8326612787214595
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 3,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-756c-a524-347dbb2f2df4.columns.col_019ffe43-5838-71cd-bc0a-95728bc5160b.description",
+      "status": "ai_suggested",
+      "value": "Count of interest signals attributed to the campaign outcome."
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "Outcome Signal",
+          "locator": {
+            "bbox": {
+              "bottom": 0.7978830562296138,
+              "left": 0.658203125,
+              "right": 0.7486979166666666,
+              "top": 0.8114919309262876
+            },
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 3,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_019ffe43-5838-756c-a524-347dbb2f2df4.columns.col_019ffe43-5838-7f3b-974a-3666081cb812.description",
+      "status": "ai_suggested",
+      "value": "Count of action signals attributed to the campaign outcome."
+    }
+  ]
+}
