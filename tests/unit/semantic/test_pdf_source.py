@@ -280,6 +280,41 @@ def test_ocr_source_uses_one_authoritative_docling_catalog(tmp_path: Path) -> No
     assert native.tables[0].cells[0].span_ids == (native.spans[1].span_id,)
 
 
+def test_ocr_source_degrades_overlapping_table_cells_without_losing_text(
+    tmp_path: Path,
+) -> None:
+    cells = [
+        SimpleNamespace(
+            text=text,
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=0,
+            end_col_offset_idx=1,
+            column_header=True,
+            bbox=SimpleNamespace(l=left, b=0.0, r=right, t=50.0),
+        )
+        for text, left, right in (("첫 번째", 0.0, 50.0), ("두 번째", 50.0, 100.0))
+    ]
+    table = TableItem(cells)
+
+    class OverlappingTableDocument:
+        pages = {1: SimpleNamespace(size=SimpleNamespace(width=100.0, height=100.0))}
+
+        @staticmethod
+        def iterate_items():
+            yield table, 1
+
+    native = extract_ocr_native(semantic_pdf_source(tmp_path), OverlappingTableDocument())
+
+    assert native.tables == ()
+    assert [span.text for span in native.spans] == ["첫 번째", "두 번째"]
+    assert [group.kind for group in native.groups] == ["paragraph", "paragraph"]
+    assert [group.span_ids for group in native.groups] == [
+        (native.spans[0].span_id,),
+        (native.spans[1].span_id,),
+    ]
+
+
 def test_ocr_source_rejects_catalog_without_readable_text(tmp_path: Path) -> None:
     class EmptyDocument:
         @staticmethod
