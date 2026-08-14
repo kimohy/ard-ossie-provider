@@ -14,7 +14,7 @@ from ard_ossie.impact import ChangeSetRecord, ChangeSetStatus
 from ard_ossie.models import ProductRecord, StrictModel, TableRecord
 from ard_ossie.pipeline import QualityReport
 from ard_ossie.registry import Registry
-from ard_ossie.semantic.models import SemanticFidelityReport
+from ard_ossie.semantic.models import ExtractionMode, SemanticFidelityReport
 
 
 class ReleaseBlocked(ValueError):
@@ -318,11 +318,41 @@ def _verify_semantic_fidelity_snapshot(payload: bytes) -> SemanticFidelityReport
         fidelity = SemanticFidelityReport.model_validate_json(payload)
     except (ValidationError, ValueError) as error:
         raise ReleaseBlocked("SEMANTIC_FIDELITY_REPORT_INVALID") from error
-    if (
-        fidelity.status == "FAIL"
-        or fidelity.unmatched_span_count > 0
-        or fidelity.duplicated_span_count > 0
-        or fidelity.source_text_coverage < 1.0
-    ):
-        raise ReleaseBlocked("SEMANTIC_FIDELITY_GATE_FAILED")
+    reasons: list[str] = []
+    if fidelity.status == "FAIL":
+        reasons.append("status=FAIL")
+    if fidelity.unmatched_span_count > 0:
+        reasons.append(f"unmatched_spans={fidelity.unmatched_span_count}")
+    if fidelity.duplicated_span_count > 0:
+        reasons.append(f"duplicated_spans={fidelity.duplicated_span_count}")
+    if fidelity.source_text_coverage < 1.0:
+        reasons.append(f"source_text_coverage={fidelity.source_text_coverage}")
+    if fidelity.degraded_block_count > 0:
+        reasons.append(f"degraded_blocks={fidelity.degraded_block_count}")
+    if fidelity.extraction_mode in {
+        ExtractionMode.PDF_EMBEDDED,
+        ExtractionMode.OCR,
+    }:
+        expected_pages = set(range(1, fidelity.page_count + 1))
+        audited_pages = {item.page for item in fidelity.ocr_corrections}
+        failed_outcomes = sorted(
+            {
+                item.outcome
+                for item in fidelity.ocr_corrections
+                if item.outcome not in {"applied", "reused"}
+            }
+        )
+        if fidelity.warning_codes:
+            reasons.append("warning_codes=" + ",".join(fidelity.warning_codes))
+        if fidelity.ocr_correction_rejected_count > 0:
+            reasons.append(
+                f"rejected_corrections={fidelity.ocr_correction_rejected_count}"
+            )
+        if failed_outcomes:
+            reasons.append("correction_outcomes=" + ",".join(failed_outcomes))
+        if audited_pages != expected_pages:
+            missing = ",".join(str(page) for page in sorted(expected_pages - audited_pages))
+            reasons.append(f"missing_correction_pages={missing or 'none'}")
+    if reasons:
+        raise ReleaseBlocked("SEMANTIC_FIDELITY_GATE_FAILED: " + "; ".join(reasons))
     return fidelity

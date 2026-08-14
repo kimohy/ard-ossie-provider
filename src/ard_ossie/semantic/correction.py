@@ -36,7 +36,7 @@ from ard_ossie.semantic.models import (
     SourceSpan,
 )
 
-OCR_CORRECTION_PROMPT_VERSION = "semantic-ocr-correction-v1"
+OCR_CORRECTION_PROMPT_VERSION = "semantic-visual-correction-v2"
 OCR_RENDER_SCALE = 2.0
 MAX_OCR_PAGES = 200
 MAX_PAGE_PIXELS = 16_000_000
@@ -49,7 +49,8 @@ MAX_CHARACTER_CORRECTION_RATIO = 0.15
 MIN_CORRECTION_CONFIDENCE = 0.80
 
 _PROMPT = (
-    "Inspect the supplied page image and OCR span catalog. Return only sparse patches for "
+    "Inspect the supplied page image and extracted PDF span catalog. Return only sparse patches "
+    "for "
     "character-recognition or spacing errors that are visibly supported by the image. Do not "
     "summarize, paraphrase, translate, add, delete, reorder, or restructure content. Omit spans "
     "that need no correction and copy each span ID, original hash, and bounding box exactly."
@@ -238,7 +239,10 @@ class OcrCorrectionPlanner:
         trusted_fidelity: SemanticFidelityReport | None = None,
         pdfium: Any | None = None,
     ) -> OcrCorrectionApplication:
-        if native.extraction_mode is not ExtractionMode.OCR:
+        if native.extraction_mode not in {
+            ExtractionMode.PDF_EMBEDDED,
+            ExtractionMode.OCR,
+        }:
             return OcrCorrectionApplication(native, (), ())
         page_images = render_pdf_page_images(source, pdfium=pdfium)
         if len(page_images) != native.page_count:

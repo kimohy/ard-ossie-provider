@@ -243,7 +243,7 @@ def test_pipeline_preserves_authoritative_semantic_boundary_whitespace(tmp_path:
     )
 
 
-def test_pipeline_reports_blank_only_native_table_as_empty_semantic_document(
+def test_pipeline_blocks_blank_only_degraded_semantic_document(
     tmp_path: Path,
 ) -> None:
     product = create_product_fixture(tmp_path)
@@ -252,10 +252,15 @@ def test_pipeline_reports_blank_only_native_table_as_empty_semantic_document(
     document.add_table(rows=1, cols=1).cell(0, 0).text = " \t"
     document.save(semantic_path)
 
-    result = process_product(product, registry_root=tmp_path / "registry")
+    with pytest.raises(PipelineValidationError) as captured:
+        process_product(product, registry_root=tmp_path / "registry")
 
+    assert captured.value.report is not None
     assert "EMPTY_SEMANTIC_DOCUMENT" in {
-        finding.code for finding in result.quality_report.warnings
+        finding.code for finding in captured.value.report.warnings
+    }
+    assert "SEMANTIC_STRUCTURE_DEGRADED" in {
+        finding.code for finding in captured.value.report.hard_errors
     }
 
 
@@ -331,27 +336,47 @@ def test_pipeline_writes_and_hashes_semantic_repair_record(tmp_path: Path) -> No
     ).hexdigest()
 
 
-def test_pipeline_reports_semantic_ocr_correction_warning(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("fidelity", "expected_code"),
+    [
+        pytest.param(
+            pass_fidelity_report().model_copy(
+                update={
+                    "extraction_mode": ExtractionMode.OCR,
+                    "status": "WARN",
+                    "warning_codes": ["SEMANTIC_OCR_CORRECTION_UNAVAILABLE"],
+                }
+            ),
+            "SEMANTIC_VISUAL_CORRECTION_FAILED",
+            id="visual-correction-unavailable",
+        ),
+        pytest.param(
+            degraded_fidelity_report(),
+            "SEMANTIC_STRUCTURE_DEGRADED",
+            id="structure-degraded",
+        ),
+    ],
+)
+def test_pipeline_blocks_unresolved_semantic_fidelity_before_promotion(
+    tmp_path: Path,
+    fidelity: SemanticFidelityReport,
+    expected_code: str,
+) -> None:
     product = create_product_fixture(tmp_path)
     add_complete_dictionary_descriptions(product)
-    fidelity = pass_fidelity_report().model_copy(
-        update={
-            "extraction_mode": ExtractionMode.OCR,
-            "status": "WARN",
-            "warning_codes": ["SEMANTIC_OCR_CORRECTION_UNAVAILABLE"],
-        }
-    )
 
-    result = process_product(
-        product,
-        registry_root=tmp_path / "registry",
-        parser=FidelityParser(fidelity),
-    )
+    with pytest.raises(PipelineValidationError) as captured:
+        process_product(
+            product,
+            registry_root=tmp_path / "registry",
+            parser=FidelityParser(fidelity),
+        )
 
-    assert result.quality_report.status == "WARN"
-    assert [finding.code for finding in result.quality_report.warnings] == [
-        "SEMANTIC_OCR_CORRECTION_UNAVAILABLE"
-    ]
+    assert captured.value.report is not None
+    assert expected_code in {
+        finding.code for finding in captured.value.report.hard_errors
+    }
+    assert not (product / "generated").exists()
 
 
 def test_process_cli_passes_warnings_as_errors_before_promotion(
