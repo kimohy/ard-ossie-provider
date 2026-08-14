@@ -240,11 +240,7 @@ def _repair_and_degrade(
         if native.extraction_mode is ExtractionMode.OCR
         else "provider_unavailable"
     )
-    if (
-        unresolved
-        and native.extraction_mode is not ExtractionMode.OCR
-        and repair_planner is not None
-    ):
+    if unresolved and repair_planner is not None:
         try:
             application = repair_planner.repair(
                 native,
@@ -366,11 +362,10 @@ def _reject_repair_orders(
     payload.update(
         {
             "outcome": "rejected",
-            "validation_codes": list(
-                dict.fromkeys(
-                    [*record.validation_codes, "SEMANTIC_REPAIR_TABLE_INVALID"]
-                )
-            ),
+            "validation_codes": [
+                *record.validation_codes,
+                "SEMANTIC_REPAIR_TABLE_INVALID",
+            ],
             "applied_orders": [
                 order for order in record.applied_orders if order not in invalid_orders
             ],

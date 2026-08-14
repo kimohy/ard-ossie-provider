@@ -6,7 +6,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 import ard_ossie.cli.workflow as workflow_cli
-from ard_ossie.application.contracts import WorkflowResult, WorkflowStatus
+from ard_ossie.application.contracts import (
+    WorkflowResult,
+    WorkflowStatus,
+    WorkflowValidationError,
+)
 from ard_ossie.cli import app
 from ard_ossie.llm import ProviderExecutionError, ProviderFailureKind
 
@@ -17,6 +21,18 @@ class StubService:
 
     def run(self, *args, **kwargs) -> WorkflowResult:
         return self.result
+
+
+class FailingService:
+    def run(self, *args, **kwargs) -> WorkflowResult:
+        raise WorkflowValidationError(
+            "SEMANTIC_REPAIR_MISSING_SPAN",
+            (
+                "category=SEMANTIC_STRUCTURE_DEGRADED; "
+                "extraction_mode=ocr; unresolved_spans=4; "
+                "validation_codes=SEMANTIC_REPAIR_MISSING_SPAN"
+            ),
+        )
 
 
 def test_detect_product_cli_writes_product_and_exact_head(
@@ -170,6 +186,47 @@ def test_source_check_cli_maps_provider_factory_failure_to_configuration_exit(
         (tmp_path / ".ard" / "run" / "workflow.source-check-result.json").read_text()
     )
     assert envelope["findings"][0]["code"] == "LLM_PROVIDER_CONFIGURATION_FAILED"
+
+
+def test_source_check_cli_publishes_safe_detailed_validation_message(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow_cli,
+        "_source_check_service",
+        lambda paths, require_llm: FailingService(),
+        raising=False,
+    )
+    monkeypatch.setenv("ARD_LLM_API_KEY", "must-not-appear")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "source-check",
+            "--product-key",
+            "sales-order",
+            "--expected-head",
+            "a" * 40,
+            "--repository",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 10
+    assert "SEMANTIC_REPAIR_MISSING_SPAN" in result.output
+    assert "must-not-appear" not in result.output
+    envelope = json.loads(
+        (tmp_path / ".ard" / "run" / "workflow.source-check-result.json").read_text()
+    )
+    assert envelope["findings"][0]["code"] == "SEMANTIC_REPAIR_MISSING_SPAN"
+    assert "unresolved_spans=4" in envelope["findings"][0]["message"]
+    assert (
+        "category=SEMANTIC_STRUCTURE_DEGRADED"
+        in envelope["findings"][0]["message"]
+    )
+    assert "must-not-appear" not in json.dumps(envelope)
 
 
 def test_ensure_product_pr_cli_exposes_pr_number(
