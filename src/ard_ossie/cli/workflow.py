@@ -186,6 +186,7 @@ def source_check(
     expected_head: Annotated[str, typer.Option("--expected-head")],
     repository: Annotated[Path, typer.Option("--repository")] = Path("."),
     require_llm: Annotated[bool, typer.Option("--require-llm")] = False,
+    diagnostics_dir: Annotated[Path | None, typer.Option("--diagnostics-dir")] = None,
 ) -> None:
     command = "workflow.source-check"
     paths = _repository_paths(repository)
@@ -195,6 +196,7 @@ def source_check(
         lambda: _source_check_service(paths, require_llm=require_llm).run(
             product_key,
             expected_head,
+            diagnostics_dir=diagnostics_dir,
         ),
         expose_failure_details=True,
     )

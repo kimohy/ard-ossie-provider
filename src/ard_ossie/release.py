@@ -14,6 +14,11 @@ from ard_ossie.impact import ChangeSetRecord, ChangeSetStatus
 from ard_ossie.models import ProductRecord, StrictModel, TableRecord
 from ard_ossie.pipeline import QualityReport
 from ard_ossie.registry import Registry
+from ard_ossie.semantic.canonical import (
+    SemanticPipelineStatus,
+    SemanticValidationReport,
+)
+from ard_ossie.semantic.diagnostics import DIAGNOSTIC_REPORT_NAMES
 from ard_ossie.semantic.models import ExtractionMode, SemanticFidelityReport
 
 
@@ -46,7 +51,10 @@ _REQUIRED_QUALITY_ASSETS = (
     "llm-suggestions.json",
     "semantic-fidelity.json",
 )
-_OPTIONAL_QUALITY_ASSETS = ("semantic-structure-repair.json",)
+_OPTIONAL_QUALITY_ASSETS = (
+    "semantic-structure-repair.json",
+    *DIAGNOSTIC_REPORT_NAMES,
+)
 
 
 def build_release_plan(
@@ -131,7 +139,11 @@ def resolve_release_plan(
     _require_release_snapshot_entries(snapshots)
     quality_data = quality.model_dump(mode="json")
     artifact_hashes = _verify_release_snapshots(snapshots, quality_data)
-    _verify_semantic_fidelity_snapshot(snapshots["quality/semantic-fidelity.json"])
+    candidate_verified = _verify_candidate_validation_snapshot(snapshots)
+    _verify_semantic_fidelity_snapshot(
+        snapshots["quality/semantic-fidelity.json"],
+        candidate_verified=candidate_verified,
+    )
     return build_release_plan(
         product,
         tables,
@@ -148,7 +160,11 @@ def build_release_bundle(product_root: str | Path, output_path: str | Path) -> P
     quality = _parse_quality_report(snapshots["quality/quality-report.json"])
     quality_data = quality.model_dump(mode="json")
     _require_quality_pass(quality_data)
-    _verify_semantic_fidelity_snapshot(snapshots["quality/semantic-fidelity.json"])
+    candidate_verified = _verify_candidate_validation_snapshot(snapshots)
+    _verify_semantic_fidelity_snapshot(
+        snapshots["quality/semantic-fidelity.json"],
+        candidate_verified=candidate_verified,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -263,6 +279,11 @@ def _require_release_snapshot_entries(snapshots: dict[str, bytes] | set[str]) ->
     missing = [name for name in required if name not in present]
     if missing:
         raise ReleaseBlocked(f"RELEASE_ARTIFACT_MISSING: {missing[0]}")
+    diagnostic_entries = {f"quality/{name}" for name in DIAGNOSTIC_REPORT_NAMES}
+    present_diagnostics = present & diagnostic_entries
+    if present_diagnostics and present_diagnostics != diagnostic_entries:
+        missing_diagnostic = sorted(diagnostic_entries - present_diagnostics)[0]
+        raise ReleaseBlocked(f"RELEASE_ARTIFACT_MISSING: {missing_diagnostic}")
 
 
 def _parse_quality_report(payload: bytes) -> QualityReport:
@@ -313,11 +334,17 @@ def _verify_release_snapshots(
     return hashes
 
 
-def _verify_semantic_fidelity_snapshot(payload: bytes) -> SemanticFidelityReport:
+def _verify_semantic_fidelity_snapshot(
+    payload: bytes,
+    *,
+    candidate_verified: bool = False,
+) -> SemanticFidelityReport:
     try:
         fidelity = SemanticFidelityReport.model_validate_json(payload)
     except (ValidationError, ValueError) as error:
         raise ReleaseBlocked("SEMANTIC_FIDELITY_REPORT_INVALID") from error
+    if candidate_verified:
+        return fidelity
     reasons: list[str] = []
     if fidelity.status == "FAIL":
         reasons.append("status=FAIL")
@@ -356,3 +383,21 @@ def _verify_semantic_fidelity_snapshot(payload: bytes) -> SemanticFidelityReport
     if reasons:
         raise ReleaseBlocked("SEMANTIC_FIDELITY_GATE_FAILED: " + "; ".join(reasons))
     return fidelity
+
+
+def _verify_candidate_validation_snapshot(snapshots: dict[str, bytes]) -> bool:
+    path = "quality/validation-report.json"
+    if path not in snapshots:
+        return False
+    try:
+        validation = SemanticValidationReport.model_validate_json(snapshots[path])
+    except (ValidationError, ValueError) as error:
+        raise ReleaseBlocked("SEMANTIC_VALIDATION_REPORT_INVALID") from error
+    if (
+        validation.status is not SemanticPipelineStatus.VERIFIED
+        or not validation.publishable
+    ):
+        raise ReleaseBlocked(
+            f"SEMANTIC_VALIDATION_NOT_VERIFIED: {validation.status.value}"
+        )
+    return True

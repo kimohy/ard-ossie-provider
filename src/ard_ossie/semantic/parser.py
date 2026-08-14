@@ -86,6 +86,7 @@ def parse_semantic_document(
     pdfium: Any | None = None,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
     candidate_provider: Any | None = None,
+    trusted_candidate_decisions: tuple[Any, ...] = (),
 ) -> SemanticParseResult:
     """Parse a PDF or DOCX without allowing structural hints to author text."""
     mode = SemanticPipelineMode(semantic_pipeline_mode)
@@ -102,6 +103,7 @@ def parse_semantic_document(
             hints=skeleton,
             mode=mode,
             provider=candidate_provider,
+            trusted_decisions=trusted_candidate_decisions,
             pdfium=pdfium,
         )
         fidelity = canonical_fidelity_report(
@@ -163,6 +165,7 @@ def parse_semantic_document(
                 mode=mode,
                 legacy_markdown=markdown,
                 provider=candidate_provider,
+                trusted_decisions=trusted_candidate_decisions,
                 pdfium=pdfium,
             )
         except (SemanticSourceError, ValueError):

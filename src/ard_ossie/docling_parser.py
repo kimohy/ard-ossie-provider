@@ -47,6 +47,7 @@ class DoclingParser:
         pdfium: Any | None = None,
         semantic_pipeline_mode: str = "shadow",
         candidate_provider: Any | None = None,
+        trusted_candidate_decisions: tuple[Any, ...] = (),
     ) -> None:
         self._converter = converter
         self._full_page_ocr_converter = full_page_ocr_converter
@@ -59,6 +60,7 @@ class DoclingParser:
             raise ValueError("SEMANTIC_PIPELINE_MODE_INVALID")
         self._semantic_pipeline_mode = semantic_pipeline_mode
         self._candidate_provider = candidate_provider
+        self._trusted_candidate_decisions = trusted_candidate_decisions
 
     def parse(self, source: SourceFile) -> ParsedDocument:
         if source.role is SourceRole.DICTIONARY_EXCEL:
@@ -77,6 +79,7 @@ class DoclingParser:
                 pdfium=self._pdfium,
                 semantic_pipeline_mode=self._semantic_pipeline_mode,
                 candidate_provider=self._candidate_provider,
+                trusted_candidate_decisions=self._trusted_candidate_decisions,
             )
             return ParsedDocument(
                 role=source.role,

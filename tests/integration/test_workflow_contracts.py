@@ -137,6 +137,17 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert validation_run["working-directory"] == "trusted"
     assert '--repository "$CANDIDATE_REPOSITORY"' in validation_run["run"]
     assert "--require-llm" in validation_run["run"]
+    assert '--diagnostics-dir "$CANDIDATE_REPOSITORY/.ard/run/semantic-validate"' in validation_run[
+        "run"
+    ]
+    validation_upload = next(
+        step
+        for step in validation["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    assert validation_upload["if"] == "always()"
+    assert validation_upload["with"]["path"] == "candidate/.ard/run/semantic-validate"
+    assert validation_upload["with"]["if-no-files-found"] == "warn"
     assert validation_run["env"]["ARD_LLM_PROFILE"] == "${{ vars.ARD_LLM_PROFILE }}"
     assert validation_run["env"]["ARD_LLM_API_KEY"] == "${{ secrets.ARD_LLM_API_KEY }}"
     assert validation_run["env"]["ARD_LLM_BASE_URL"] == (

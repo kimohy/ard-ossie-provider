@@ -132,7 +132,11 @@ class ProcessingService:
             )
         try:
             base_sha = self.git.remote_branch_sha(pull_request.base_branch)
-            trusted_semantic_repair, trusted_semantic_fidelity = _trusted_semantic_artifacts(
+            (
+                trusted_semantic_repair,
+                trusted_semantic_fidelity,
+                trusted_semantic_decisions,
+            ) = _trusted_semantic_artifacts(
                 self.git,
                 base_sha=base_sha,
                 product_key=request.product_key,
@@ -146,6 +150,7 @@ class ProcessingService:
                 warnings_as_errors=request.warnings_as_errors,
                 trusted_semantic_repair=trusted_semantic_repair,
                 trusted_semantic_fidelity=trusted_semantic_fidelity,
+                trusted_semantic_decisions=trusted_semantic_decisions,
                 semantic_pipeline_mode=request.semantic_pipeline_mode,
             )
         except PipelineSecurityError as error:
@@ -627,7 +632,7 @@ def _trusted_semantic_repair(
     base_sha: str | None,
     product_key: str,
 ) -> dict[str, object] | None:
-    repair, _fidelity = _trusted_semantic_artifacts(
+    repair, _fidelity, _decisions = _trusted_semantic_artifacts(
         git,
         base_sha=base_sha,
         product_key=product_key,
@@ -640,7 +645,11 @@ def _trusted_semantic_artifacts(
     *,
     base_sha: str | None,
     product_key: str,
-) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+) -> tuple[
+    dict[str, object] | None,
+    dict[str, object] | None,
+    dict[str, object] | None,
+]:
     if not isinstance(base_sha, str) or re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
         raise _semantic_repair_trust_mismatch()
     quality_root = Path("products") / product_key / "quality"
@@ -660,7 +669,7 @@ def _trusted_semantic_artifacts(
         quality_root / "semantic-fidelity.json",
     )
     if quality_bytes is None and repair_bytes is None and fidelity_bytes is None:
-        return None, None
+        return None, None, None
     if quality_bytes is None:
         raise _semantic_repair_trust_mismatch()
     try:
@@ -672,6 +681,15 @@ def _trusted_semantic_artifacts(
     quality_hashes = quality.get("quality_artifact_hashes", {})
     if not isinstance(quality_hashes, dict):
         raise _semantic_repair_trust_mismatch()
+    decision_bytes = (
+        _read_revision_bytes_optional(
+            git,
+            base_sha,
+            quality_root / "decision-report.json",
+        )
+        if "decision-report.json" in quality_hashes
+        else None
+    )
     return (
         _verified_semantic_artifact(
             repair_bytes,
@@ -682,6 +700,11 @@ def _trusted_semantic_artifacts(
             fidelity_bytes,
             quality_hashes,
             name="semantic-fidelity.json",
+        ),
+        _verified_semantic_artifact(
+            decision_bytes,
+            quality_hashes,
+            name="decision-report.json",
         ),
     )
 

@@ -80,10 +80,16 @@ class ModelingService:
         require_semantic_visual_correction: bool = True,
         propagate_provider_errors: bool = False,
         semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
+        diagnostics_dir: str | Path | None = None,
     ) -> ValidationResult:
         product = self.paths.resolve_read(product_path)
         registry = self.paths.resolve_directory(registry_path, allow_missing=True)
         self._validate_roots(product, registry, allow_missing_registry=True)
+        diagnostics = (
+            self.paths.resolve_write(diagnostics_dir)
+            if diagnostics_dir is not None
+            else None
+        )
         try:
             with self._staged_state(product, registry) as (staged_product, staged_registry):
                 processed = process_product(
@@ -93,6 +99,7 @@ class ModelingService:
                     require_semantic_visual_correction=require_semantic_visual_correction,
                     propagate_provider_errors=propagate_provider_errors,
                     semantic_pipeline_mode=semantic_pipeline_mode,
+                    semantic_diagnostics_dir=diagnostics,
                 )
         except PipelineValidationError as error:
             report = error.report

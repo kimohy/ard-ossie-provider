@@ -131,7 +131,13 @@ class SourceCheckService:
         self.paths = paths
         self.provider = provider
 
-    def run(self, product_key: str, expected_head: str) -> WorkflowResult:
+    def run(
+        self,
+        product_key: str,
+        expected_head: str,
+        *,
+        diagnostics_dir: str | Path | None = None,
+    ) -> WorkflowResult:
         _validate_product_key(product_key)
         _validate_sha(expected_head)
         product = self.paths.resolve_read(Path("products") / product_key)
@@ -146,6 +152,7 @@ class SourceCheckService:
                 "registry",
                 provider=self.provider,
                 propagate_provider_errors=True,
+                diagnostics_dir=diagnostics_dir,
             )
         except ProviderExecutionError as error:
             if error.kind is ProviderFailureKind.CONFIGURATION:

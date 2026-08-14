@@ -70,8 +70,15 @@ from ard_ossie.renderers import (
     render_product_markdown,
     render_semantic_markdown,
 )
+from ard_ossie.semantic.adjudication import DecisionReport
 from ard_ossie.semantic.canonical import SemanticPipelineStatus
 from ard_ossie.semantic.correction import OcrCorrectionPlanner
+from ard_ossie.semantic.diagnostics import (
+    DIAGNOSTIC_REPORT_NAMES,
+    build_semantic_diagnostics,
+    semantic_diagnostic_payloads,
+    write_semantic_diagnostics,
+)
 from ard_ossie.semantic.models import (
     ExtractionMode,
     SemanticFidelityReport,
@@ -191,9 +198,11 @@ def process_product(
     warnings_as_errors: bool = False,
     trusted_semantic_repair: dict[str, object] | None = None,
     trusted_semantic_fidelity: dict[str, object] | None = None,
+    trusted_semantic_decisions: dict[str, object] | None = None,
     require_semantic_visual_correction: bool = True,
     propagate_provider_errors: bool = False,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
+    semantic_diagnostics_dir: str | Path | None = None,
 ) -> ProcessResult:
     root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
@@ -206,11 +215,23 @@ def process_product(
         parser=parser,
         trusted_semantic_repair=trusted_semantic_repair,
         trusted_semantic_fidelity=trusted_semantic_fidelity,
+        trusted_semantic_decisions=trusted_semantic_decisions,
         propagate_provider_errors=propagate_provider_errors,
         semantic_pipeline_mode=semantic_pipeline_mode,
     )
     product_document = active_parser.parse(manifest.by_role(SourceRole.PRODUCT_HTML))
     semantic_document = active_parser.parse(manifest.by_role(SourceRole.SEMANTIC_DOCUMENT))
+    if (
+        semantic_diagnostics_dir is not None
+        and semantic_document.semantic_pipeline_result is not None
+    ):
+        write_semantic_diagnostics(
+            Path(semantic_diagnostics_dir),
+            build_semantic_diagnostics(
+                semantic_document.semantic_pipeline_result,
+                configuration_hash=canonical_hash(config.model_dump(mode="json")),
+            ),
+        )
     dictionary_source = manifest.by_role(SourceRole.DICTIONARY_EXCEL)
     dictionary = parse_dictionary(
         dictionary_source.path,
@@ -480,6 +501,7 @@ def _processing_parser(
     parser: DoclingParser | None,
     trusted_semantic_repair: dict[str, object] | None,
     trusted_semantic_fidelity: dict[str, object] | None,
+    trusted_semantic_decisions: dict[str, object] | None = None,
     propagate_provider_errors: bool = False,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
 ) -> DoclingParser:
@@ -494,6 +516,11 @@ def _processing_parser(
         SemanticFidelityReport.model_validate(trusted_semantic_fidelity)
         if trusted_semantic_fidelity is not None
         else None
+    )
+    trusted_decisions = (
+        DecisionReport.model_validate(trusted_semantic_decisions).decisions
+        if trusted_semantic_decisions is not None
+        else ()
     )
     planner = (
         SemanticStructureRepairPlanner(
@@ -518,6 +545,7 @@ def _processing_parser(
         trusted_fidelity_report=trusted_fidelity,
         semantic_pipeline_mode=semantic_pipeline_mode,
         candidate_provider=provider,
+        trusted_candidate_decisions=trusted_decisions,
     )
 
 
@@ -1990,6 +2018,25 @@ def _write_quality(
             semantic_document.semantic_fidelity.model_dump(mode="json")
         ),
     }
+    if semantic_document.semantic_pipeline_result is not None:
+        diagnostic_payloads = semantic_diagnostic_payloads(
+            build_semantic_diagnostics(
+                semantic_document.semantic_pipeline_result,
+                configuration_hash=canonical_hash(
+                    {
+                        "product_id": product_id,
+                        "source_hash": semantic_document.source_hash,
+                    }
+                ),
+                stage="quality",
+            )
+        )
+        sibling_payloads.update(
+            {
+                name: payload.decode("utf-8")
+                for name, payload in diagnostic_payloads.items()
+            }
+        )
     if semantic_document.semantic_repair is not None:
         sibling_payloads["semantic-structure-repair.json"] = _json_text(
             semantic_document.semantic_repair.model_dump(mode="json")
@@ -2024,6 +2071,7 @@ _QUALITY_DESTINATIONS = frozenset(
         "llm-suggestions.json",
         "semantic-fidelity.json",
         "semantic-structure-repair.json",
+        *DIAGNOSTIC_REPORT_NAMES,
     }
 )
 _SECURE_QUALITY_DIR_FD_SUPPORTED = (
