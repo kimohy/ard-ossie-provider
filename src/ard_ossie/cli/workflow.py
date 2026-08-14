@@ -472,12 +472,12 @@ def _publish(
             status=WorkflowStatus.FAILURE,
             outputs=outputs,
             artifacts=getattr(error, "artifacts", []),
-            findings=[{"code": error.code, "message": error.code}],
+            findings=[{"code": error.code, "message": error.message}],
             mutations=getattr(error, "mutations", []),
             retryable=error.retryable,
         )
         writer.write(result)
-        typer.echo(error.code, err=True)
+        typer.echo(f"{error.code}: {error.message}", err=True)
         raise typer.Exit(int(error.exit_code)) from None
     except (ValueError, TypeError) as error:
         wrapped = WorkflowValidationError(

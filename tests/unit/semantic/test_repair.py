@@ -42,10 +42,12 @@ class RecordingProvider:
         self,
         response: object | None = None,
         *,
+        responses: list[object] | None = None,
         error: Exception | None = None,
         capabilities_error: Exception | None = None,
     ) -> None:
         self.response = response
+        self.responses = [deepcopy(item) for item in responses] if responses else None
         self.error = error
         self.capabilities_error = capabilities_error
         self.calls: list[dict[str, object]] = []
@@ -71,9 +73,12 @@ class RecordingProvider:
         schema: dict[str, object],
         messages: list[dict[str, str]],
     ) -> object:
-        self.calls.append({"schema": schema, "messages": messages})
+        self.calls.append({"schema": schema, "messages": deepcopy(messages)})
         if self.error is not None:
             raise self.error
+        if self.responses is not None:
+            assert self.responses
+            return deepcopy(self.responses.pop(0))
         assert self.response is not None
         return deepcopy(self.response)
 
@@ -380,13 +385,83 @@ def test_configured_profile_llm_service_applies_unresolved_semantic_repair() -> 
 
 def test_llm_result_without_structured_object_is_rejected_boundedly() -> None:
     native, skeleton, unresolved_span_ids = unresolved_fixture()
-    application = SemanticStructureRepairPlanner(
-        RecordingProvider(repair_result(None))
-    ).repair(native, skeleton, unresolved_span_ids, trusted_record=None)
+    provider = RecordingProvider(repair_result(None))
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native, skeleton, unresolved_span_ids, trusted_record=None
+    )
 
+    assert len(provider.calls) == 2
     assert application.blocks == ()
     assert application.record.outcome == "rejected"
-    assert application.record.validation_codes == ["SEMANTIC_REPAIR_SCHEMA_INVALID"]
+    assert application.record.validation_codes == [
+        "SEMANTIC_REPAIR_SCHEMA_INVALID",
+        "SEMANTIC_REPAIR_SCHEMA_INVALID",
+    ]
+
+
+def test_invalid_plan_retries_once_and_applies_valid_replacement() -> None:
+    native, skeleton, span_ids = unresolved_fixture()
+    missing = {
+        "blocks": [
+            repair_block(kind="paragraph", order=0, span_ids=list(span_ids[:-1]))
+        ]
+    }
+    provider = RecordingProvider(
+        responses=[repair_result(missing), repair_result(valid_table_plan(span_ids))]
+    )
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native, skeleton, span_ids, trusted_record=None
+    )
+
+    assert len(provider.calls) == 2
+    assert application.record.outcome == "applied"
+    assert application.record.validation_codes == ["SEMANTIC_REPAIR_MISSING_SPAN"]
+    second_messages = provider.calls[1]["messages"]
+    assert isinstance(second_messages, list)
+    retry = json.loads(second_messages[-1]["content"])
+    assert retry == {
+        "repair_retry": {
+            "affected_orders": [0],
+            "affected_span_ids": [span_ids[-1]],
+            "instruction": (
+                "Return one complete replacement plan using the original immutable spans."
+            ),
+            "validation_code": "SEMANTIC_REPAIR_MISSING_SPAN",
+        }
+    }
+
+
+def test_two_invalid_plans_stop_after_one_retry_and_preserve_attempt_codes() -> None:
+    native, skeleton, span_ids = unresolved_fixture()
+    first = {
+        "blocks": [
+            repair_block(kind="paragraph", order=0, span_ids=list(span_ids[:-1]))
+        ]
+    }
+    second = {
+        "blocks": [
+            repair_block(
+                kind="paragraph",
+                order=0,
+                span_ids=[*span_ids, make_span_id("b" * 64, 0)],
+            )
+        ]
+    }
+    provider = RecordingProvider(responses=[repair_result(first), repair_result(second)])
+
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native, skeleton, span_ids, trusted_record=None
+    )
+
+    assert len(provider.calls) == 2
+    assert application.blocks == ()
+    assert application.record.outcome == "rejected"
+    assert application.record.validation_codes == [
+        "SEMANTIC_REPAIR_MISSING_SPAN",
+        "SEMANTIC_REPAIR_UNKNOWN_SPAN",
+    ]
+    assert application.record.plan is not None
 
 
 @pytest.mark.parametrize(
@@ -507,13 +582,15 @@ def test_invalid_repair_is_rejected_without_applied_blocks(
 ) -> None:
     native, skeleton, unresolved_span_ids = unresolved_fixture()
 
-    application = SemanticStructureRepairPlanner(
-        RecordingProvider(response(unresolved_span_ids))
-    ).repair(native, skeleton, unresolved_span_ids, trusted_record=None)
+    provider = RecordingProvider(response(unresolved_span_ids))
+    application = SemanticStructureRepairPlanner(provider).repair(
+        native, skeleton, unresolved_span_ids, trusted_record=None
+    )
 
+    assert len(provider.calls) == 2
     assert application.blocks == ()
     assert application.record.outcome == "rejected"
-    assert application.record.validation_codes == [expected_code]
+    assert application.record.validation_codes == [expected_code, expected_code]
     assert application.record.provider_error_code is None
 
 
@@ -530,13 +607,16 @@ def test_unverified_exclusion_is_rejected() -> None:
         ]
     }
 
-    application = SemanticStructureRepairPlanner(RecordingProvider(response)).repair(
+    provider = RecordingProvider(response)
+    application = SemanticStructureRepairPlanner(provider).repair(
         native, skeleton, unresolved_span_ids, trusted_record=None
     )
 
+    assert len(provider.calls) == 2
     assert application.blocks == ()
     assert application.record.validation_codes == [
-        "SEMANTIC_REPAIR_EXCLUSION_INVALID"
+        "SEMANTIC_REPAIR_EXCLUSION_INVALID",
+        "SEMANTIC_REPAIR_EXCLUSION_INVALID",
     ]
 
 
@@ -634,13 +714,18 @@ def test_fresh_provider_rejects_empty_non_table_span_allocation(kind: str) -> No
     native, skeleton, unresolved_span_ids = unresolved_fixture()
     response = plan_with_empty_non_table_block(kind, unresolved_span_ids)
 
-    application = SemanticStructureRepairPlanner(RecordingProvider(response)).repair(
+    provider = RecordingProvider(response)
+    application = SemanticStructureRepairPlanner(provider).repair(
         native, skeleton, unresolved_span_ids, trusted_record=None
     )
 
+    assert len(provider.calls) == 2
     assert application.blocks == ()
     assert application.record.outcome == "rejected"
-    assert application.record.validation_codes == ["SEMANTIC_REPAIR_SCHEMA_INVALID"]
+    assert application.record.validation_codes == [
+        "SEMANTIC_REPAIR_SCHEMA_INVALID",
+        "SEMANTIC_REPAIR_SCHEMA_INVALID",
+    ]
     assert application.record.provider_error_code is None
     assert application.record.plan is not None
     assert application.record.rejected_orders == [0, 1]
@@ -666,10 +751,13 @@ def test_trusted_record_cannot_reuse_empty_non_table_span_allocation(kind: str) 
         native, skeleton, unresolved_span_ids, trusted_record=trusted
     )
 
-    assert len(provider.calls) == 1
+    assert len(provider.calls) == 2
     assert application.blocks == ()
     assert application.record.outcome == "rejected"
-    assert application.record.validation_codes == ["SEMANTIC_REPAIR_SCHEMA_INVALID"]
+    assert application.record.validation_codes == [
+        "SEMANTIC_REPAIR_SCHEMA_INVALID",
+        "SEMANTIC_REPAIR_SCHEMA_INVALID",
+    ]
     assert application.record.provider_error_code is None
     assert application.record.plan == unsafe_plan
     assert application.record.rejected_orders == [0, 1]

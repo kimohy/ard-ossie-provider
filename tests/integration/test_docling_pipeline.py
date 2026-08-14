@@ -24,6 +24,7 @@ from ard_ossie.semantic.models import (
     RepairCell,
     RepairPlan,
     SemanticStructureRepairRecord,
+    SourceBox,
     SourceSpan,
     TableBlock,
     TableCellBlock,
@@ -320,6 +321,33 @@ class RejectingPlanner:
         )
 
 
+class DetailedRejectingPlanner:
+    def repair(self, native: Any, *_args: object, **_kwargs: object) -> RepairApplication:
+        plan = RepairPlan(blocks=[])
+        return RepairApplication(
+            blocks=(),
+            record=SemanticStructureRepairRecord(
+                source_hash=native.source_hash,
+                ordered_span_hashes=[span.text_hash for span in native.spans],
+                parser_version="semantic-structure-v1",
+                prompt_version=REPAIR_PROMPT_VERSION,
+                schema_hash=canonical_hash(semantic_structure_repair_schema()),
+                provider="fake",
+                model="fake",
+                outcome="rejected",
+                plan=plan,
+                provider_error_code=None,
+                validation_codes=[
+                    "SEMANTIC_REPAIR_MISSING_SPAN",
+                    "SEMANTIC_REPAIR_ORDER_INVALID",
+                ],
+                applied_orders=[],
+                rejected_orders=[],
+                plan_hash=canonical_hash(plan.model_dump(mode="json")),
+            ),
+        )
+
+
 class ApplyingTablePlanner:
     def repair(self, native: Any, *_args: object, **_kwargs: object) -> RepairApplication:
         table = native.tables[0]
@@ -512,6 +540,32 @@ def controlled_native_paragraphs(texts: tuple[str, ...]) -> NativeDocument:
             NativeGroup(order=index, kind="paragraph", span_ids=(span.span_id,))
             for index, span in enumerate(spans)
         ),
+        tables=(),
+    )
+
+
+def controlled_ocr_native(texts: tuple[str, ...]) -> NativeDocument:
+    spans = tuple(
+        controlled_span(index, text).model_copy(
+            update={
+                "page": 1,
+                "bbox": SourceBox(
+                    left=0.05,
+                    bottom=0.80 - index * 0.10,
+                    right=0.95,
+                    top=0.88 - index * 0.10,
+                ),
+            }
+        )
+        for index, text in enumerate(texts)
+    )
+    return NativeDocument(
+        source_hash=CONTROLLED_HASH,
+        extraction_mode=ExtractionMode.OCR,
+        page_count=1,
+        parser_versions={"ocr": "fixture-v1"},
+        spans=spans,
+        groups=(),
         tables=(),
     )
 
@@ -1476,6 +1530,77 @@ def test_full_page_ocr_preserves_paragraph_before_later_heading(
     assert parsed.semantic_fidelity.source_text_coverage == 1.0
     assert parsed.semantic_fidelity.unmatched_span_count == 0
     assert parsed.semantic_fidelity.duplicated_span_count == 0
+
+
+def test_unresolved_full_page_ocr_invokes_structure_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = controlled_ocr_native(("Semantics 문서", "개인정보"))
+    span_ids = tuple(span.span_id for span in native.spans)
+    plan = RepairPlan(
+        blocks=[
+            RepairBlock(
+                kind="paragraph",
+                order=0,
+                span_ids=list(span_ids),
+                heading_level=None,
+                list_kind=None,
+                list_depth=None,
+                row_count=None,
+                column_count=None,
+                cells=[],
+                exclusion_kind=None,
+                confidence=1.0,
+            )
+        ]
+    )
+    planner = FixedRepairPlanner(
+        plan,
+        (ParagraphBlock(order=0, span_ids=span_ids),),
+    )
+
+    parsed = parse_controlled(tmp_path, monkeypatch, native, planner=planner)
+
+    assert parsed.markdown == "Semantics 문서개인정보\n"
+    assert [item.excerpt for item in parsed.evidence] == ["Semantics 문서", "개인정보"]
+    assert parsed.semantic_repair.outcome == "applied"
+    assert parsed.semantic_repair.applied_orders == [0]
+    assert parsed.semantic_fidelity.degraded_block_count == 0
+    assert parsed.semantic_fidelity.source_text_coverage == 1.0
+
+
+def test_semantic_structure_degraded_finding_includes_safe_repair_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ard_ossie.pipeline import _semantic_hard_findings
+
+    native = controlled_ocr_native(("Semantics 문서", "개인정보"))
+    parsed = parse_controlled(
+        tmp_path,
+        monkeypatch,
+        native,
+        planner=DetailedRejectingPlanner(),
+    )
+
+    findings = _semantic_hard_findings(parsed, require_visual_correction=False)
+
+    specific = findings[0]
+    assert specific.code == "SEMANTIC_REPAIR_ORDER_INVALID"
+    assert "category=SEMANTIC_STRUCTURE_DEGRADED" in specific.message
+    assert "extraction_mode=ocr" in specific.message
+    assert "unresolved_spans=2" in specific.message
+    assert "pages=1" in specific.message
+    assert (
+        "validation_codes=SEMANTIC_REPAIR_MISSING_SPAN,"
+        "SEMANTIC_REPAIR_ORDER_INVALID"
+    ) in specific.message
+    assert "provider=fake" in specific.message
+    assert "model=fake" in specific.message
+    assert "attempts=2" in specific.message
+    assert "Semantics 문서" not in specific.message
+    assert any(item.code == "SEMANTIC_STRUCTURE_DEGRADED" for item in findings)
 
 
 def test_full_page_ocr_converter_forces_ocr_for_every_pdf_page(

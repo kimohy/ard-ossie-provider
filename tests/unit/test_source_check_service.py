@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,15 +17,35 @@ from ard_ossie.application.contracts import (
     WorkflowTransientError,
     WorkflowValidationError,
 )
+from ard_ossie.application.modeling import ValidationResult
 from ard_ossie.application.source_check import (
     DetectProductService,
     EnsureProductPrService,
     SourceCheckService,
 )
-from ard_ossie.llm import ProviderExecutionError, ProviderFailureKind
+from ard_ossie.docling_parser import DoclingParser, ParsedDocument
+from ard_ossie.ingestion import SourceRole
+from ard_ossie.llm import (
+    LLMMetadata,
+    LLMResult,
+    ProviderExecutionError,
+    ProviderFailureKind,
+)
+from ard_ossie.pipeline import QualityFinding
 from ard_ossie.ports.git import ChangedPaths
 from ard_ossie.ports.github import PullRequestState
-from ard_ossie.semantic.models import ExtractionMode
+from ard_ossie.semantic import parser as semantic_parser
+from ard_ossie.semantic.correction import OcrCorrectionApplication
+from ard_ossie.semantic.models import (
+    ExtractionMode,
+    NativeDocument,
+    OcrCorrectionPageAudit,
+    SourceBox,
+    SourceSpan,
+    make_span_id,
+)
+from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
+from ard_ossie.semantic.structure import StructureDocument
 from tests.integration.test_cli_process import (
     FakeSemanticProvider,
     FidelityParser,
@@ -77,6 +98,75 @@ class FakeGitHub:
             url="https://example.invalid/pull/9",
         )
         return self.pull_request
+
+
+class OcrRepairResultProvider:
+    def health_check(self) -> bool:
+        return True
+
+    def capabilities(self) -> dict[str, str | bool]:
+        return {
+            "structured_output": "json_schema",
+            "provider": "ocr-repair-test",
+            "model": "ocr-repair-v1",
+            "vision": True,
+        }
+
+    def generate_structured(self, *, schema, messages):
+        if "blocks" not in schema.get("properties", {}):
+            return {"suggestions": [], "metrics": [], "product_facts": []}
+        request = json.loads(messages[1]["content"])
+        span_ids = [item["span_id"] for item in request["unresolved_spans"]]
+        return LLMResult(
+            text="",
+            structured={
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "order": 0,
+                        "span_ids": span_ids,
+                        "heading_level": None,
+                        "list_kind": None,
+                        "list_depth": None,
+                        "row_count": None,
+                        "column_count": None,
+                        "cells": [],
+                        "exclusion_kind": None,
+                        "confidence": 0.99,
+                    }
+                ]
+            },
+            metadata=LLMMetadata(
+                profile="ocr-source-check",
+                provider="openai_compatible",
+                model="ocr-repair-v1",
+                elapsed_ms=1,
+            ),
+        )
+
+
+class AcceptedOcrCorrectionPlanner:
+    def correct(self, _source, native, **_kwargs):
+        return OcrCorrectionApplication(
+            document=native,
+            audits=(
+                OcrCorrectionPageAudit(
+                    source_hash=native.source_hash,
+                    page=1,
+                    page_image_hash="1" * 64,
+                    ocr_catalog_hash="2" * 64,
+                    request_hash="3" * 64,
+                    prompt_version="ocr-correction-test-v1",
+                    prompt_hash="4" * 64,
+                    schema_hash="5" * 64,
+                    provider="ocr-repair-test",
+                    model="ocr-repair-v1",
+                    outcome="applied",
+                    patches=[],
+                ),
+            ),
+            warning_codes=(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -197,6 +287,123 @@ def test_source_check_injects_provider_and_keeps_semantic_gates_strict(
 
     assert captured["provider"] is provider
     assert captured["propagate_provider_errors"] is True
+
+
+def test_source_check_accepts_repaired_ocr_from_llm_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_product_fixture(tmp_path)
+    provider = OcrRepairResultProvider()
+
+    def native_and_structure(source, **_kwargs):
+        texts = ("Semantics 문서", "개인정보")
+        spans = tuple(
+            SourceSpan(
+                span_id=make_span_id(source.sha256, index),
+                ordinal=index,
+                page=1,
+                bbox=SourceBox(
+                    left=0.05,
+                    bottom=0.80 - index * 0.10,
+                    right=0.95,
+                    top=0.88 - index * 0.10,
+                ),
+                text=text,
+                text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            )
+            for index, text in enumerate(texts)
+        )
+        return (
+            NativeDocument(
+                source_hash=source.sha256,
+                extraction_mode=ExtractionMode.OCR,
+                page_count=1,
+                parser_versions={"ocr": "fixture-v1"},
+                spans=spans,
+                groups=(),
+                tables=(),
+            ),
+            StructureDocument(blocks=()),
+        )
+
+    class SourceCheckParser:
+        def __init__(self) -> None:
+            self.semantic = DoclingParser(
+                structure_repair_planner=SemanticStructureRepairPlanner(
+                    provider,
+                    propagate_provider_errors=True,
+                ),
+                ocr_correction_planner=AcceptedOcrCorrectionPlanner(),
+            )
+
+        def parse(self, source):
+            if source.role is SourceRole.PRODUCT_HTML:
+                return ParsedDocument(
+                    role=source.role,
+                    source_hash=source.sha256,
+                    markdown="# Sales Order\n\nOrder analytics.",
+                )
+            return self.semantic.parse(source)
+
+    monkeypatch.setattr(semantic_parser, "_native_and_structure", native_and_structure)
+    monkeypatch.setattr(
+        pipeline_module,
+        "_processing_parser",
+        lambda **_kwargs: SourceCheckParser(),
+    )
+
+    result = SourceCheckService(
+        RepositoryPaths(tmp_path),
+        provider=provider,
+    ).run("sales-order", SHA)
+
+    assert result.status is WorkflowStatus.SUCCESS
+
+
+def test_source_check_preserves_quality_finding_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_product_fixture(tmp_path)
+
+    class FailedModelingService:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def validate(self, *_args: object, **_kwargs: object) -> ValidationResult:
+            return ValidationResult(
+                passed=False,
+                findings=[
+                    QualityFinding(
+                        code="SEMANTIC_REPAIR_ORDER_INVALID",
+                        message=(
+                            "Semantic structure repair validation failed; "
+                            "category=SEMANTIC_STRUCTURE_DEGRADED; "
+                            "extraction_mode=ocr; unresolved_spans=4; pages=1; "
+                            "validation_codes=SEMANTIC_REPAIR_MISSING_SPAN,"
+                            "SEMANTIC_REPAIR_ORDER_INVALID; "
+                            "provider=openai_compatible; model=gpt-5.6-terra; "
+                            "applied_blocks=0; rejected_blocks=2; attempts=2"
+                        ),
+                        path="quality.semantic-structure-repair.json",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(
+        source_check_module,
+        "ModelingService",
+        FailedModelingService,
+    )
+
+    with pytest.raises(WorkflowValidationError) as caught:
+        SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+
+    assert caught.value.code == "SEMANTIC_REPAIR_ORDER_INVALID"
+    assert "validation_codes=SEMANTIC_REPAIR_MISSING_SPAN" in caught.value.message
+    assert "category=SEMANTIC_STRUCTURE_DEGRADED" in caught.value.message
+    assert "path=quality.semantic-structure-repair.json" in caught.value.message
 
 
 @pytest.mark.parametrize(

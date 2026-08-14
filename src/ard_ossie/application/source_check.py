@@ -163,8 +163,17 @@ class SourceCheckService:
                 "source-check provider execution failed",
             ) from None
         if not validation.passed:
-            code = validation.findings[0].code if validation.findings else "MODEL_VALIDATION_FAILED"
-            raise WorkflowValidationError(code, "staged product validation failed")
+            if validation.findings:
+                finding = validation.findings[0]
+                location = f"; path={finding.path}" if finding.path else ""
+                raise WorkflowValidationError(
+                    finding.code,
+                    f"{finding.message}{location}",
+                )
+            raise WorkflowValidationError(
+                "MODEL_VALIDATION_FAILED",
+                "staged product validation failed without a quality finding",
+            )
         outputs: dict[str, object] = {
             "expected_head": expected_head,
             "product_key": product_key,

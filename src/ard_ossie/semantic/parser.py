@@ -240,11 +240,7 @@ def _repair_and_degrade(
         if native.extraction_mode is ExtractionMode.OCR
         else "provider_unavailable"
     )
-    if (
-        unresolved
-        and native.extraction_mode is not ExtractionMode.OCR
-        and repair_planner is not None
-    ):
+    if unresolved and repair_planner is not None:
         try:
             application = repair_planner.repair(
                 native,
