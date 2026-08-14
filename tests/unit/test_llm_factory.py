@@ -60,6 +60,7 @@ def test_factory_reads_only_selected_profile_environment() -> None:
     assert reads.reads == ["ARD_LLM_BASE_URL", "ARD_LLM_API_KEY"]
     assert captured["model"] == "gpt-5.6-terra"
     assert captured["profile"] == "openai-compatible-default"
+    assert captured["max_output_tokens"] is None
     assert captured["vision"] is True
     assert captured["api_key"].get_secret_value() == "secret"
 

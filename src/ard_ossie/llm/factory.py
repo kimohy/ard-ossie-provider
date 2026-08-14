@@ -56,7 +56,12 @@ class LLMProviderFactory:
         common: dict[str, Any] = {
             "profile": profile_name,
             "timeout_seconds": profile.timeout_seconds,
-            "max_output_tokens": profile.max_output_tokens,
+            "max_output_tokens": (
+                None
+                if isinstance(profile, OpenAICompatibleProfile)
+                and profile.max_output_tokens == "model_maximum"
+                else profile.max_output_tokens
+            ),
             "temperature": profile.temperature,
             "vision": profile.vision,
         }
