@@ -118,8 +118,9 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert workflow["concurrency"]["group"] == "ard-registry-write"
     validation = workflow["jobs"]["validate"]
     assert validation["permissions"] == {"contents": "read"}
-    assert "environment" not in validation
+    assert validation["environment"] == "ard-llm"
     assert "GH_TOKEN" not in str(validation)
+    assert not any(name.startswith("ARD_") for name in validation["env"])
     validation_checkouts = [
         step for step in validation["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
@@ -131,9 +132,31 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
         "${{ github.event.repository.default_branch }}"
     )
     assert validation_checkouts[1]["with"]["ref"] == "${{ inputs.expected_head }}"
+    assert validation_checkouts[1]["with"]["persist-credentials"] == "false"
     validation_run = next(step for step in validation["steps"] if step.get("run"))
     assert validation_run["working-directory"] == "trusted"
     assert '--repository "$CANDIDATE_REPOSITORY"' in validation_run["run"]
+    assert "--require-llm" in validation_run["run"]
+    assert validation_run["env"]["ARD_LLM_PROFILE"] == "${{ vars.ARD_LLM_PROFILE }}"
+    assert validation_run["env"]["ARD_LLM_API_KEY"] == "${{ secrets.ARD_LLM_API_KEY }}"
+    assert validation_run["env"]["ARD_LLM_BASE_URL"] == (
+        "${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}"
+    )
+    assert validation_run["env"]["ARD_AZURE_OPENAI_ENDPOINT"] == (
+        "${{ vars.ARD_AZURE_OPENAI_ENDPOINT }}"
+    )
+    assert validation_run["env"]["ARD_AZURE_OPENAI_API_KEY"] == (
+        "${{ secrets.ARD_AZURE_OPENAI_API_KEY }}"
+    )
+    assert validation_run["env"]["ARD_GCP_PROJECT_ID"] == "${{ vars.ARD_GCP_PROJECT_ID }}"
+    assert validation_run["env"]["ARD_VERTEX_CREDENTIALS_JSON"] == (
+        "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}"
+    )
+    assert all(
+        "secrets." not in str(step)
+        for step in validation["steps"]
+        if step is not validation_run
+    )
 
     job = workflow["jobs"]["process"]
     assert job["needs"] == "validate"
@@ -222,7 +245,6 @@ def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() ->
     trigger = workflow["on"]["workflow_run"]
     assert trigger["workflows"] == ["ARD direct branch signal"]
     assert trigger["types"] == ["completed"]
-    assert "secrets.ARD_LLM_API_KEY" not in (WORKFLOWS / "ard-direct-change.yml").read_text()
 
     validation = workflow["jobs"]["validate"]
     guard = validation["if"]
@@ -233,17 +255,41 @@ def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() ->
         "github.event.workflow_run.head_branch != github.event.repository.default_branch" in guard
     )
     assert validation["permissions"] == {"contents": "read"}
-    assert "environment" not in validation
+    assert validation["environment"] == "ard-llm"
     assert "GH_TOKEN" not in str(validation)
+    assert not any(name.startswith("ARD_") for name in validation["env"])
     checkouts = [
         step for step in validation["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
     assert [step["with"]["path"] for step in checkouts] == ["trusted", "candidate"]
     assert checkouts[0]["with"]["ref"] == ("${{ github.event.repository.default_branch }}")
     assert checkouts[1]["with"]["ref"] == "${{ github.event.workflow_run.head_sha }}"
+    assert checkouts[1]["with"]["persist-credentials"] == "false"
     validation_runs = [step for step in validation["steps"] if step.get("run")]
     assert all(step["working-directory"] == "trusted" for step in validation_runs)
     assert all('--repository "$CANDIDATE_REPOSITORY"' in step["run"] for step in validation_runs)
+    source_check = next(step for step in validation_runs if step["id"] == "source_check")
+    assert "--require-llm" in source_check["run"]
+    assert source_check["env"]["ARD_LLM_PROFILE"] == "${{ vars.ARD_LLM_PROFILE }}"
+    assert source_check["env"]["ARD_LLM_API_KEY"] == "${{ secrets.ARD_LLM_API_KEY }}"
+    assert source_check["env"]["ARD_LLM_BASE_URL"] == (
+        "${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}"
+    )
+    assert source_check["env"]["ARD_AZURE_OPENAI_ENDPOINT"] == (
+        "${{ vars.ARD_AZURE_OPENAI_ENDPOINT }}"
+    )
+    assert source_check["env"]["ARD_AZURE_OPENAI_API_KEY"] == (
+        "${{ secrets.ARD_AZURE_OPENAI_API_KEY }}"
+    )
+    assert source_check["env"]["ARD_GCP_PROJECT_ID"] == "${{ vars.ARD_GCP_PROJECT_ID }}"
+    assert source_check["env"]["ARD_VERTEX_CREDENTIALS_JSON"] == (
+        "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}"
+    )
+    assert all(
+        "secrets." not in str(step)
+        for step in validation["steps"]
+        if step is not source_check
+    )
 
     pull_request = workflow["jobs"]["pull_request"]
     assert pull_request["needs"] == "validate"

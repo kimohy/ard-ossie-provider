@@ -597,6 +597,22 @@ def test_provider_error_is_recorded_without_raising() -> None:
     assert application.record.validation_codes == []
 
 
+def test_provider_error_propagates_when_fail_fast_requested() -> None:
+    native, skeleton, unresolved_span_ids = unresolved_fixture()
+    error = ProviderExecutionError(
+        "LLM_PROVIDER_TIMEOUT",
+        kind=ProviderFailureKind.TRANSIENT,
+    )
+
+    with pytest.raises(ProviderExecutionError, match="LLM_PROVIDER_TIMEOUT") as captured:
+        SemanticStructureRepairPlanner(
+            RecordingProvider(error=error),
+            propagate_provider_errors=True,
+        ).repair(native, skeleton, unresolved_span_ids, trusted_record=None)
+
+    assert captured.value.kind is ProviderFailureKind.TRANSIENT
+
+
 def test_provider_schema_violation_stays_a_provider_error() -> None:
     native, skeleton, unresolved_span_ids = unresolved_fixture()
     error = ProviderExecutionError(

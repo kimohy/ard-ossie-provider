@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 import ard_ossie.cli.workflow as workflow_cli
 from ard_ossie.application.contracts import WorkflowResult, WorkflowStatus
 from ard_ossie.cli import app
+from ard_ossie.llm import ProviderExecutionError, ProviderFailureKind
 
 
 class StubService:
@@ -107,6 +108,68 @@ def test_source_check_cli_rejects_product_key_traversal_with_security_exit(
     )
 
     assert result.exit_code == 50, result.output
+
+
+def test_source_check_cli_requires_configured_llm_when_requested(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("ARD_LLM_PROFILE", raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "source-check",
+            "--product-key",
+            "sales-order",
+            "--expected-head",
+            "a" * 40,
+            "--repository",
+            str(tmp_path),
+            "--require-llm",
+        ],
+    )
+
+    assert result.exit_code == 20, result.output
+    envelope = json.loads(
+        (tmp_path / ".ard" / "run" / "workflow.source-check-result.json").read_text()
+    )
+    assert envelope["findings"][0]["code"] == "LLM_PROFILE_REQUIRED"
+
+
+def test_source_check_cli_maps_provider_factory_failure_to_configuration_exit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail_provider_factory():
+        raise ProviderExecutionError(
+            "LLM_PROVIDER_CONFIGURATION_FAILED",
+            kind=ProviderFailureKind.CONFIGURATION,
+        )
+
+    monkeypatch.setattr(workflow_cli, "provider_from_environment", fail_provider_factory)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "source-check",
+            "--product-key",
+            "sales-order",
+            "--expected-head",
+            "a" * 40,
+            "--repository",
+            str(tmp_path),
+            "--require-llm",
+        ],
+    )
+
+    assert result.exit_code == 20, result.output
+    envelope = json.loads(
+        (tmp_path / ".ard" / "run" / "workflow.source-check-result.json").read_text()
+    )
+    assert envelope["findings"][0]["code"] == "LLM_PROVIDER_CONFIGURATION_FAILED"
 
 
 def test_ensure_product_pr_cli_exposes_pr_number(

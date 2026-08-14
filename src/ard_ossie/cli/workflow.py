@@ -10,6 +10,7 @@ import typer
 from ard_ossie.application.base_sync import IssueBaseSyncService, IssueRouteService
 from ard_ossie.application.changesets import ChangesetRequest, ChangesetService
 from ard_ossie.application.contracts import (
+    WorkflowConfigurationError,
     WorkflowContext,
     WorkflowError,
     WorkflowResult,
@@ -49,6 +50,7 @@ from ard_ossie.application.source_check import (
     SourceCheckService,
 )
 from ard_ossie.cli.execution import result_writer
+from ard_ossie.llm.contracts import ProviderExecutionError
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -183,13 +185,17 @@ def source_check(
     product_key: Annotated[str, typer.Option("--product-key")],
     expected_head: Annotated[str, typer.Option("--expected-head")],
     repository: Annotated[Path, typer.Option("--repository")] = Path("."),
+    require_llm: Annotated[bool, typer.Option("--require-llm")] = False,
 ) -> None:
     command = "workflow.source-check"
     paths = _repository_paths(repository)
     _publish(
         paths.root,
         command,
-        lambda: _source_check_service(paths).run(product_key, expected_head),
+        lambda: _source_check_service(paths, require_llm=require_llm).run(
+            product_key,
+            expected_head,
+        ),
     )
 
 
@@ -560,8 +566,20 @@ def _detect_product_service(paths):
     return DetectProductService(GitCli(paths.root, SubprocessRunner(), paths=paths))
 
 
-def _source_check_service(paths):
-    return SourceCheckService(paths)
+def _source_check_service(paths, *, require_llm: bool = False):
+    try:
+        provider = provider_from_environment()
+    except ProviderExecutionError as error:
+        raise WorkflowConfigurationError(
+            error.code,
+            "source-check LLM provider configuration failed",
+        ) from error
+    if require_llm and provider is None:
+        raise WorkflowConfigurationError(
+            "LLM_PROFILE_REQUIRED",
+            "source-check requires ARD_LLM_PROFILE",
+        )
+    return SourceCheckService(paths, provider=provider)
 
 
 def _ensure_product_pr_service(repository_name: str, paths):

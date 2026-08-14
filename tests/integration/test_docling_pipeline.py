@@ -1293,6 +1293,36 @@ def test_provider_execution_failure_degrades_with_exact_native_table_text(tmp_pa
     assert parsed.semantic_fidelity.degraded_blocks[0].reason == "provider_unavailable"
 
 
+def test_provider_execution_failure_propagates_for_fail_fast_planner(tmp_path: Path) -> None:
+    from docx import Document
+
+    from ard_ossie.llm import ProviderExecutionError
+
+    path = tmp_path / "semantic.docx"
+    document = Document()
+    document.add_paragraph("원문 유지")
+    document.save(path)
+    source = SourceFile(
+        role=SourceRole.SEMANTIC_DOCUMENT,
+        path=path,
+        relative_path="semantic/semantic.docx",
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        size_bytes=path.stat().st_size,
+        snapshot=path.read_bytes(),
+    )
+    planner = ProviderFailingPlanner()
+    planner.propagate_provider_errors = True
+
+    with pytest.raises(
+        ProviderExecutionError,
+        match="LLM_PROVIDER_TRANSIENT_FAILED",
+    ):
+        DoclingParser(
+            converter=FakeConverter(SimpleNamespace(iterate_items=lambda: iter(()))),
+            structure_repair_planner=planner,  # type: ignore[arg-type]
+        ).parse(source)
+
+
 def test_unresolved_docx_paragraphs_keep_native_paragraph_boundaries(
     tmp_path: Path,
 ) -> None:

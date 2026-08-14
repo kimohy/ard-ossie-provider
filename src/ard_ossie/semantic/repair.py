@@ -179,11 +179,13 @@ class SemanticStructureRepairPlanner:
         provider: LLMProvider,
         *,
         confidence_threshold: float = 0.80,
+        propagate_provider_errors: bool = False,
     ) -> None:
         if not 0 <= confidence_threshold <= 1:
             raise ValueError("SEMANTIC_REPAIR_CONFIDENCE_THRESHOLD_INVALID")
         self._provider = provider
         self._confidence_threshold = confidence_threshold
+        self.propagate_provider_errors = propagate_provider_errors
 
     def repair(
         self,
@@ -243,6 +245,8 @@ class SemanticStructureRepairPlanner:
                 messages=messages,
             )
         except ProviderExecutionError as error:
+            if self.propagate_provider_errors:
+                raise
             return _empty_application(
                 context,
                 provider=provider,

@@ -7,7 +7,13 @@ from collections.abc import Callable
 import pytest
 
 from ard_ossie.ingestion import SourceFile, SourceRole
-from ard_ossie.llm import LLMMetadata, LLMResult, LLMTextPart
+from ard_ossie.llm import (
+    LLMMetadata,
+    LLMResult,
+    LLMTextPart,
+    ProviderExecutionError,
+    ProviderFailureKind,
+)
 from ard_ossie.semantic.models import (
     ExtractionMode,
     NativeDocument,
@@ -372,6 +378,68 @@ def test_docx_extraction_skips_visual_correction() -> None:
     assert application.document == native
     assert application.audits == ()
     assert application.warning_codes == ()
+
+
+def test_provider_error_propagates_when_fail_fast_requested(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ard_ossie.semantic import correction
+
+    payload = b"%PDF-1.7 fixture"
+    source_hash = hashlib.sha256(payload).hexdigest()
+    path = tmp_path / "semantic.pdf"
+    path.write_bytes(payload)
+    source = SourceFile(
+        role=SourceRole.SEMANTIC_DOCUMENT,
+        path=path,
+        relative_path="semantic/semantic.pdf",
+        sha256=source_hash,
+        size_bytes=len(payload),
+        snapshot=payload,
+    )
+    text = "개 인정보"
+    span = SourceSpan(
+        span_id=make_span_id(source_hash, 0),
+        ordinal=0,
+        page=1,
+        bbox=SourceBox(left=0.1, bottom=0.2, right=0.8, top=0.3),
+        text=text,
+        text_hash=hashlib.sha256(text.encode()).hexdigest(),
+    )
+    native = NativeDocument(
+        source_hash=source_hash,
+        extraction_mode=ExtractionMode.PDF_EMBEDDED,
+        page_count=1,
+        parser_versions={"fixture": "1"},
+        spans=(span,),
+        groups=(),
+        tables=(),
+    )
+
+    class FailingProvider:
+        def capabilities(self) -> dict[str, object]:
+            return {
+                "provider": "openai_compatible",
+                "model": "test-model",
+                "vision": True,
+            }
+
+        def generate_multimodal_structured(self, **_kwargs: object) -> object:
+            raise ProviderExecutionError(
+                "LLM_PROVIDER_TIMEOUT",
+                kind=ProviderFailureKind.TRANSIENT,
+            )
+
+    monkeypatch.setattr(correction, "render_pdf_page_images", lambda *_args, **_kwargs: (b"png",))
+
+    with pytest.raises(ProviderExecutionError, match="LLM_PROVIDER_TIMEOUT") as captured:
+        correction.OcrCorrectionPlanner(
+            FailingProvider(),
+            propagate_provider_errors=True,
+        ).correct(source, native)
+
+    assert captured.value.kind is ProviderFailureKind.TRANSIENT
 
 
 def test_repair_prompt_binding_controls_trusted_reuse() -> None:
