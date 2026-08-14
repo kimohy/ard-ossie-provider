@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import time
 from collections.abc import Callable, Mapping
@@ -38,6 +39,9 @@ from ard_ossie.llm.contracts import (
 APIStyle = Literal["chat_completions", "responses"]
 _SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _SAFE_FINISH_REASON = re.compile(r"^[a-z0-9_:-]{1,64}$")
+_SAFE_PROFILE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SAFE_MODEL = re.compile(r"^[^\x00\r\n]{1,200}$")
+_LOGGER = logging.getLogger(__name__)
 _QUOTA_CODES = frozenset(
     {
         "credit_balance_exhausted",
@@ -62,7 +66,7 @@ class OpenAICompatibleProvider:
         api: APIStyle = "chat_completions",
         client: Any | None = None,
         timeout_seconds: int = 120,
-        max_output_tokens: int = 4096,
+        max_output_tokens: int | None = 4096,
         temperature: float = 0,
         vision: bool = False,
         clock: Callable[[], float] = time.monotonic,
@@ -159,30 +163,44 @@ class OpenAICompatibleProvider:
             if self.api == "responses":
                 response = self._responses_request(messages=messages, schema=schema)
                 content = getattr(response, "output_text", None)
-                finish_reason = getattr(response, "status", None)
+                incomplete_details = getattr(response, "incomplete_details", None)
+                finish_reason = getattr(incomplete_details, "reason", None) or getattr(
+                    response, "status", None
+                )
+                refusal = _responses_has_refusal(response)
                 usage = getattr(response, "usage", None)
                 input_tokens = getattr(usage, "input_tokens", None)
                 output_tokens = getattr(usage, "output_tokens", None)
             else:
                 response = self._chat_request(messages=messages, schema=schema)
+                usage = getattr(response, "usage", None)
+                input_tokens = getattr(usage, "prompt_tokens", None)
+                output_tokens = getattr(usage, "completion_tokens", None)
                 try:
                     choice = response.choices[0]
                     content = choice.message.content
                 except (AttributeError, IndexError, TypeError):
-                    raise ProviderExecutionError(
-                        "LLM_EMPTY_RESPONSE",
-                        kind=ProviderFailureKind.OUTPUT,
+                    raise self._output_error(
+                        code="LLM_RESPONSE_CHOICES_MISSING",
+                        response=response,
+                        finish_reason=None,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
                     ) from None
                 finish_reason = getattr(choice, "finish_reason", None)
-                usage = getattr(response, "usage", None)
-                input_tokens = getattr(usage, "prompt_tokens", None)
-                output_tokens = getattr(usage, "completion_tokens", None)
+                refusal = getattr(choice.message, "refusal", None)
         except Exception as error:
             raise _classify_provider_error(error) from None
         if not isinstance(content, str) or not content:
-            raise ProviderExecutionError(
-                "LLM_EMPTY_RESPONSE",
-                kind=ProviderFailureKind.OUTPUT,
+            raise self._output_error(
+                code=_empty_output_code(
+                    finish_reason=finish_reason,
+                    refused=bool(refusal),
+                ),
+                response=response,
+                finish_reason=finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
         elapsed_ms = max(0, round((self._clock() - started) * 1000))
         metadata = LLMMetadata(
@@ -197,6 +215,29 @@ class OpenAICompatibleProvider:
         )
         return LLMResult(text=content, metadata=metadata)
 
+    def _output_error(
+        self,
+        *,
+        code: str,
+        response: object,
+        finish_reason: object,
+        input_tokens: object,
+        output_tokens: object,
+    ) -> ProviderExecutionError:
+        _LOGGER.error(
+            "LLM output rejected: code=%s profile=%s provider=%s model=%s "
+            "request_id=%s finish_reason=%s input_tokens=%s output_tokens=%s",
+            code,
+            _safe_value(self.profile, _SAFE_PROFILE),
+            self.provider_name,
+            _safe_value(self.model, _SAFE_MODEL),
+            _safe_value(getattr(response, "id", None), _SAFE_REQUEST_ID),
+            _safe_value(finish_reason, _SAFE_FINISH_REASON),
+            _safe_count(input_tokens),
+            _safe_count(output_tokens),
+        )
+        return ProviderExecutionError(code, kind=ProviderFailureKind.OUTPUT)
+
     def _chat_request(
         self,
         *,
@@ -206,8 +247,9 @@ class OpenAICompatibleProvider:
         request: dict[str, object] = {
             "model": self.model,
             "messages": messages,
-            "max_completion_tokens": self.max_output_tokens,
         }
+        if self.max_output_tokens is not None:
+            request["max_completion_tokens"] = self.max_output_tokens
         if self.temperature:
             request["temperature"] = self.temperature
         if schema is not None:
@@ -230,8 +272,9 @@ class OpenAICompatibleProvider:
         request: dict[str, object] = {
             "model": self.model,
             "input": messages,
-            "max_output_tokens": self.max_output_tokens,
         }
+        if self.max_output_tokens is not None:
+            request["max_output_tokens"] = self.max_output_tokens
         if self.temperature:
             request["temperature"] = self.temperature
         if schema is not None:
@@ -363,6 +406,31 @@ def _safe_value(value: object, pattern: re.Pattern[str]) -> str | None:
 
 def _safe_count(value: object) -> int | None:
     return value if isinstance(value, int) and value >= 0 else None
+
+
+def _empty_output_code(*, finish_reason: object, refused: bool) -> str:
+    if refused:
+        return "LLM_RESPONSE_REFUSED"
+    if finish_reason in {"length", "max_output_tokens"}:
+        return "LLM_OUTPUT_TOKEN_LIMIT_EXCEEDED"
+    if finish_reason == "content_filter":
+        return "LLM_RESPONSE_FILTERED"
+    return "LLM_EMPTY_RESPONSE"
+
+
+def _responses_has_refusal(response: object) -> bool:
+    output = getattr(response, "output", None)
+    if not isinstance(output, list):
+        return False
+    for item in output:
+        if getattr(item, "type", None) == "refusal":
+            return True
+        content = getattr(item, "content", None)
+        if isinstance(content, list) and any(
+            getattr(part, "type", None) == "refusal" for part in content
+        ):
+            return True
+    return False
 
 
 def _classify_provider_error(error: Exception) -> ProviderExecutionError:

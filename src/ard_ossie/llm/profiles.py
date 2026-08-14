@@ -23,11 +23,12 @@ _LOCATION = re.compile(r"^(?:global|us|eu|[a-z]+-[a-z]+[0-9])$")
 
 APIStyle = Literal["chat_completions", "responses"]
 StructuredOutput = Literal["native", "prompt_json"]
+OutputTokenCount = Annotated[int, Field(gt=0, le=65_536)]
 
 
 class ProfileDefaults(StrictModel):
     timeout_seconds: int = Field(default=120, gt=0, le=600)
-    max_output_tokens: int = Field(default=4096, gt=0, le=65_536)
+    max_output_tokens: OutputTokenCount = 4096
     temperature: float = Field(default=0, ge=0, le=2)
 
 
@@ -37,7 +38,7 @@ class _BaseProfile(StrictModel):
     structured_output: StructuredOutput
     vision: bool
     timeout_seconds: int | None = Field(default=None, gt=0, le=600)
-    max_output_tokens: int | None = Field(default=None, gt=0, le=65_536)
+    max_output_tokens: OutputTokenCount | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
 
     @field_validator("model")
@@ -65,6 +66,7 @@ class _BaseProfile(StrictModel):
 
 class OpenAICompatibleProfile(_BaseProfile):
     provider: Literal["openai_compatible"]
+    max_output_tokens: OutputTokenCount | Literal["model_maximum"] | None = None
     api: APIStyle
     base_url_env: Literal["ARD_LLM_BASE_URL"]
     api_key_env: Literal["ARD_LLM_API_KEY"]
