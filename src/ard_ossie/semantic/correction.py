@@ -228,8 +228,14 @@ def validate_page_corrections(
 
 
 class OcrCorrectionPlanner:
-    def __init__(self, provider: LLMProvider | None) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider | None,
+        *,
+        propagate_provider_errors: bool = False,
+    ) -> None:
         self.provider = provider
+        self.propagate_provider_errors = propagate_provider_errors
 
     def correct(
         self,
@@ -354,6 +360,8 @@ class OcrCorrectionPlanner:
                     messages=_correction_messages(snapshot),
                 )
             except ProviderExecutionError as error:
+                if self.propagate_provider_errors:
+                    raise
                 audits.append(
                     _page_audit(
                         snapshot,

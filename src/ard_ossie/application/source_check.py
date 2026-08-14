@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -9,13 +8,20 @@ import yaml
 
 from ard_ossie.application.contracts import (
     MutationRecord,
+    WorkflowConfigurationError,
     WorkflowResult,
     WorkflowSecurityError,
     WorkflowStatus,
+    WorkflowTransientError,
     WorkflowValidationError,
 )
 from ard_ossie.application.modeling import ModelingService
 from ard_ossie.ingestion import SourceValidationError, scan_sources
+from ard_ossie.llm.contracts import (
+    LLMProvider,
+    ProviderExecutionError,
+    ProviderFailureKind,
+)
 from ard_ossie.ports.filesystem import FileSystemPort
 from ard_ossie.ports.git import GitPort
 from ard_ossie.ports.github import GitHubPort, PullRequestState
@@ -116,28 +122,46 @@ class DetectProductService:
 
 
 class SourceCheckService:
-    def __init__(self, paths: FileSystemPort) -> None:
+    def __init__(
+        self,
+        paths: FileSystemPort,
+        *,
+        provider: LLMProvider | None = None,
+    ) -> None:
         self.paths = paths
+        self.provider = provider
 
     def run(self, product_key: str, expected_head: str) -> WorkflowResult:
         _validate_product_key(product_key)
         _validate_sha(expected_head)
-        if os.environ.get("ARD_LLM_API_KEY") is not None:
-            raise WorkflowSecurityError(
-                "SOURCE_CHECK_LLM_SECRET_PRESENT",
-                "source-check must run without LLM credentials",
-            )
         product = self.paths.resolve_read(Path("products") / product_key)
         changeset_id = validate_changeset_binding(self.paths, product, product_key)
         try:
             manifest = scan_sources(product / "sources")
         except SourceValidationError as error:
             raise WorkflowValidationError(_error_code(error), "source validation failed") from error
-        validation = ModelingService(self.paths).validate(
-            product,
-            "registry",
-            require_semantic_visual_correction=False,
-        )
+        try:
+            validation = ModelingService(self.paths).validate(
+                product,
+                "registry",
+                provider=self.provider,
+                propagate_provider_errors=True,
+            )
+        except ProviderExecutionError as error:
+            if error.kind is ProviderFailureKind.CONFIGURATION:
+                raise WorkflowConfigurationError(
+                    error.code,
+                    "source-check provider configuration failed",
+                ) from None
+            if error.kind is ProviderFailureKind.OUTPUT:
+                raise WorkflowValidationError(
+                    error.code,
+                    "source-check provider output failed validation",
+                ) from None
+            raise WorkflowTransientError(
+                error.code,
+                "source-check provider execution failed",
+            ) from None
         if not validation.passed:
             code = validation.findings[0].code if validation.findings else "MODEL_VALIDATION_FAILED"
             raise WorkflowValidationError(code, "staged product validation failed")

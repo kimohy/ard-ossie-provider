@@ -6,11 +6,14 @@ from pathlib import Path
 import pytest
 import yaml
 
+import ard_ossie.application.source_check as source_check_module
 import ard_ossie.pipeline as pipeline_module
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.application.contracts import (
+    WorkflowConfigurationError,
     WorkflowSecurityError,
     WorkflowStatus,
+    WorkflowTransientError,
     WorkflowValidationError,
 )
 from ard_ossie.application.source_check import (
@@ -18,10 +21,12 @@ from ard_ossie.application.source_check import (
     EnsureProductPrService,
     SourceCheckService,
 )
+from ard_ossie.llm import ProviderExecutionError, ProviderFailureKind
 from ard_ossie.ports.git import ChangedPaths
 from ard_ossie.ports.github import PullRequestState
 from ard_ossie.semantic.models import ExtractionMode
 from tests.integration.test_cli_process import (
+    FakeSemanticProvider,
     FidelityParser,
     create_product_fixture,
     pass_fidelity_report,
@@ -129,6 +134,7 @@ def test_source_check_is_read_only_and_secret_free(
     create_product_fixture(tmp_path)
     registry = tmp_path / "registry"
     registry.mkdir()
+    monkeypatch.setenv("ARD_LLM_API_KEY", "injected-by-trusted-cli")
     before = {
         path.relative_to(tmp_path).as_posix(): path.read_bytes()
         for path in tmp_path.rglob("*")
@@ -146,10 +152,6 @@ def test_source_check_is_read_only_and_secret_free(
         if path.is_file() and not path.is_relative_to(tmp_path / ".ard")
     } == before
 
-    monkeypatch.setenv("ARD_LLM_API_KEY", "must-not-be-present")
-    with pytest.raises(WorkflowSecurityError, match="SOURCE_CHECK_LLM_SECRET_PRESENT"):
-        SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
-
 
 def test_source_check_treats_absent_registry_as_empty_without_creating_it(
     tmp_path: Path,
@@ -163,11 +165,13 @@ def test_source_check_treats_absent_registry_as_empty_without_creating_it(
     assert not (tmp_path / "registry").exists()
 
 
-def test_source_check_defers_pdf_visual_correction_until_protected_processing(
+def test_source_check_injects_provider_and_keeps_semantic_gates_strict(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     create_product_fixture(tmp_path)
+    provider = FakeSemanticProvider()
+    captured: dict[str, object] = {}
     fidelity = pass_fidelity_report().model_copy(
         update={
             "extraction_mode": ExtractionMode.OCR,
@@ -175,15 +179,71 @@ def test_source_check_defers_pdf_visual_correction_until_protected_processing(
             "warning_codes": ["SEMANTIC_OCR_CORRECTION_UNAVAILABLE"],
         }
     )
-    monkeypatch.setattr(
-        pipeline_module,
-        "_processing_parser",
-        lambda **_kwargs: FidelityParser(fidelity),
-    )
 
-    result = SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+    def parser_factory(**kwargs):
+        captured.update(kwargs)
+        return FidelityParser(fidelity)
 
-    assert result.status is WorkflowStatus.SUCCESS
+    monkeypatch.setattr(pipeline_module, "_processing_parser", parser_factory)
+
+    with pytest.raises(
+        WorkflowValidationError,
+        match="SEMANTIC_VISUAL_CORRECTION_FAILED",
+    ):
+        SourceCheckService(
+            RepositoryPaths(tmp_path),
+            provider=provider,
+        ).run("sales-order", SHA)
+
+    assert captured["provider"] is provider
+    assert captured["propagate_provider_errors"] is True
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_error", "expected_exit_code"),
+    [
+        pytest.param(
+            ProviderFailureKind.CONFIGURATION,
+            WorkflowConfigurationError,
+            20,
+            id="configuration",
+        ),
+        pytest.param(
+            ProviderFailureKind.OUTPUT,
+            WorkflowValidationError,
+            10,
+            id="output",
+        ),
+        pytest.param(
+            ProviderFailureKind.TRANSIENT,
+            WorkflowTransientError,
+            30,
+            id="transient",
+        ),
+    ],
+)
+def test_source_check_maps_provider_failure_kind_to_workflow_exit_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: ProviderFailureKind,
+    expected_error: type[Exception],
+    expected_exit_code: int,
+) -> None:
+    create_product_fixture(tmp_path)
+
+    class FailingModelingService:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def validate(self, *_args: object, **_kwargs: object):
+            raise ProviderExecutionError("LLM_PROVIDER_SAFE_CODE", kind=kind)
+
+    monkeypatch.setattr(source_check_module, "ModelingService", FailingModelingService)
+
+    with pytest.raises(expected_error, match="LLM_PROVIDER_SAFE_CODE") as captured:
+        SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+
+    assert captured.value.exit_code == expected_exit_code
 
 
 def test_source_check_requires_marker_and_product_config_binding(tmp_path: Path) -> None:

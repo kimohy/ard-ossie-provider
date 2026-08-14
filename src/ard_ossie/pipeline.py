@@ -190,6 +190,7 @@ def process_product(
     trusted_semantic_repair: dict[str, object] | None = None,
     trusted_semantic_fidelity: dict[str, object] | None = None,
     require_semantic_visual_correction: bool = True,
+    propagate_provider_errors: bool = False,
 ) -> ProcessResult:
     root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
@@ -202,6 +203,7 @@ def process_product(
         parser=parser,
         trusted_semantic_repair=trusted_semantic_repair,
         trusted_semantic_fidelity=trusted_semantic_fidelity,
+        propagate_provider_errors=propagate_provider_errors,
     )
     product_document = active_parser.parse(manifest.by_role(SourceRole.PRODUCT_HTML))
     semantic_document = active_parser.parse(manifest.by_role(SourceRole.SEMANTIC_DOCUMENT))
@@ -474,6 +476,7 @@ def _processing_parser(
     parser: DoclingParser | None,
     trusted_semantic_repair: dict[str, object] | None,
     trusted_semantic_fidelity: dict[str, object] | None,
+    propagate_provider_errors: bool = False,
 ) -> DoclingParser:
     if parser is not None:
         return parser
@@ -487,9 +490,19 @@ def _processing_parser(
         if trusted_semantic_fidelity is not None
         else None
     )
-    planner = SemanticStructureRepairPlanner(provider) if provider is not None else None
+    planner = (
+        SemanticStructureRepairPlanner(
+            provider,
+            propagate_provider_errors=propagate_provider_errors,
+        )
+        if provider is not None
+        else None
+    )
     correction_planner = (
-        OcrCorrectionPlanner(provider)
+        OcrCorrectionPlanner(
+            provider,
+            propagate_provider_errors=propagate_provider_errors,
+        )
         if provider is not None or trusted_fidelity is not None
         else None
     )

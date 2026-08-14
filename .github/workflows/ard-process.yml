@@ -33,6 +33,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    environment: ard-llm
     permissions:
       contents: read
     env:
@@ -62,16 +63,24 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: '0.11.33'
-      - name: Revalidate sources with trusted code and no LLM credentials
+      - name: Revalidate sources with trusted code and protected LLM
         id: source_check
         working-directory: trusted
         env:
           PYTHONSAFEPATH: '1'
+          ARD_LLM_PROFILE: ${{ vars.ARD_LLM_PROFILE }}
+          ARD_LLM_API_KEY: ${{ secrets.ARD_LLM_API_KEY }}
+          ARD_LLM_BASE_URL: ${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}
+          ARD_AZURE_OPENAI_ENDPOINT: ${{ vars.ARD_AZURE_OPENAI_ENDPOINT }}
+          ARD_AZURE_OPENAI_API_KEY: ${{ secrets.ARD_AZURE_OPENAI_API_KEY }}
+          ARD_GCP_PROJECT_ID: ${{ vars.ARD_GCP_PROJECT_ID }}
+          ARD_VERTEX_CREDENTIALS_JSON: ${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}
         run: >-
           uv run --frozen ard workflow source-check
           --product-key "$PRODUCT_KEY"
           --expected-head "$EXPECTED_HEAD"
           --repository "$CANDIDATE_REPOSITORY"
+          --require-llm
 
   process:
     needs: validate
