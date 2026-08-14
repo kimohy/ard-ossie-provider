@@ -1069,6 +1069,55 @@ def _semantic_findings(document: ParsedDocument) -> list[QualityFinding]:
     return findings
 
 
+def _safe_diagnostic_token(value: str) -> str:
+    return value if re.fullmatch(r"[A-Za-z0-9._-]{1,80}", value) else "unknown"
+
+
+def _semantic_repair_diagnostic(document: ParsedDocument) -> str:
+    fidelity = document.semantic_fidelity
+    repair = document.semantic_repair
+    if fidelity is None:
+        return ""
+    unresolved_spans = sum(len(block.spans) for block in fidelity.degraded_blocks)
+    pages = sorted(
+        {
+            span.page
+            for block in fidelity.degraded_blocks
+            for span in block.spans
+            if span.page is not None
+        }
+    )
+    codes = [] if repair is None else repair.validation_codes
+    if repair is None:
+        attempts = 0
+        provider = "none"
+        model = "none"
+        applied = 0
+        rejected = 0
+    else:
+        if repair.outcome == "reused":
+            attempts = 0
+        elif repair.outcome == "applied" or (
+            repair.outcome == "degraded" and repair.provider_error_code and codes
+        ):
+            attempts = len(codes) + 1
+        else:
+            attempts = len(codes) or 1
+        provider = _safe_diagnostic_token(repair.provider)
+        model = _safe_diagnostic_token(repair.model)
+        applied = len(repair.applied_orders)
+        rejected = len(repair.rejected_orders)
+    return (
+        f"; extraction_mode={fidelity.extraction_mode.value}"
+        f"; unresolved_spans={unresolved_spans}"
+        f"; pages={','.join(str(page) for page in pages) or 'unknown'}"
+        f"; validation_codes={','.join(codes) or 'none'}"
+        f"; provider={provider}; model={model}"
+        f"; applied_blocks={applied}; rejected_blocks={rejected}"
+        f"; attempts={attempts}"
+    )
+
+
 def _semantic_hard_findings(
     document: ParsedDocument,
     *,
@@ -1092,6 +1141,20 @@ def _semantic_hard_findings(
             )
         )
     if fidelity.degraded_block_count > 0:
+        diagnostic = _semantic_repair_diagnostic(document)
+        repair = document.semantic_repair
+        if repair is not None and repair.validation_codes:
+            findings.append(
+                QualityFinding(
+                    code=repair.validation_codes[-1],
+                    message=(
+                        "Semantic structure repair validation failed; "
+                        "category=SEMANTIC_STRUCTURE_DEGRADED"
+                        f"{diagnostic}"
+                    ),
+                    path="quality.semantic-structure-repair.json",
+                )
+            )
         reasons = ",".join(sorted({item.reason for item in fidelity.degraded_blocks}))
         findings.append(
             QualityFinding(
@@ -1099,6 +1162,7 @@ def _semantic_hard_findings(
                 message=(
                     f"Semantic structure remains unresolved: {reasons} "
                     f"({fidelity.degraded_block_count} block(s))"
+                    f"{diagnostic}"
                 ),
                 path="generated.data-semantic.md",
             )

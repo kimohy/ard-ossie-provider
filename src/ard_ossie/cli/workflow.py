@@ -196,6 +196,7 @@ def source_check(
             product_key,
             expected_head,
         ),
+        expose_failure_details=True,
     )
 
 
@@ -457,6 +458,7 @@ def _publish(
     run: Callable[[], WorkflowResult],
     *,
     trusted_outputs: dict[str, Any] | None = None,
+    expose_failure_details: bool = False,
 ) -> None:
     writer = result_writer(repository, command)
     writer.prepare()
@@ -464,6 +466,7 @@ def _publish(
     try:
         result = run()
     except WorkflowError as error:
+        failure_message = error.message if expose_failure_details else error.code
         outputs = dict(getattr(error, "outputs", {}))
         outputs.update(envelope_outputs)
         outputs["failure_exit_code"] = int(error.exit_code)
@@ -472,12 +475,15 @@ def _publish(
             status=WorkflowStatus.FAILURE,
             outputs=outputs,
             artifacts=getattr(error, "artifacts", []),
-            findings=[{"code": error.code, "message": error.code}],
+            findings=[{"code": error.code, "message": failure_message}],
             mutations=getattr(error, "mutations", []),
             retryable=error.retryable,
         )
         writer.write(result)
-        typer.echo(error.code, err=True)
+        if expose_failure_details:
+            typer.echo(f"{error.code}: {error.message}", err=True)
+        else:
+            typer.echo(error.code, err=True)
         raise typer.Exit(int(error.exit_code)) from None
     except (ValueError, TypeError) as error:
         wrapped = WorkflowValidationError(

@@ -43,6 +43,7 @@ class WorkflowError(RuntimeError):
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
+        self.message = message
         self.exit_code = exit_code
         self.retryable = retryable
 
