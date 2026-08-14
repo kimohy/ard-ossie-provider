@@ -426,9 +426,16 @@ class ProviderFailingPlanner:
 
 
 class FixedRepairPlanner:
-    def __init__(self, plan: RepairPlan, blocks: tuple[object, ...]) -> None:
+    def __init__(
+        self,
+        plan: RepairPlan,
+        blocks: tuple[object, ...],
+        *,
+        validation_codes: list[str] | None = None,
+    ) -> None:
         self.plan = plan
         self.blocks = blocks
+        self.validation_codes = validation_codes or []
 
     def repair(self, native: Any, *_args: object, **_kwargs: object) -> RepairApplication:
         return RepairApplication(
@@ -444,7 +451,7 @@ class FixedRepairPlanner:
                 outcome="applied",
                 plan=self.plan,
                 provider_error_code=None,
-                validation_codes=[],
+                validation_codes=self.validation_codes,
                 applied_orders=[block.order for block in self.plan.blocks],
                 rejected_orders=[],
                 plan_hash=canonical_hash(self.plan.model_dump(mode="json")),
@@ -906,6 +913,46 @@ def test_native_table_spans_repaired_as_paragraph_degrade_atomically(
     assert parsed.semantic_repair.plan_hash == canonical_hash(
         parsed.semantic_repair.plan.model_dump(mode="json")
     )
+
+
+def test_native_table_rejection_preserves_same_code_from_prior_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ard_ossie.pipeline import _semantic_hard_findings
+
+    native = controlled_native_table(("A", "C"), row_count=2, column_count=1)
+    span_ids = [span.span_id for span in native.spans]
+    repair = RepairBlock(
+        kind="paragraph",
+        order=10,
+        span_ids=span_ids,
+        heading_level=None,
+        list_kind=None,
+        list_depth=None,
+        row_count=None,
+        column_count=None,
+        cells=[],
+        exclusion_kind=None,
+        confidence=1.0,
+    )
+    plan = RepairPlan(blocks=[repair])
+    code = "SEMANTIC_REPAIR_TABLE_INVALID"
+
+    parsed = parse_controlled(
+        tmp_path,
+        monkeypatch,
+        native,
+        planner=FixedRepairPlanner(
+            plan,
+            (ParagraphBlock(order=10, span_ids=tuple(span_ids)),),
+            validation_codes=[code],
+        ),
+    )
+
+    assert parsed.semantic_repair.validation_codes == [code, code]
+    findings = _semantic_hard_findings(parsed, require_visual_correction=False)
+    assert "attempts=2" in findings[0].message
 
 
 def test_partial_native_table_repair_rejects_every_touching_block(

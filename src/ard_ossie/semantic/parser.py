@@ -362,11 +362,10 @@ def _reject_repair_orders(
     payload.update(
         {
             "outcome": "rejected",
-            "validation_codes": list(
-                dict.fromkeys(
-                    [*record.validation_codes, "SEMANTIC_REPAIR_TABLE_INVALID"]
-                )
-            ),
+            "validation_codes": [
+                *record.validation_codes,
+                "SEMANTIC_REPAIR_TABLE_INVALID",
+            ],
             "applied_orders": [
                 order for order in record.applied_orders if order not in invalid_orders
             ],
