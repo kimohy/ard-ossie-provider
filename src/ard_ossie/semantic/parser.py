@@ -44,6 +44,7 @@ from ard_ossie.semantic.sources import (
     SemanticSourceError,
     extract_docx_native,
     extract_ocr_native,
+    extract_pdf_native,
 )
 from ard_ossie.semantic.structure import (
     ReconciliationResult,
@@ -86,7 +87,7 @@ def parse_semantic_document(
     )
     correction_audits: tuple[OcrCorrectionPageAudit, ...] = ()
     correction_warnings: tuple[str, ...] = ()
-    if native.extraction_mode is ExtractionMode.OCR:
+    if native.extraction_mode in {ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR}:
         if correction_planner is None:
             correction_warnings = ("SEMANTIC_OCR_CORRECTION_UNAVAILABLE",)
         else:
@@ -139,14 +140,18 @@ def _native_and_structure(
 ) -> tuple[NativeDocument, StructureDocument]:
     suffix = source.path.suffix.casefold()
     if suffix == ".pdf":
-        ocr_document = _convert_with_full_page_ocr(
-            source,
-            full_page_ocr_converter=full_page_ocr_converter,
-        )
-        native = extract_ocr_native(source, ocr_document)
-        if not native.spans:
-            raise SemanticSourceError("SEMANTIC_OCR_UNREADABLE")
-        skeleton = build_docling_skeleton(ocr_document)
+        native = extract_pdf_native(source, pdfium=pdfium)
+        if native is None:
+            ocr_document = _convert_with_full_page_ocr(
+                source,
+                full_page_ocr_converter=full_page_ocr_converter,
+            )
+            native = extract_ocr_native(source, ocr_document)
+            if not native.spans:
+                raise SemanticSourceError("SEMANTIC_OCR_UNREADABLE")
+            skeleton = build_docling_skeleton(ocr_document)
+        else:
+            skeleton = _ordinary_structure(source, converter=converter)
     elif suffix == ".docx":
         native = extract_docx_native(source)
         skeleton = _ordinary_structure(source, converter=converter)
@@ -200,7 +205,7 @@ def _new_converter() -> Any:
 
 def _new_full_page_ocr_converter() -> Any:
     from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import OcrAutoOptions, PdfPipelineOptions
+    from docling.datamodel.pipeline_options import EasyOcrOptions, PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     return DocumentConverter(
@@ -208,7 +213,10 @@ def _new_full_page_ocr_converter() -> Any:
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=PdfPipelineOptions(
                     do_ocr=True,
-                    ocr_options=OcrAutoOptions(force_full_page_ocr=True),
+                    ocr_options=EasyOcrOptions(
+                        lang=["ko", "en"],
+                        force_full_page_ocr=True,
+                    ),
                 )
             )
         }

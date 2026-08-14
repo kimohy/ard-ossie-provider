@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import string
 from collections import Counter
 from collections.abc import Mapping
@@ -48,12 +49,15 @@ class SemanticCoverageError(ValueError):
 
 
 class SemanticRawHtmlError(ValueError):
-    def __init__(self) -> None:
-        self.code = "SEMANTIC_RAW_HTML_OUTPUT"
+    def __init__(self, code: str = "SEMANTIC_RAW_HTML_OUTPUT") -> None:
+        self.code = code
         super().__init__(self.code)
 
 
 _COMMONMARK_ESCAPABLE_PUNCTUATION = string.punctuation.replace("\\", "")
+_HTML_ENTITY = re.compile(
+    r"(?<!\\)&(?:#\d+|#x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);"
+)
 
 
 def validate_source_coverage(
@@ -127,6 +131,8 @@ def render_semantic_markdown(
     rendered = "\n\n".join(chunk.rstrip("\n") for chunk in chunks) + "\n"
     if has_raw_html(rendered):
         raise SemanticRawHtmlError
+    if _HTML_ENTITY.search(rendered) is not None:
+        raise SemanticRawHtmlError("SEMANTIC_HTML_ENTITY_OUTPUT")
     return rendered
 
 
@@ -226,20 +232,7 @@ def _escape_inline(value: str) -> str:
 
 
 def _escape_inline_line(value: str) -> str:
-    leading_end = 0
-    while leading_end < len(value) and value[leading_end] in {" ", "\t"}:
-        leading_end += 1
-    trailing_start = len(value)
-    while trailing_start > leading_end and value[trailing_start - 1] in {" ", "\t"}:
-        trailing_start -= 1
-    leading = _encode_boundary_whitespace(value[:leading_end])
-    middle = _escape_markdown(value[leading_end:trailing_start])
-    trailing = _encode_boundary_whitespace(value[trailing_start:])
-    return f"{leading}{middle}{trailing}"
-
-
-def _encode_boundary_whitespace(value: str) -> str:
-    return "".join("&#9;" if character == "\t" else "&#32;" for character in value)
+    return _escape_markdown(value.strip(" \t"))
 
 
 def _escape_table_value(value: str) -> str:

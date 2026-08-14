@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 import pytest
 from markdown_it import MarkdownIt
@@ -168,7 +169,7 @@ def test_renderer_encodes_inline_line_endings_without_extra_block_boundaries() -
     ]
 
 
-def test_renderer_preserves_line_leading_and_whitespace_only_paragraph_text_as_gfm() -> None:
+def test_renderer_normalizes_boundary_whitespace_without_emitting_html_entities() -> None:
     tabbed = source_span(0, "\talpha")
     spaced = source_span(1, "    beta")
     blank = source_span(2, " \t ")
@@ -180,16 +181,11 @@ def test_renderer_preserves_line_leading_and_whitespace_only_paragraph_text_as_g
     )
 
     rendered = render_semantic_markdown(semantic, native.span_catalog())
-    tokens = MarkdownIt("commonmark").parse(rendered)
-
-    assert [token.type for token in tokens] == [
-        "paragraph_open",
-        "inline",
-        "paragraph_close",
-    ] * 3
-    assert MarkdownIt("commonmark").render(rendered) == (
-        "<p>\talpha</p>\n<p>    beta</p>\n<p> \t </p>\n"
-    )
+    assert rendered == "alpha\n\nbeta\n\n\n"
+    assert not has_raw_html(rendered)
+    assert re.search(r"(?<!\\)&(?:#\d+|#x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);", rendered) is None
+    assert "&#32;" not in rendered
+    assert "&#9;" not in rendered
 
 
 def test_renderer_rejects_unvalidated_list_depth_before_indent_allocation() -> None:

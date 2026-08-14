@@ -24,12 +24,18 @@ OTHER_PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
 
 
-def semantic_fidelity_payload(*, status: str = "PASS") -> dict[str, object]:
+def semantic_fidelity_payload(
+    *,
+    status: str = "PASS",
+    extraction_mode: str = "docx_xml",
+    warning_codes: list[str] | None = None,
+    degraded: bool = False,
+) -> dict[str, object]:
     failed = status == "FAIL"
     return {
         "source_hash": "a" * 64,
-        "extraction_mode": "docx_xml",
-        "page_count": 0,
+        "extraction_mode": extraction_mode,
+        "page_count": 1 if extraction_mode != "docx_xml" else 0,
         "parser_versions": {"semantic": "test"},
         "status": status,
         "heading_count": 0,
@@ -43,11 +49,22 @@ def semantic_fidelity_payload(*, status: str = "PASS") -> dict[str, object]:
         "excluded_span_count": 0,
         "unmatched_span_count": 1 if failed else 0,
         "duplicated_span_count": 0,
-        "degraded_block_count": 0,
+        "degraded_block_count": 1 if degraded else 0,
         "source_text_coverage": 0.0 if failed else 1.0,
         "removed_elements": [],
-        "degraded_blocks": [],
+        "degraded_blocks": (
+            [
+                {
+                    "order": 0,
+                    "reason": "structure_unresolved",
+                    "spans": [{"bbox": None, "text_hash": "b" * 64}],
+                }
+            ]
+            if degraded
+            else []
+        ),
         "table_results": [],
+        "warning_codes": warning_codes or [],
     }
 
 
@@ -219,6 +236,43 @@ def test_release_independently_rejects_failed_semantic_fidelity(
         "semantic-fidelity.json",
         semantic_fidelity_payload(status="FAIL"),
     )
+
+    with pytest.raises(ReleaseBlocked, match="SEMANTIC_FIDELITY_GATE_FAILED"):
+        if entrypoint == "resolve":
+            resolve_release_plan(
+                PRODUCT_ID,
+                registry_root=tmp_path / "registry",
+                repository_root=tmp_path,
+            )
+        else:
+            build_release_bundle(product_root, tmp_path / "dist" / "release.zip")
+
+
+@pytest.mark.parametrize("entrypoint", ["resolve", "bundle"])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(
+            semantic_fidelity_payload(
+                status="WARN",
+                extraction_mode="ocr",
+                warning_codes=["SEMANTIC_OCR_CORRECTION_UNAVAILABLE"],
+            ),
+            id="visual-correction-unavailable",
+        ),
+        pytest.param(
+            semantic_fidelity_payload(status="WARN", degraded=True),
+            id="structure-degraded",
+        ),
+    ],
+)
+def test_release_independently_rejects_unresolved_semantic_fidelity(
+    tmp_path: Path,
+    entrypoint: str,
+    payload: dict[str, object],
+) -> None:
+    product_root = release_product_root(tmp_path)
+    replace_quality_sibling(product_root, "semantic-fidelity.json", payload)
 
     with pytest.raises(ReleaseBlocked, match="SEMANTIC_FIDELITY_GATE_FAILED"):
         if entrypoint == "resolve":
