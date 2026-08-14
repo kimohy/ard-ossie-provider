@@ -8,6 +8,7 @@ from pydantic import Field
 
 from ard_ossie.application.contracts import WorkflowSecurityError, WorkflowValidationError
 from ard_ossie.ingestion import SourceValidationError
+from ard_ossie.llm.contracts import LLMProvider
 from ard_ossie.models import StrictModel
 from ard_ossie.pipeline import (
     PipelineValidationError,
@@ -71,7 +72,9 @@ class ModelingService:
         product_path: str | Path,
         registry_path: str | Path,
         *,
+        provider: LLMProvider | None = None,
         require_semantic_visual_correction: bool = True,
+        propagate_provider_errors: bool = False,
     ) -> ValidationResult:
         product = self.paths.resolve_read(product_path)
         registry = self.paths.resolve_directory(registry_path, allow_missing=True)
@@ -81,8 +84,9 @@ class ModelingService:
                 processed = process_product(
                     staged_product,
                     registry_root=staged_registry,
-                    provider=None,
+                    provider=provider,
                     require_semantic_visual_correction=require_semantic_visual_correction,
+                    propagate_provider_errors=propagate_provider_errors,
                 )
         except PipelineValidationError as error:
             report = error.report

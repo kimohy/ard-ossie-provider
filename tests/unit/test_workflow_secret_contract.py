@@ -89,28 +89,41 @@ class TestWorkflowSecretContract(unittest.TestCase):
             with self.subTest(expression=expression):
                 self.assertEqual(tuple(_secret_references({"value": expression})), (expression,))
 
-    def test_only_protected_processor_job_references_secrets(self) -> None:
+    def test_only_protected_validation_and_processor_jobs_reference_secrets(self) -> None:
         jobs = _workflow(Path(".github/workflows/ard-process.yml"))["jobs"]
         self.assertIsInstance(jobs, dict)
+        validation = jobs["validate"]
+        self.assertIsInstance(validation, dict)
+        self.assertEqual(validation["environment"], "ard-llm")
+        self.assertFalse(any(name.startswith("ARD_") for name in validation["env"]))
+        source_check = next(
+            step for step in validation["steps"] if step.get("id") == "source_check"
+        )
+        self.assertTrue(
+            all(
+                not tuple(_secret_references(step))
+                for step in validation["steps"]
+                if step is not source_check
+            )
+        )
+
         process = jobs["process"]
         self.assertIsInstance(process, dict)
-
         self.assertEqual(process["environment"], "ard-llm")
-        env = process["env"]
-        self.assertIsInstance(env, dict)
-        self.assertEqual(
-            env["ARD_LLM_API_KEY"],
-            "${{ secrets.ARD_LLM_API_KEY }}",
-        )
-        self.assertEqual(
-            env["ARD_AZURE_OPENAI_API_KEY"],
-            "${{ secrets.ARD_AZURE_OPENAI_API_KEY }}",
-        )
-        self.assertEqual(
-            env["ARD_VERTEX_CREDENTIALS_JSON"],
-            "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}",
-        )
+        for env in (source_check["env"], process["env"]):
+            self.assertEqual(
+                env["ARD_LLM_API_KEY"],
+                "${{ secrets.ARD_LLM_API_KEY }}",
+            )
+            self.assertEqual(
+                env["ARD_AZURE_OPENAI_API_KEY"],
+                "${{ secrets.ARD_AZURE_OPENAI_API_KEY }}",
+            )
+            self.assertEqual(
+                env["ARD_VERTEX_CREDENTIALS_JSON"],
+                "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}",
+            )
         self.assertEqual(
             {name for name, job in jobs.items() if tuple(_secret_references(job))},
-            {"process"},
+            {"validate", "process"},
         )

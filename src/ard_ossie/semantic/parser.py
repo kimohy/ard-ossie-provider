@@ -253,6 +253,8 @@ def _repair_and_degrade(
                 trusted_record=trusted_record,
             )
         except ProviderExecutionError:
+            if getattr(repair_planner, "propagate_provider_errors", False):
+                raise
             # Provider failures never get to author or remove source allocations.
             # The native fallback below records this as provider_unavailable.
             pass

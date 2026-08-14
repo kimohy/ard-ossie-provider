@@ -18,6 +18,7 @@ jobs:
       github.event.workflow_run.head_branch != github.event.repository.default_branch &&
       github.event.workflow_run.head_sha != ''
     runs-on: ubuntu-24.04
+    environment: ard-llm
     permissions:
       contents: read
     outputs:
@@ -61,18 +62,26 @@ jobs:
           --base-ref "$BASE_REF"
           --head-ref "$HEAD_REF"
           --repository "$CANDIDATE_REPOSITORY"
-      - name: Validate candidate sources without LLM credentials
+      - name: Validate candidate sources with trusted code and protected LLM
         id: source_check
         working-directory: trusted
         env:
           PYTHONSAFEPATH: '1'
           PRODUCT_KEY: ${{ steps.detect.outputs.product_key }}
           EXPECTED_HEAD: ${{ steps.detect.outputs.expected_head }}
+          ARD_LLM_PROFILE: ${{ vars.ARD_LLM_PROFILE }}
+          ARD_LLM_API_KEY: ${{ secrets.ARD_LLM_API_KEY }}
+          ARD_LLM_BASE_URL: ${{ secrets.ARD_LLM_BASE_URL || vars.ARD_LLM_BASE_URL || 'https://api.openai.com/v1' }}
+          ARD_AZURE_OPENAI_ENDPOINT: ${{ vars.ARD_AZURE_OPENAI_ENDPOINT }}
+          ARD_AZURE_OPENAI_API_KEY: ${{ secrets.ARD_AZURE_OPENAI_API_KEY }}
+          ARD_GCP_PROJECT_ID: ${{ vars.ARD_GCP_PROJECT_ID }}
+          ARD_VERTEX_CREDENTIALS_JSON: ${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}
         run: >-
           uv run --frozen ard workflow source-check
           --product-key "$PRODUCT_KEY"
           --expected-head "$EXPECTED_HEAD"
           --repository "$CANDIDATE_REPOSITORY"
+          --require-llm
 
   pull_request:
     needs: validate
