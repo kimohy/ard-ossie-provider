@@ -267,6 +267,30 @@ def test_provider_omits_sampling_parameters_from_structured_request() -> None:
     assert {"temperature", "top_p"}.isdisjoint(client.completions.last_request)
 
 
+def test_provider_omits_model_managed_output_limit() -> None:
+    client = FakeClient('{"terms":["net revenue"]}')
+    provider = OpenAICompatibleProvider(
+        base_url="https://llm.example.com/v1",
+        api_key=SecretStr("secret-value"),
+        model="example-model",
+        client=client,
+        max_output_tokens=None,
+    )
+
+    provider.generate_structured(
+        schema={
+            "type": "object",
+            "properties": {"terms": {"type": "array", "items": {"type": "string"}}},
+            "required": ["terms"],
+            "additionalProperties": False,
+        },
+        messages=[{"role": "user", "content": "extract"}],
+    )
+
+    assert client.completions.last_request is not None
+    assert "max_completion_tokens" not in client.completions.last_request
+
+
 def test_provider_capabilities_expose_audit_identity() -> None:
     provider = OpenAICompatibleProvider(
         base_url="https://llm.example.com/v1",
@@ -494,8 +518,51 @@ def test_provider_classifies_missing_choice_as_invalid_output() -> None:
             messages=[{"role": "user", "content": "sentinel-prompt"}],
         )
 
-    assert captured.value.code == "LLM_EMPTY_RESPONSE"
+    assert captured.value.code == "LLM_RESPONSE_CHOICES_MISSING"
     assert captured.value.kind is ProviderFailureKind.OUTPUT
+
+
+def test_provider_reports_safe_details_for_token_limited_empty_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class TokenLimitedCompletions:
+        def create(self, **kwargs: object) -> object:
+            return SimpleNamespace(
+                id="chatcmpl-safe_123",
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content=None, refusal=None),
+                        finish_reason="length",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=1234, completion_tokens=4096),
+            )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=TokenLimitedCompletions()))
+    provider = OpenAICompatibleProvider(
+        base_url="https://llm.example.com/v1",
+        api_key=SecretStr("secret-value"),
+        model="example-model",
+        profile="example-profile",
+        client=client,
+    )
+
+    with pytest.raises(ProviderExecutionError) as captured:
+        provider.generate_structured(
+            schema={"type": "object"},
+            messages=[{"role": "user", "content": "sentinel-prompt"}],
+        )
+
+    assert captured.value.code == "LLM_OUTPUT_TOKEN_LIMIT_EXCEEDED"
+    assert captured.value.kind is ProviderFailureKind.OUTPUT
+    assert caplog.messages == [
+        "LLM output rejected: code=LLM_OUTPUT_TOKEN_LIMIT_EXCEEDED "
+        "profile=example-profile provider=openai_compatible model=example-model "
+        "request_id=chatcmpl-safe_123 finish_reason=length "
+        "input_tokens=1234 output_tokens=4096"
+    ]
+    assert "sentinel-prompt" not in caplog.text
+    assert "secret-value" not in caplog.text
 
 
 def test_semantic_suggestion_requires_evidence_and_rejects_physical_fields() -> None:

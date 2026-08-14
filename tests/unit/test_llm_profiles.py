@@ -23,7 +23,7 @@ def test_packaged_registry_resolves_migration_profile() -> None:
     assert profile.base_url_env == "ARD_LLM_BASE_URL"
     assert profile.api_key_env == "ARD_LLM_API_KEY"
     assert profile.timeout_seconds == 120
-    assert profile.max_output_tokens == 4096
+    assert profile.max_output_tokens == "model_maximum"
     assert profile.temperature == 0
     assert profile.vision is True
 
