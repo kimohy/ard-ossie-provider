@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import ard_ossie.pipeline as pipeline_module
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.application.contracts import (
     WorkflowSecurityError,
@@ -19,7 +20,12 @@ from ard_ossie.application.source_check import (
 )
 from ard_ossie.ports.git import ChangedPaths
 from ard_ossie.ports.github import PullRequestState
-from tests.integration.test_cli_process import create_product_fixture
+from ard_ossie.semantic.models import ExtractionMode
+from tests.integration.test_cli_process import (
+    FidelityParser,
+    create_product_fixture,
+    pass_fidelity_report,
+)
 
 SHA = "a" * 40
 
@@ -155,6 +161,29 @@ def test_source_check_treats_absent_registry_as_empty_without_creating_it(
 
     assert result.status is WorkflowStatus.SUCCESS
     assert not (tmp_path / "registry").exists()
+
+
+def test_source_check_defers_pdf_visual_correction_until_protected_processing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_product_fixture(tmp_path)
+    fidelity = pass_fidelity_report().model_copy(
+        update={
+            "extraction_mode": ExtractionMode.OCR,
+            "status": "WARN",
+            "warning_codes": ["SEMANTIC_OCR_CORRECTION_UNAVAILABLE"],
+        }
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_processing_parser",
+        lambda **_kwargs: FidelityParser(fidelity),
+    )
+
+    result = SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+
+    assert result.status is WorkflowStatus.SUCCESS
 
 
 def test_source_check_requires_marker_and_product_config_binding(tmp_path: Path) -> None:
