@@ -30,6 +30,8 @@ class ParsedDocument(StrictModel):
     excluded_product_fact_evidence: list[Evidence] = Field(default_factory=list, exclude=True)
     semantic_fidelity: SemanticFidelityReport | None = Field(default=None, exclude=True)
     semantic_repair: SemanticStructureRepairRecord | None = Field(default=None, exclude=True)
+    semantic_validation: Any | None = Field(default=None, exclude=True)
+    semantic_pipeline_result: Any | None = Field(default=None, exclude=True)
 
 
 class DoclingParser:
@@ -43,6 +45,8 @@ class DoclingParser:
         ocr_correction_planner: OcrCorrectionPlanner | None = None,
         trusted_fidelity_report: SemanticFidelityReport | None = None,
         pdfium: Any | None = None,
+        semantic_pipeline_mode: str = "shadow",
+        candidate_provider: Any | None = None,
     ) -> None:
         self._converter = converter
         self._full_page_ocr_converter = full_page_ocr_converter
@@ -51,6 +55,10 @@ class DoclingParser:
         self._ocr_correction_planner = ocr_correction_planner
         self._trusted_fidelity_report = trusted_fidelity_report
         self._pdfium = pdfium
+        if semantic_pipeline_mode not in {"legacy", "shadow", "candidate"}:
+            raise ValueError("SEMANTIC_PIPELINE_MODE_INVALID")
+        self._semantic_pipeline_mode = semantic_pipeline_mode
+        self._candidate_provider = candidate_provider
 
     def parse(self, source: SourceFile) -> ParsedDocument:
         if source.role is SourceRole.DICTIONARY_EXCEL:
@@ -67,6 +75,8 @@ class DoclingParser:
                 correction_planner=self._ocr_correction_planner,
                 trusted_fidelity=self._trusted_fidelity_report,
                 pdfium=self._pdfium,
+                semantic_pipeline_mode=self._semantic_pipeline_mode,
+                candidate_provider=self._candidate_provider,
             )
             return ParsedDocument(
                 role=source.role,
@@ -76,6 +86,12 @@ class DoclingParser:
                 evidence=list(semantic.evidence),
                 semantic_fidelity=semantic.fidelity,
                 semantic_repair=semantic.repair_record,
+                semantic_validation=(
+                    semantic.pipeline_result.validation
+                    if semantic.pipeline_result is not None
+                    else None
+                ),
+                semantic_pipeline_result=semantic.pipeline_result,
             )
 
         converter = self._converter or _new_converter()

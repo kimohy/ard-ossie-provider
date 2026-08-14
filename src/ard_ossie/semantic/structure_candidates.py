@@ -253,10 +253,10 @@ def _block_candidates(
     specs: list[tuple[str, float, int | None, str | None, int | None]] = []
     paragraph_score = min(
         0.96,
-        0.58
-        + 0.22 * float(len(text.strip()) > 48)
+        0.78
+        + 0.10 * float(len(text.strip()) > 48)
         + 0.08 * features["terminal_punctuation"]
-        + 0.06 * features["paragraph_hint"],
+        + 0.04 * features["paragraph_hint"],
     )
     specs.append(("paragraph", paragraph_score, None, None, None))
 
@@ -289,7 +289,7 @@ def _block_candidates(
     if features["caption_shape"]:
         specs.append(("caption", 0.90, None, None, None))
     if features["table_hint"]:
-        specs.append(("table", 0.74, None, None, None))
+        specs.append(("table", 0.92, None, None, None))
 
     candidates = [
         BlockCandidate(

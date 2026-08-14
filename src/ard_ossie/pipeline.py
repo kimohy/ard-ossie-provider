@@ -70,12 +70,14 @@ from ard_ossie.renderers import (
     render_product_markdown,
     render_semantic_markdown,
 )
+from ard_ossie.semantic.canonical import SemanticPipelineStatus
 from ard_ossie.semantic.correction import OcrCorrectionPlanner
 from ard_ossie.semantic.models import (
     ExtractionMode,
     SemanticFidelityReport,
     SemanticStructureRepairRecord,
 )
+from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 from ard_ossie.versioning import VersionDecision, VersionOutcome, plan_version
 
@@ -191,6 +193,7 @@ def process_product(
     trusted_semantic_fidelity: dict[str, object] | None = None,
     require_semantic_visual_correction: bool = True,
     propagate_provider_errors: bool = False,
+    semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
 ) -> ProcessResult:
     root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
@@ -204,6 +207,7 @@ def process_product(
         trusted_semantic_repair=trusted_semantic_repair,
         trusted_semantic_fidelity=trusted_semantic_fidelity,
         propagate_provider_errors=propagate_provider_errors,
+        semantic_pipeline_mode=semantic_pipeline_mode,
     )
     product_document = active_parser.parse(manifest.by_role(SourceRole.PRODUCT_HTML))
     semantic_document = active_parser.parse(manifest.by_role(SourceRole.SEMANTIC_DOCUMENT))
@@ -477,6 +481,7 @@ def _processing_parser(
     trusted_semantic_repair: dict[str, object] | None,
     trusted_semantic_fidelity: dict[str, object] | None,
     propagate_provider_errors: bool = False,
+    semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
 ) -> DoclingParser:
     if parser is not None:
         return parser
@@ -511,6 +516,8 @@ def _processing_parser(
         trusted_repair_record=trusted_record,
         ocr_correction_planner=correction_planner,
         trusted_fidelity_report=trusted_fidelity,
+        semantic_pipeline_mode=semantic_pipeline_mode,
+        candidate_provider=provider,
     )
 
 
@@ -1046,6 +1053,8 @@ def _completeness_findings(
 
 
 def _semantic_findings(document: ParsedDocument) -> list[QualityFinding]:
+    if document.semantic_validation is not None:
+        return []
     fidelity = document.semantic_fidelity
     if fidelity is None:
         return []
@@ -1116,6 +1125,26 @@ def _semantic_hard_findings(
     *,
     require_visual_correction: bool = True,
 ) -> list[QualityFinding]:
+    validation = document.semantic_validation
+    if validation is not None:
+        if validation.status is SemanticPipelineStatus.VERIFIED:
+            return []
+        code = (
+            "SEMANTIC_CANDIDATE_REVIEW_REQUIRED"
+            if validation.status is SemanticPipelineStatus.REVIEW_REQUIRED
+            else "SEMANTIC_CANDIDATE_VALIDATION_FAILED"
+        )
+        details = ",".join(item.code for item in validation.findings) or "none"
+        return [
+            QualityFinding(
+                code=code,
+                message=(
+                    f"Candidate semantic PDF is not publishable; status={validation.status.value}; "
+                    f"findings={details}"
+                ),
+                path="quality.semantic-validation.json",
+            )
+        ]
     fidelity = document.semantic_fidelity
     if fidelity is None:
         return []

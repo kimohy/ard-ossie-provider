@@ -38,6 +38,7 @@ from ard_ossie.pipeline import (
 from ard_ossie.ports.filesystem import FileSystemPort
 from ard_ossie.ports.git import GitPort
 from ard_ossie.ports.github import GitHubPort, PullRequestState
+from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 
 _PRODUCT_KEY = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
@@ -55,6 +56,7 @@ class ProcessingRequest(StrictModel):
     allow_writeback: bool
     warnings_as_errors: bool = False
     target_url: str = ""
+    semantic_pipeline_mode: SemanticPipelineMode = SemanticPipelineMode.SHADOW
 
     @field_validator("product_key")
     @classmethod
@@ -144,6 +146,7 @@ class ProcessingService:
                 warnings_as_errors=request.warnings_as_errors,
                 trusted_semantic_repair=trusted_semantic_repair,
                 trusted_semantic_fidelity=trusted_semantic_fidelity,
+                semantic_pipeline_mode=request.semantic_pipeline_mode,
             )
         except PipelineSecurityError as error:
             raise WorkflowSecurityError(
