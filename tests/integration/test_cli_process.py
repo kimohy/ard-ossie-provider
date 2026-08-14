@@ -20,6 +20,7 @@ from ard_ossie.pipeline import (
     PipelineValidationError,
     ProviderExecutionError,
     ProviderFailureKind,
+    QualityStatus,
     process_product,
 )
 from ard_ossie.semantic.models import (
@@ -377,6 +378,53 @@ def test_pipeline_blocks_unresolved_semantic_fidelity_before_promotion(
         finding.code for finding in captured.value.report.hard_errors
     }
     assert not (product / "generated").exists()
+
+
+def test_pipeline_source_preflight_defers_visual_correction_only(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    add_complete_dictionary_descriptions(product)
+    fidelity = pass_fidelity_report().model_copy(
+        update={
+            "extraction_mode": ExtractionMode.OCR,
+            "status": "WARN",
+            "warning_codes": ["SEMANTIC_OCR_CORRECTION_UNAVAILABLE"],
+        }
+    )
+
+    result = process_product(
+        product,
+        registry_root=tmp_path / "registry",
+        parser=FidelityParser(fidelity),
+        require_semantic_visual_correction=False,
+    )
+
+    assert result.quality_report.status is QualityStatus.WARN
+    assert not result.quality_report.hard_errors
+    assert {finding.code for finding in result.quality_report.warnings} == {
+        "SEMANTIC_OCR_CORRECTION_UNAVAILABLE"
+    }
+
+
+def test_pipeline_source_preflight_still_blocks_structure_degradation(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    add_complete_dictionary_descriptions(product)
+
+    with pytest.raises(PipelineValidationError) as captured:
+        process_product(
+            product,
+            registry_root=tmp_path / "registry",
+            parser=FidelityParser(degraded_fidelity_report()),
+            require_semantic_visual_correction=False,
+        )
+
+    assert captured.value.report is not None
+    assert "SEMANTIC_STRUCTURE_DEGRADED" in {
+        finding.code for finding in captured.value.report.hard_errors
+    }
 
 
 def test_process_cli_passes_warnings_as_errors_before_promotion(

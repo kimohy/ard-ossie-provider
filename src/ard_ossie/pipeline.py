@@ -189,6 +189,7 @@ def process_product(
     warnings_as_errors: bool = False,
     trusted_semantic_repair: dict[str, object] | None = None,
     trusted_semantic_fidelity: dict[str, object] | None = None,
+    require_semantic_visual_correction: bool = True,
 ) -> ProcessResult:
     root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
@@ -332,7 +333,12 @@ def process_product(
         )
     )
     hard_errors.extend(relationship_findings)
-    hard_errors.extend(_semantic_hard_findings(semantic_document))
+    hard_errors.extend(
+        _semantic_hard_findings(
+            semantic_document,
+            require_visual_correction=require_semantic_visual_correction,
+        )
+    )
     warnings = _completeness_findings(config, table_irs, semantic_document)
     warnings.extend(prepared_metrics.findings)
     warnings.extend(_semantic_findings(semantic_document))
@@ -1050,7 +1056,11 @@ def _semantic_findings(document: ParsedDocument) -> list[QualityFinding]:
     return findings
 
 
-def _semantic_hard_findings(document: ParsedDocument) -> list[QualityFinding]:
+def _semantic_hard_findings(
+    document: ParsedDocument,
+    *,
+    require_visual_correction: bool = True,
+) -> list[QualityFinding]:
     fidelity = document.semantic_fidelity
     if fidelity is None:
         return []
@@ -1080,7 +1090,7 @@ def _semantic_hard_findings(document: ParsedDocument) -> list[QualityFinding]:
                 path="generated.data-semantic.md",
             )
         )
-    if fidelity.extraction_mode in {
+    if require_visual_correction and fidelity.extraction_mode in {
         ExtractionMode.PDF_EMBEDDED,
         ExtractionMode.OCR,
     }:
