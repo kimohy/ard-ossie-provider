@@ -70,6 +70,8 @@ class ModelingService:
         self,
         product_path: str | Path,
         registry_path: str | Path,
+        *,
+        require_semantic_visual_correction: bool = True,
     ) -> ValidationResult:
         product = self.paths.resolve_read(product_path)
         registry = self.paths.resolve_directory(registry_path, allow_missing=True)
@@ -80,6 +82,7 @@ class ModelingService:
                     staged_product,
                     registry_root=staged_registry,
                     provider=None,
+                    require_semantic_visual_correction=require_semantic_visual_correction,
                 )
         except PipelineValidationError as error:
             report = error.report

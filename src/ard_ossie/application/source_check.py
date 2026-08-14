@@ -133,7 +133,11 @@ class SourceCheckService:
             manifest = scan_sources(product / "sources")
         except SourceValidationError as error:
             raise WorkflowValidationError(_error_code(error), "source validation failed") from error
-        validation = ModelingService(self.paths).validate(product, "registry")
+        validation = ModelingService(self.paths).validate(
+            product,
+            "registry",
+            require_semantic_visual_correction=False,
+        )
         if not validation.passed:
             code = validation.findings[0].code if validation.findings else "MODEL_VALIDATION_FAILED"
             raise WorkflowValidationError(code, "staged product validation failed")
