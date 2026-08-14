@@ -8,7 +8,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from ard_ossie.canonical import canonical_hash
 from ard_ossie.models import Sha256
-from ard_ossie.semantic.evidence import AtomId, RegionId
+from ard_ossie.semantic.evidence import AtomId, HypothesisId, RegionId
 from ard_ossie.semantic.models import ImmutableStrictModel
 
 CandidateId = Annotated[str, StringConstraints(pattern=r"^candidate_[0-9a-f]{16}$")]
@@ -59,12 +59,104 @@ class SpacingCandidate(ImmutableStrictModel):
         return self
 
 
+class RecognitionCandidate(ImmutableStrictModel):
+    kind: Literal["recognition"] = "recognition"
+    candidate_id: CandidateId
+    region_id: RegionId
+    hypothesis_id: HypothesisId
+    text: str = Field(min_length=1)
+    engine: str = Field(min_length=1)
+    score: float = Field(ge=0, le=1)
+    features: dict[str, float]
+
+
+class BlockCandidate(ImmutableStrictModel):
+    kind: Literal["block"] = "block"
+    candidate_id: CandidateId
+    region_id: RegionId
+    block_kind: Literal[
+        "heading",
+        "paragraph",
+        "list_item",
+        "table",
+        "caption",
+        "figure",
+    ]
+    atom_ids: tuple[AtomId, ...] = Field(min_length=1)
+    heading_level: int | None = Field(default=None, ge=1, le=6)
+    list_kind: Literal["ordered", "unordered"] | None = None
+    list_depth: int | None = Field(default=None, ge=1, le=8)
+    score: float = Field(ge=0, le=1)
+    features: dict[str, float]
+
+    @model_validator(mode="after")
+    def validate_block_metadata(self) -> BlockCandidate:
+        if len(self.atom_ids) != len(set(self.atom_ids)):
+            raise ValueError("CANDIDATE_ATOM_SEQUENCE_INVALID")
+        if (self.heading_level is not None) != (self.block_kind == "heading"):
+            raise ValueError("CANDIDATE_HEADING_METADATA_INVALID")
+        has_list_metadata = self.list_kind is not None and self.list_depth is not None
+        if has_list_metadata != (self.block_kind == "list_item"):
+            raise ValueError("CANDIDATE_LIST_METADATA_INVALID")
+        return self
+
+
+class ReadingOrderCandidate(ImmutableStrictModel):
+    kind: Literal["reading_order"] = "reading_order"
+    candidate_id: CandidateId
+    region_id: RegionId
+    region_ids: tuple[RegionId, ...] = Field(min_length=1)
+    score: float = Field(ge=0, le=1)
+    features: dict[str, float]
+
+    @model_validator(mode="after")
+    def validate_region_order(self) -> ReadingOrderCandidate:
+        if len(self.region_ids) != len(set(self.region_ids)):
+            raise ValueError("CANDIDATE_READING_ORDER_DUPLICATE")
+        return self
+
+
+class ContinuationCandidate(ImmutableStrictModel):
+    kind: Literal["continuation"] = "continuation"
+    candidate_id: CandidateId
+    region_id: RegionId
+    previous_region_id: RegionId
+    current_region_id: RegionId
+    continue_previous: bool
+    score: float = Field(ge=0, le=1)
+    features: dict[str, float]
+
+    @model_validator(mode="after")
+    def validate_region_pair(self) -> ContinuationCandidate:
+        if self.region_id != self.current_region_id:
+            raise ValueError("CANDIDATE_CONTINUATION_SCOPE_INVALID")
+        if self.previous_region_id == self.current_region_id:
+            raise ValueError("CANDIDATE_CONTINUATION_PAIR_INVALID")
+        return self
+
+
+Candidate = Annotated[
+    SpacingCandidate
+    | RecognitionCandidate
+    | BlockCandidate
+    | ReadingOrderCandidate
+    | ContinuationCandidate,
+    Field(discriminator="kind"),
+]
+
+
 class CandidateSet(ImmutableStrictModel):
     candidate_set_id: CandidateSetId
     source_hash: Sha256
     region_id: RegionId
-    decision_type: Literal["spacing"]
-    candidates: tuple[SpacingCandidate, ...] = Field(min_length=1, max_length=5)
+    decision_type: Literal[
+        "spacing",
+        "recognition",
+        "block",
+        "reading_order",
+        "continuation",
+    ]
+    candidates: tuple[Candidate, ...] = Field(min_length=1, max_length=5)
 
     @model_validator(mode="after")
     def validate_candidates(self) -> CandidateSet:
