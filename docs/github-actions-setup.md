@@ -66,6 +66,7 @@ profiles:
   openai-compatible-default:
     provider: openai_compatible
     model: gpt-5.6-terra
+    max_output_tokens: model_maximum
     structured_output: native
     api: chat_completions
     base_url_env: ARD_LLM_BASE_URL
