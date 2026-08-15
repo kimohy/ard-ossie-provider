@@ -34,6 +34,7 @@ from ard_ossie.semantic.candidates import (
     RecognitionCandidate,
     SpacingCandidate,
     TableCandidate,
+    is_invariant_proven_table,
 )
 from ard_ossie.semantic.evidence import RegionId
 from ard_ossie.semantic.models import ImmutableStrictModel
@@ -176,6 +177,25 @@ class CandidateAdjudicator:
             policy=self.policy,
             page_crop=page_crop,
         )
+
+        proven_tables = tuple(
+            candidate for candidate in candidates if is_invariant_proven_table(candidate)
+        )
+        if len(proven_tables) > 1:
+            raise ValueError("ADJUDICATION_MULTIPLE_INVARIANT_PROOFS")
+        if proven_tables:
+            proven = proven_tables[0]
+            return _record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                selected_candidate_id=proven.candidate_id,
+                outcome="selected",
+                source="deterministic",
+                confidence=1.0,
+                provider=provider_name,
+                model=model,
+            )
 
         best = candidates[0]
         runner_score = candidates[1].score if len(candidates) > 1 else 0.0

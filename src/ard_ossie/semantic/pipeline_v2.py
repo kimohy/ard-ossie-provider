@@ -18,6 +18,7 @@ from ard_ossie.semantic.candidates import (
     BlockCandidate,
     CandidateSet,
     RecognitionCandidate,
+    is_invariant_proven_table,
 )
 from ard_ossie.semantic.canonical import (
     CanonicalSemanticDocument,
@@ -137,17 +138,6 @@ def parse_semantic_pdf_v2(
     layout = normalize_layout(evidence, hints)
     scorer = spacing_scorer or KiwiSpacingScorer()
 
-    spacing_sets = tuple(
-        build_spacing_candidate_set(
-            region=region,
-            evidence=evidence,
-            layout=layout,
-            scorer=scorer,
-        )
-        for region in layout.regions
-        if any(not _atom_text(evidence, atom_id).isspace() for atom_id in region.atom_ids)
-        and not region.repeated_edge
-    )
     block_sets = build_block_candidate_sets(evidence=evidence, layout=layout, hints=hints)
     reading_set = build_reading_order_candidate_set(layout)
     continuation_sets = build_continuation_candidate_sets(layout)
@@ -167,6 +157,24 @@ def parse_semantic_pdf_v2(
                     spacing_scorer=scorer,
                 )
             )
+
+    proven_table_regions = {
+        candidate_set.region_id
+        for candidate_set in table_sets
+        if any(is_invariant_proven_table(candidate) for candidate in candidate_set.candidates)
+    }
+    spacing_sets = tuple(
+        build_spacing_candidate_set(
+            region=region,
+            evidence=evidence,
+            layout=layout,
+            scorer=scorer,
+        )
+        for region in layout.regions
+        if region.region_id not in proven_table_regions
+        and any(not _atom_text(evidence, atom_id).isspace() for atom_id in region.atom_ids)
+        and not region.repeated_edge
+    )
 
     remaining_sets = (
         *spacing_sets,

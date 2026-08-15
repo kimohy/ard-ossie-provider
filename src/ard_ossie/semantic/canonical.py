@@ -257,6 +257,15 @@ def assemble_canonical(
                 if table_candidate is not None
                 else ()
             )
+            block_text = (
+                _table_plain_text(
+                    table_candidate.row_count,
+                    table_candidate.column_count,
+                    canonical_cells,
+                )
+                if table_candidate is not None
+                else text
+            )
             if kind == "table" and table_candidate is None:
                 kind = "paragraph"
             digest = canonical_hash({"region_id": region_id, "kind": kind, "atom_ids": atom_ids})
@@ -267,7 +276,7 @@ def assemble_canonical(
                     region_id=region_id,
                     page=region.page,
                     kind=kind,
-                    text=text,
+                    text=block_text,
                     atom_ids=atom_ids,
                     heading_level=(
                         block_candidate.heading_level
@@ -381,12 +390,24 @@ def validate_canonical(
         )
 
     character_mismatch = any(
-        _non_whitespace(block.text) != _atom_text_sequence(block.atom_ids, atom_catalog)
+        (
+            block.kind != "table"
+            and _non_whitespace(block.text) != _atom_text_sequence(block.atom_ids, atom_catalog)
+        )
         or (
             block.kind == "table"
-            and any(
-                _non_whitespace(cell.text) != _atom_text_sequence(cell.atom_ids, atom_catalog)
-                for cell in block.cells
+            and (
+                block.text
+                != _table_plain_text(
+                    block.row_count or 0,
+                    block.column_count or 0,
+                    block.cells,
+                )
+                or any(
+                    _non_whitespace(cell.text)
+                    != _atom_text_sequence(cell.atom_ids, atom_catalog)
+                    for cell in block.cells
+                )
             )
         )
         for block in document.blocks
@@ -558,6 +579,17 @@ def _canonical_cells(
         )
         for cell in table.cells
     )
+
+
+def _table_plain_text(
+    row_count: int,
+    column_count: int,
+    cells: tuple[CanonicalCell, ...],
+) -> str:
+    rows = [["" for _ in range(column_count)] for _ in range(row_count)]
+    for cell in cells:
+        rows[cell.start_row][cell.start_column] = cell.text
+    return "\n".join("\t".join(row) for row in rows)
 
 
 def _project_cell_spacing(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ard_ossie.semantic.adjudication import CandidateAdjudicator
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
@@ -172,7 +174,9 @@ def _spanning_table_fixture() -> tuple[
             )
         cell_atom_ids.append(tuple(atom_ids))
     region_id = "region_0000000000000101"
-    region_atom_ids = tuple(atom.atom_id for atom in atoms)
+    region_atom_ids = tuple(
+        atom_id for cell_ids in cell_atom_ids for atom_id in reversed(cell_ids)
+    )
     evidence = EvidenceDocument(
         source_hash=SOURCE_HASH,
         extraction_mode=EvidenceExtractionMode.PDF_EMBEDDED,
@@ -380,6 +384,20 @@ def test_invariant_proven_table_preserves_exact_cell_text_when_lines_span_column
     ]
     assert set(proven[0].atom_ids) == set(layout.regions[0].atom_ids)
     assert len(proven[0].atom_ids) == len(set(proven[0].atom_ids))
+    atom_catalog = {atom.atom_id: atom for atom in evidence.atoms}
+    assert all(
+        "".join(
+            atom_catalog[atom_id].text
+            for atom_id in cell.atom_ids
+            if not atom_catalog[atom_id].text.isspace()
+        )
+        == "".join(character for character in (cell.rendered_text or "") if not character.isspace())
+        for cell in proven[0].cells
+    )
+
+    decision = CandidateAdjudicator(None).decide(candidate_set)
+    assert decision.outcome == "selected"
+    assert decision.selected_candidate_id == proven[0].candidate_id
 
 
 def test_invariant_proof_is_retained_when_geometry_has_identical_cells() -> None:
@@ -417,6 +435,21 @@ def test_invariant_proof_is_retained_when_geometry_has_identical_cells() -> None
         and candidate.features.get("structure_hint_text") == 1.0
         for candidate in candidate_set.candidates
     )
+
+
+def test_fragmented_hangul_spacing_is_not_treated_as_fully_proven() -> None:
+    evidence, layout, hints = _spanning_table_fixture()
+    table = hints.blocks[0].table
+    assert table is not None
+    fragmented_cells = (*table.cells[:3], replace(table.cells[3], text_hint="광 고 소재"))
+    hints = StructureDocument(
+        blocks=(replace(hints.blocks[0], table=replace(table, cells=fragmented_cells)),)
+    )
+
+    candidate_set = build_table_candidate_set(layout.regions[0], evidence, layout, hints)
+    decision = CandidateAdjudicator(None).decide(candidate_set)
+
+    assert decision.outcome == "review_required"
 
 
 def test_list_depth_and_caption_candidates_are_bounded() -> None:

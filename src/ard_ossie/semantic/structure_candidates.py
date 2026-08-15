@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
 from statistics import median
 
@@ -244,6 +244,9 @@ def _invariant_hint_table_candidate(
     atom_catalog: dict[str, EvidenceAtom],
 ) -> TableCandidate | None:
     """Build a hinted table only when geometry and every cell's characters agree."""
+    spacing_integrity = not any(
+        _has_obvious_spacing_fragmentation(cell.text_hint) for cell in table_hint.cells
+    )
     assignments: list[int | None] = []
     for atom_id in region.atom_ids:
         atom = atom_catalog[atom_id]
@@ -283,13 +286,20 @@ def _invariant_hint_table_candidate(
         )
         if source_characters != hinted_characters:
             return None
+        ordered_atom_ids = _order_atom_ids_by_text_hint(
+            atom_ids,
+            cell.text_hint,
+            atom_catalog,
+        )
+        if ordered_atom_ids is None:
+            return None
         coordinates = (
             cell.start_row,
             cell.end_row,
             cell.start_column,
             cell.end_column,
         )
-        specs.append((*coordinates, atom_ids, cell.column_header))
+        specs.append((*coordinates, ordered_atom_ids, cell.column_header))
         rendered_text_by_coordinates[coordinates] = cell.text_hint
 
     cells = tuple(
@@ -318,11 +328,12 @@ def _invariant_hint_table_candidate(
             row_count=table_hint.row_count,
             column_count=table_hint.column_count,
             cells=cells,
-            score=1.0,
+            score=1.0 if spacing_integrity else 0.94,
             features={
                 "atom_bbox_cell_agreement": 1.0,
                 "cell_character_multiset": 1.0,
                 "structure_hint_text": 1.0,
+                "cell_spacing_integrity": float(spacing_integrity),
             },
         )
     except ValueError:
@@ -344,6 +355,35 @@ def _best_hint_cell(
     return max(range(len(cells)), key=lambda index: (overlaps[index], -index))
 
 
+def _order_atom_ids_by_text_hint(
+    atom_ids: tuple[str, ...],
+    text_hint: str,
+    atom_catalog: dict[str, EvidenceAtom],
+) -> tuple[str, ...] | None:
+    by_character: dict[str, deque[str]] = defaultdict(deque)
+    whitespace: list[str] = []
+    for atom_id in atom_ids:
+        text = atom_catalog[atom_id].text
+        if text.isspace():
+            whitespace.append(atom_id)
+        elif len(text) == 1:
+            by_character[text].append(atom_id)
+        else:
+            return None
+
+    ordered: list[str] = []
+    for character in text_hint:
+        if character.isspace():
+            continue
+        available = by_character[character]
+        if not available:
+            return None
+        ordered.append(available.popleft())
+    if any(available for available in by_character.values()):
+        return None
+    return (*ordered, *whitespace)
+
+
 def _nearest_assigned_cell(assignments: list[int | None], index: int) -> int | None:
     for distance in range(1, len(assignments)):
         before = index - distance
@@ -353,6 +393,20 @@ def _nearest_assigned_cell(assignments: list[int | None], index: int) -> int | N
         if after < len(assignments) and assignments[after] is not None:
             return assignments[after]
     return None
+
+
+def _has_obvious_spacing_fragmentation(value: str) -> bool:
+    hangul_fragments = re.finditer(
+        r"(?<![가-힣A-Za-z0-9_])([가-힣]+)\s+([가-힣]+)",
+        value,
+    )
+    if any(len(match.group(1)) == 1 or len(match.group(2)) == 1 for match in hangul_fragments):
+        return True
+    return re.search(
+        r"(?:\b[A-Za-z0-9]+\s+[A-Za-z0-9]*_[A-Za-z0-9_]*\b"
+        r"|\b[A-Za-z0-9_]*_[A-Za-z0-9_]*\s+[A-Za-z0-9]+\b)",
+        value,
+    ) is not None
 
 
 def _language_spacing_table_candidate(
