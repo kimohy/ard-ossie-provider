@@ -1,0 +1,52 @@
+{
+  "artifact_hashes": {
+    "data-dictionary.json": "bbcb77bdc5c1fe6a720e102a0490ea8f2c7127c8a5271246432be4125636bdd0",
+    "data-product.md": "610f7cb3122682a7a17fa9302710dd564451300a52cdf8fe082591501239332c",
+    "data-semantic.md": "97e7dae822a5e459bde624b78dde85f4aa8b651913211d4bfa138db7307c852b",
+    "ossie-model.json": "edd86426f0fba826a63b07a51563023e25cca2de4349df1b0246ff003b5ecfa1",
+    "source-manifest.json": "d287d85ca10aa835addc1d40c62eb2b08ddcee1ef6abd52feec75419fa31084a"
+  },
+  "completeness": 1.0,
+  "hard_errors": [],
+  "llm_provenance": {
+    "elapsed_ms": 27357,
+    "finish_reason": "stop",
+    "input_tokens": 31469,
+    "model": "gpt-5.6-terra",
+    "output_tokens": 4791,
+    "profile": "openai-compatible-default",
+    "provider": "openai_compatible",
+    "repair_count": 0,
+    "request_id": "chatcmpl-ED8LD66J9OdogUw4MImh8gxBed4PY",
+    "retry_count": 0
+  },
+  "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+  "product_version": 1,
+  "quality_artifact_hashes": {
+    "application-report.json": "e2e8e9529d263ff8e44bc2b3d95729337bbca1d0c8f0bbf4d9a7f1006a4ebb95",
+    "candidate-report.json": "785cc9fd8596ac9f7e16aafae890b4960a4dbc8bd4bead5d1b051b736c755eee",
+    "decision-report.json": "69c4a5bc298214303e1fc91ee28ec08b595d1c1d2e1ef262e7a3605de63e2cfa",
+    "duplicate-report.json": "535b997b3c9014bc22126b98d27945767875da2050cccc3c48a410ec06fdc5da",
+    "evidence-summary.json": "539ce4c87de3cd59bf4113ba8cda86650502589308f4a74f1a64e960ccbd6f17",
+    "failure-report.json": "8ba5996c9cd33e269ba9f64a0cb7f9b3342e857be4a9f565a9bbfd26afe8b013",
+    "impact-report.json": "6a2b048ddae86aeeaa9b48d822ca1a1c009a22a6cb848668da0301ef9eb44740",
+    "llm-suggestions.json": "eccfe108c5d5ae5c67d1686268b47bacf2c97c6222305d76c4458b0ccfc5a90e",
+    "manifest.json": "26f42e5c99b84f2919c835b1c5ec05c883e0a533070a1c08ea8f7093f0ea371d",
+    "semantic-fidelity.json": "1d62615d3423fdc76aaebd90b6f741a42db871de28eeec72b8375cc8c729d360",
+    "validation-report.json": "e42063205436e264cc9f4736e30a403d579a66899eb01dbdb852913aab019f3f",
+    "version-report.json": "ef662a8f5321ae8967cea74b6243429df1a4c4446ec6be3157b589ed5e3cee5e"
+  },
+  "status": "WARN",
+  "warnings": [
+    {
+      "code": "LLM_METRIC_SQL_UNSAFE",
+      "message": "Unsafe optional LLM metric suggestion was excluded",
+      "path": "metrics.provider_suggestion[10]"
+    },
+    {
+      "code": "LLM_METRIC_SQL_UNSAFE",
+      "message": "Unsafe optional LLM metric suggestion was excluded",
+      "path": "metrics.provider_suggestion[12]"
+    }
+  ]
+}
