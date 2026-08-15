@@ -250,11 +250,8 @@ def _invariant_hint_table_candidate(
     assignments: list[int | None] = []
     for atom_id in region.atom_ids:
         atom = atom_catalog[atom_id]
-        if atom.text.isspace():
-            assignments.append(None)
-            continue
         cell_index = _best_hint_cell(atom, table_hint.cells)
-        if cell_index is None:
+        if cell_index is None and not atom.text.isspace():
             return None
         assignments.append(cell_index)
 

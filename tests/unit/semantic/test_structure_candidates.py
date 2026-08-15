@@ -437,6 +437,42 @@ def test_invariant_proof_is_retained_when_geometry_has_identical_cells() -> None
     )
 
 
+def test_invariant_table_assigns_whitespace_to_its_overlapping_cell() -> None:
+    evidence, layout, hints = _spanning_table_fixture()
+    whitespace_id = next(
+        atom.atom_id
+        for atom in evidence.atoms
+        if atom.source_object == 3 and atom.text.isspace()
+    )
+    region = layout.regions[0]
+    without_whitespace = tuple(
+        atom_id for atom_id in region.atom_ids if atom_id != whitespace_id
+    )
+    split = next(
+        index
+        for index, atom_id in enumerate(without_whitespace)
+        if next(atom for atom in evidence.atoms if atom.atom_id == atom_id).source_object == 3
+    )
+    reordered = (
+        *without_whitespace[:split],
+        whitespace_id,
+        *without_whitespace[split:],
+    )
+    region = region.model_copy(update={"atom_ids": reordered})
+    layout = layout.model_copy(update={"regions": (region,)})
+
+    candidate_set = build_table_candidate_set(region, evidence, layout, hints)
+    proven = next(
+        candidate
+        for candidate in candidate_set.candidates
+        if isinstance(candidate, TableCandidate)
+        and candidate.features.get("atom_bbox_cell_agreement") == 1.0
+    )
+
+    assert whitespace_id in proven.cells[3].atom_ids
+    assert whitespace_id not in proven.cells[2].atom_ids
+
+
 def test_fragmented_hangul_spacing_is_not_treated_as_fully_proven() -> None:
     evidence, layout, hints = _spanning_table_fixture()
     table = hints.blocks[0].table
@@ -449,7 +485,9 @@ def test_fragmented_hangul_spacing_is_not_treated_as_fully_proven() -> None:
     candidate_set = build_table_candidate_set(layout.regions[0], evidence, layout, hints)
     decision = CandidateAdjudicator(None).decide(candidate_set)
 
-    assert decision.outcome == "review_required"
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.selected_candidate_id is not None
 
 
 def test_list_depth_and_caption_candidates_are_bounded() -> None:

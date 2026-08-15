@@ -61,6 +61,32 @@ def test_identifier_gap_is_a_defect_even_when_characters_are_conserved() -> None
     assert spacing_defect_codes(candidate) == ("IDENTIFIER_WHITESPACE_SPLIT",)
 
 
+@pytest.mark.parametrize(
+    ("source", "damaged"),
+    [
+        ("user@example.com 안내", "user@ example.com 안내"),
+        ("https://example.com 경로", "https:// example.com 경로"),
+        ("2026-08-15 기준", "2026- 08-15 기준"),
+        ("AB12CD 상태", "AB12 CD 상태"),
+        ("10kg 제한", "10 kg 제한"),
+    ],
+)
+def test_generated_candidate_rejects_whitespace_inside_protected_tokens(
+    source: str,
+    damaged: str,
+) -> None:
+    anchor = _spacing_candidate(source)
+
+    with pytest.raises(ValueError, match="SPACING_REPAIR_PROTECTED_TOKEN_SPLIT"):
+        build_generated_candidate(anchor, damaged, confidence=0.91)
+
+
+def test_protected_token_gap_is_a_deterministic_candidate_defect() -> None:
+    candidate = _spacing_candidate("user@ example.com")
+
+    assert "PROTECTED_TOKEN_WHITESPACE_SPLIT" in spacing_defect_codes(candidate)
+
+
 def test_generated_candidate_rejects_character_mutation() -> None:
     anchor = _spacing_candidate("마케팅 캠페인")
 
@@ -97,3 +123,15 @@ def test_fallback_rejects_defective_source_when_a_valid_candidate_exists() -> No
     fallback = fallback_spacing_candidate(_candidate_set(source, dense))
 
     assert fallback.candidate_id == dense.candidate_id
+
+
+def test_fallback_is_unavailable_when_every_candidate_has_a_deterministic_defect() -> None:
+    before = _spacing_candidate(
+        "marketing _campaign",
+        feature="source_spacing",
+        score=0.45,
+    )
+    after = _spacing_candidate("marketing_ campaign", feature="alternate", score=0.40)
+
+    with pytest.raises(ValueError, match="SPACING_REPAIR_SAFE_FALLBACK_UNAVAILABLE"):
+        fallback_spacing_candidate(_candidate_set(before, after))

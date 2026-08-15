@@ -585,7 +585,7 @@ def test_table_topology_and_cross_page_continuation_are_revalidated() -> None:
     assert "INVARIANT_CONTINUATION" in codes
 
 
-def test_low_confidence_decision_keeps_preview_but_blocks_publication() -> None:
+def test_low_confidence_decision_keeps_publishable_preview_with_review_debt() -> None:
     evidence = _evidence("데이터시맨틱")
     layout = _layout(evidence)
     region = layout.regions[0]
@@ -649,8 +649,8 @@ def test_low_confidence_decision_keeps_preview_but_blocks_publication() -> None:
     )
 
     assert "데이터 시맨틱" in render_canonical_markdown(document)
-    assert report.status is SemanticPipelineStatus.REVIEW_REQUIRED
-    assert report.publishable is False
+    assert report.status is SemanticPipelineStatus.REVIEW_PENDING
+    assert report.publishable is True
 
 
 def test_renderer_escapes_raw_html_and_canonical_hash_is_stable() -> None:

@@ -20,6 +20,7 @@ from ard_ossie.semantic.adjudication import (
     DecisionRecord,
     _decision_id,
     candidate_choice_schema,
+    diagnostic_decision_record,
 )
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
@@ -260,16 +261,18 @@ def test_ambiguous_request_contains_bounded_candidate_text_but_no_raw_catalog() 
     assert "original_page_catalog" not in payload
 
 
-def test_unknown_candidate_is_retried_once_then_requires_review() -> None:
+def test_unknown_spacing_candidate_is_retried_then_deferred_to_safe_fallback() -> None:
     invalid = {"candidate_id": "candidate_deadbeefdeadbeef", "confidence": 0.99}
     provider = RecordingProvider([invalid, invalid])
 
     decision = CandidateAdjudicator(provider).decide(_spacing_set(0.80, 0.75))
 
-    assert decision.outcome == "review_required"
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.selected_candidate_id is not None
     assert decision.validation_codes == (
         "LLM_CANDIDATE_UNKNOWN",
-        "LLM_CANDIDATE_UNKNOWN",
+        "LLM_SPACING_REPAIR_DEFERRED",
     )
     assert len(provider.calls) == 2
 
@@ -471,10 +474,67 @@ def test_trusted_recovery_is_ignored_when_active_policy_changes(
     assert len(provider.calls) == 1
 
 
-def test_unavailable_provider_requires_review() -> None:
+def test_unavailable_provider_defers_spacing_to_safe_fallback() -> None:
     unavailable = CandidateAdjudicator(None).decide(_spacing_set(0.80, 0.75))
-    assert unavailable.outcome == "review_required"
-    assert unavailable.validation_codes == ("LLM_PROVIDER_UNAVAILABLE",)
+    assert unavailable.outcome == "deferred_review"
+    assert unavailable.source == "fallback"
+    assert unavailable.selected_candidate_id is not None
+    assert unavailable.validation_codes == (
+        "LLM_PROVIDER_UNAVAILABLE",
+        "LLM_SPACING_REPAIR_DEFERRED",
+    )
+
+
+def test_unavailable_provider_defers_nonspacing_to_best_valid_candidate() -> None:
+    unavailable = CandidateAdjudicator(None).decide(_block_set(0.80, 0.75))
+    assert unavailable.outcome == "deferred_review"
+    assert unavailable.selected_candidate_id == _block_set(0.80, 0.75).candidates[0].candidate_id
+    assert unavailable.validation_codes == (
+        "LLM_PROVIDER_UNAVAILABLE",
+        "LLM_CANDIDATE_SELECTION_DEFERRED",
+    )
+
+
+def test_unavailable_provider_requires_review_when_all_spacing_fallbacks_are_defective() -> None:
+    original = _identifier_spacing_set()
+    damaged = tuple(
+        make_spacing_candidate(
+            region_id=candidate.region_id,
+            rendered_text=(
+                "marketing _campaign 캠페인"
+                if index == 0
+                else "marketing_ campaign 캠페인"
+            ),
+            character_sequence=candidate.character_sequence,
+            atom_ids=candidate.atom_ids,
+            source_whitespace=tuple(
+                boundary.source_whitespace_atom_ids for boundary in candidate.boundaries
+            ),
+            score=candidate.score,
+            features=candidate.features,
+        )
+        for index, candidate in enumerate(original.candidates)
+    )
+    candidate_set = CandidateSet(
+        candidate_set_id=make_candidate_set_id(
+            SOURCE_HASH,
+            original.region_id,
+            tuple(candidate.candidate_id for candidate in damaged),
+        ),
+        source_hash=SOURCE_HASH,
+        region_id=original.region_id,
+        decision_type="spacing",
+        candidates=damaged,
+    )
+
+    decision = CandidateAdjudicator(None).decide(candidate_set)
+
+    assert decision.outcome == "review_required"
+    assert decision.selected_candidate_id is None
+    assert decision.validation_codes == (
+        "LLM_PROVIDER_UNAVAILABLE",
+        "SPACING_REPAIR_SAFE_FALLBACK_UNAVAILABLE",
+    )
 
 
 def test_high_confidence_identifier_defect_is_replaced_by_verified_generation() -> None:
@@ -515,7 +575,10 @@ def test_high_confidence_identifier_defect_is_replaced_by_verified_generation() 
     assert len(provider.calls) == 3
 
     reuse_provider = RecordingProvider()
-    reused = CandidateAdjudicator(reuse_provider, trusted=(decision,)).decide(candidate_set)
+    persisted = diagnostic_decision_record(decision)
+    assert persisted.generated_candidate is not None
+    assert persisted.generated_candidate.kind == "spacing_snapshot"
+    reused = CandidateAdjudicator(reuse_provider, trusted=(persisted,)).decide(candidate_set)
     assert reused.source == "cache"
     assert reused.generated_candidate == generated
     assert reuse_provider.calls == []
@@ -610,6 +673,50 @@ def test_character_mutating_generation_is_rejected_before_verification() -> None
     assert [attempt.phase for attempt in decision.attempts] == ["primary", "generation"]
     assert decision.attempts[-1].validation_codes == ("SPACING_REPAIR_CHARACTER_MISMATCH",)
     assert len(provider.calls) == 2
+
+
+@pytest.mark.parametrize("failure_phase", ["generation", "verification"])
+def test_spacing_repair_provider_failure_defers_to_safe_fallback(
+    failure_phase: str,
+) -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    anchor = candidate_set.candidates[0]
+    generated = build_generated_candidate(anchor, "데이터 시맨틱", confidence=0.92)
+    failure = ProviderExecutionError(
+        "LLM_PROVIDER_TIMEOUT",
+        kind=ProviderFailureKind.TRANSIENT,
+    )
+    responses: list[object] = [
+        {"candidate_id": anchor.candidate_id, "confidence": 0.70},
+    ]
+    if failure_phase == "verification":
+        responses.append(
+            {
+                "rendered_text": generated.rendered_text,
+                "confidence": 0.92,
+                "repair_reasons": ["korean_morphology"],
+            }
+        )
+    responses.extend([failure, failure, failure])
+
+    decision = CandidateAdjudicator(
+        RecordingProvider(responses),
+        sleep=lambda _delay: None,
+    ).decide(candidate_set)
+
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.validation_codes == (
+        "LLM_PROVIDER_TIMEOUT",
+        "LLM_SPACING_REPAIR_DEFERRED",
+    )
+    assert [attempt.phase for attempt in decision.attempts] == (
+        ["primary", "generation"]
+        if failure_phase == "generation"
+        else ["primary", "generation", "verification"]
+    )
+    assert decision.attempts[-1].status == "provider_rejected"
+    assert decision.retry_count == 2
 
 
 def test_low_confidence_is_recovered_when_second_vote_matches() -> None:
@@ -711,7 +818,7 @@ def test_disagreement_uses_high_confidence_two_of_three_tiebreak() -> None:
     ]
 
 
-def test_second_low_confidence_vote_exhausts_recovery_without_tiebreak() -> None:
+def test_second_low_confidence_vote_defers_to_best_valid_candidate() -> None:
     candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     provider = RecordingProvider(
@@ -723,14 +830,17 @@ def test_second_low_confidence_vote_exhausts_recovery_without_tiebreak() -> None
 
     decision = CandidateAdjudicator(provider).decide(candidate_set)
 
-    assert decision.outcome == "review_required"
-    assert decision.selected_candidate_id is None
-    assert decision.recovery_status == "review_required"
-    assert decision.validation_codes == ("LLM_CONFIDENCE_RECOVERY_EXHAUSTED",)
+    assert decision.outcome == "deferred_review"
+    assert decision.selected_candidate_id == selected
+    assert decision.recovery_status == "deferred_review"
+    assert decision.validation_codes == (
+        "LLM_CONFIDENCE_RECOVERY_EXHAUSTED",
+        "LLM_CANDIDATE_SELECTION_DEFERRED",
+    )
     assert len(provider.calls) == 2
 
 
-def test_tiebreak_without_majority_requires_review() -> None:
+def test_tiebreak_without_majority_defers_to_best_valid_candidate() -> None:
     candidate_set = _block_set(0.80, 0.75, 0.74)
     first, second, third = [item.candidate_id for item in candidate_set.candidates]
     provider = RecordingProvider(
@@ -743,21 +853,34 @@ def test_tiebreak_without_majority_requires_review() -> None:
 
     decision = CandidateAdjudicator(provider).decide(candidate_set)
 
-    assert decision.outcome == "review_required"
-    assert decision.validation_codes == ("LLM_CONSENSUS_NOT_REACHED",)
+    assert decision.outcome == "deferred_review"
+    assert decision.selected_candidate_id == first
+    assert decision.validation_codes == (
+        "LLM_CONSENSUS_NOT_REACHED",
+        "LLM_CANDIDATE_SELECTION_DEFERRED",
+    )
     assert len(provider.calls) == 3
 
 
-def test_transient_provider_failure_propagates() -> None:
+def test_transient_provider_failure_defers_spacing_after_bounded_retries() -> None:
     failure = ProviderExecutionError(
         "LLM_PROVIDER_TIMEOUT",
         kind=ProviderFailureKind.TRANSIENT,
     )
     provider = RecordingProvider([failure, failure, failure])
 
-    with pytest.raises(ProviderExecutionError, match="LLM_PROVIDER_TIMEOUT"):
-        CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(_spacing_set(0.80, 0.75))
+    decision = CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(
+        _spacing_set(0.80, 0.75)
+    )
 
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.validation_codes == (
+        "LLM_PROVIDER_TIMEOUT",
+        "LLM_SPACING_REPAIR_DEFERRED",
+    )
+    assert decision.attempts[-1].status == "provider_rejected"
+    assert decision.retry_count == 2
     assert len(provider.calls) == 3
 
 
@@ -766,9 +889,13 @@ def test_schema_invalid_free_text_is_never_accepted() -> None:
 
     decision = CandidateAdjudicator(provider).decide(_spacing_set(0.80, 0.75))
 
-    assert decision.outcome == "review_required"
-    assert decision.selected_candidate_id is None
-    assert decision.validation_codes == ("LLM_INVALID_JSON",)
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.selected_candidate_id is not None
+    assert decision.validation_codes == (
+        "LLM_INVALID_JSON",
+        "LLM_SPACING_REPAIR_DEFERRED",
+    )
     assert len(provider.calls) == 3
     assert decision.attempts[0].provider_repair_count == 2
     assert decision.repair_count == 2

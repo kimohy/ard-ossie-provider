@@ -554,7 +554,10 @@ def _selected_candidate(
     decisions: dict[str, DecisionRecord],
 ) -> Candidate:
     decision = decisions.get(candidate_set.candidate_set_id)
-    if decision is not None and decision.generated_candidate is not None:
+    if decision is not None and isinstance(
+        decision.generated_candidate,
+        SpacingCandidate,
+    ):
         generated = decision.generated_candidate
         if (
             generated.candidate_id == decision.selected_candidate_id

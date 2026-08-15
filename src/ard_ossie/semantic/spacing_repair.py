@@ -31,6 +31,23 @@ whether the selected rendering is correct, not whether its characters are conser
 
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+")
 _IDENTIFIER_WHITESPACE = re.compile(r"(?:\s_|_\s)")
+_PROTECTED_TOKEN_PATTERNS = (
+    re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+"),
+    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}"),
+    re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"),
+    re.compile(r"\d{1,2}:\d{2}(?::\d{2})?"),
+    _IDENTIFIER,
+    re.compile(
+        r"(?<![A-Za-z0-9])(?=[A-Za-z0-9-]{4,})(?=[A-Za-z0-9-]*[A-Za-z])"
+        r"(?=[A-Za-z0-9-]*\d)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?![A-Za-z0-9])"
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])\d+(?:[.,]\d+)?"
+        r"(?:%|℃|°[CF]|kg|mg|g|km|cm|mm|m|ms|s|h|Hz|KB|MB|GB|TB)"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+)
 _SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+[%℃°,:;.!?)}\]]")
 _SPACE_AFTER_OPEN = re.compile(r"[({\[]\s+")
 
@@ -86,8 +103,11 @@ def spacing_defect_codes(candidate: SpacingCandidate) -> tuple[ValidationCode, .
         for character in candidate.rendered_text
     ):
         codes.append("CONTROL_WHITESPACE_SEPARATOR")
-    if _IDENTIFIER_WHITESPACE.search(candidate.rendered_text):
+    identifier_split = _IDENTIFIER_WHITESPACE.search(candidate.rendered_text) is not None
+    if identifier_split:
         codes.append("IDENTIFIER_WHITESPACE_SPLIT")
+    elif _has_protected_token_split(candidate.rendered_text, candidate.character_sequence):
+        codes.append("PROTECTED_TOKEN_WHITESPACE_SPLIT")
     if _SPACE_BEFORE_PUNCTUATION.search(candidate.rendered_text):
         codes.append("PUNCTUATION_WHITESPACE_BEFORE")
     if _SPACE_AFTER_OPEN.search(candidate.rendered_text):
@@ -106,6 +126,8 @@ def build_generated_candidate(
         raise ValueError("SPACING_REPAIR_CONTROL_SEPARATOR")
     if _IDENTIFIER_WHITESPACE.search(rendered_text):
         raise ValueError("SPACING_REPAIR_IDENTIFIER_SPLIT")
+    if _has_protected_token_split(rendered_text, anchor.character_sequence):
+        raise ValueError("SPACING_REPAIR_PROTECTED_TOKEN_SPLIT")
     generated = make_spacing_candidate(
         region_id=anchor.region_id,
         rendered_text=rendered_text,
@@ -130,12 +152,12 @@ def fallback_spacing_candidate(candidate_set: CandidateSet) -> SpacingCandidate:
     )
     if candidate_set.decision_type != "spacing" or not candidates:
         raise ValueError("SPACING_REPAIR_FALLBACK_UNAVAILABLE")
+    valid = tuple(candidate for candidate in candidates if not spacing_defect_codes(candidate))
+    if not valid:
+        raise ValueError("SPACING_REPAIR_SAFE_FALLBACK_UNAVAILABLE")
     return max(
-        candidates,
+        valid,
         key=lambda candidate: (
-            not spacing_defect_codes(candidate)
-            and "source_spacing" in candidate.features,
-            not spacing_defect_codes(candidate),
             "source_spacing" in candidate.features,
             candidate.score,
             candidate.candidate_id,
@@ -180,7 +202,7 @@ def _generation_request(
         "candidate_set_id": candidate_set.candidate_set_id,
         "region_id": candidate_set.region_id,
         "exact_character_sequence": anchor.character_sequence,
-        "protected_identifiers": sorted(set(_IDENTIFIER.findall(anchor.character_sequence))),
+        "protected_identifiers": _protected_tokens(anchor.character_sequence),
         "hard_line_boundary_indexes": [
             index for index, state in enumerate(anchor_states) if state == "hard_break"
         ],
@@ -211,7 +233,7 @@ def _verification_request(
     candidates: tuple[SpacingCandidate, ...],
     generated: SpacingCandidate,
 ) -> dict[str, object]:
-    anchor = fallback_spacing_candidate(candidate_set)
+    anchor = candidates[0]
     _validate_scope(candidate_set, candidates, anchor)
     if generated.region_id != candidate_set.region_id:
         raise ValueError("SPACING_REPAIR_SCOPE_MISMATCH")
@@ -223,7 +245,7 @@ def _verification_request(
         "candidate_set_id": candidate_set.candidate_set_id,
         "region_id": candidate_set.region_id,
         "exact_character_sequence": generated.character_sequence,
-        "protected_identifiers": sorted(set(_IDENTIFIER.findall(generated.character_sequence))),
+        "protected_identifiers": _protected_tokens(generated.character_sequence),
         "generated_candidate_id": generated.candidate_id,
         "candidates": [
             {
@@ -262,6 +284,24 @@ def _hard_break_pairs(candidate: SpacingCandidate) -> tuple[tuple[str, str], ...
 
 def _without_whitespace(value: str) -> str:
     return "".join(character for character in value if not character.isspace())
+
+
+def _protected_tokens(character_sequence: str) -> list[str]:
+    return sorted(
+        {
+            match.group(0)
+            for pattern in _PROTECTED_TOKEN_PATTERNS
+            for match in pattern.finditer(character_sequence)
+        },
+        key=lambda token: (-len(token), token),
+    )
+
+
+def _has_protected_token_split(rendered_text: str, character_sequence: str) -> bool:
+    return any(
+        rendered_text.count(token) < character_sequence.count(token)
+        for token in _protected_tokens(character_sequence)
+    )
 
 
 def _json(value: object) -> str:

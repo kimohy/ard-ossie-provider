@@ -19,7 +19,6 @@ from ard_ossie.llm.contracts import (
     LLMProvider,
     LLMTextPart,
     ProviderExecutionError,
-    ProviderFailureKind,
 )
 from ard_ossie.llm.service import LLMService
 from ard_ossie.models import Sha256
@@ -32,9 +31,11 @@ from ard_ossie.semantic.candidates import (
     ContinuationCandidate,
     ReadingOrderCandidate,
     RecognitionCandidate,
+    SpacingBoundary,
     SpacingCandidate,
     TableCandidate,
     is_invariant_proven_table,
+    make_spacing_candidate,
 )
 from ard_ossie.semantic.evidence import RegionId
 from ard_ossie.semantic.models import ImmutableStrictModel
@@ -88,6 +89,18 @@ class AdjudicationAttempt(ImmutableStrictModel):
     provider_repair_count: int = Field(default=0, ge=0, le=2)
 
 
+class GeneratedSpacingSnapshot(ImmutableStrictModel):
+    kind: Literal["spacing_snapshot"] = "spacing_snapshot"
+    candidate_id: CandidateId
+    region_id: RegionId
+    atom_ids: tuple[str, ...] = Field(min_length=1)
+    boundaries: tuple[SpacingBoundary, ...]
+    score: float = Field(ge=0, le=1)
+    features: dict[str, float]
+    rendered_text_hash: Sha256
+    character_sequence_hash: Sha256
+
+
 class DecisionRecord(ImmutableStrictModel):
     decision_id: DecisionId
     request_hash: Sha256
@@ -125,7 +138,7 @@ class DecisionRecord(ImmutableStrictModel):
     consensus_method: Literal["none", "same_candidate", "two_of_three"] = "none"
     consensus_candidate_id: CandidateId | None = None
     recovery_count: int = Field(default=0, ge=0, le=2)
-    generated_candidate: SpacingCandidate | None = None
+    generated_candidate: SpacingCandidate | GeneratedSpacingSnapshot | None = None
 
 
 class DecisionReport(ImmutableStrictModel):
@@ -243,18 +256,25 @@ class CandidateAdjudicator:
         allowlist = {candidate.candidate_id for candidate in candidates}
         trusted = next(
             (
-                item
+                current
                 for item in self.trusted
-                if _trusted_decision_matches(
-                    item,
+                if (
+                    current := _materialize_generated_candidate(
+                        item,
+                        candidate_set=candidate_set,
+                    )
+                )
+                is not None
+                and _trusted_decision_matches(
+                    current,
                     candidate_set=candidate_set,
                     request_hash=request_hash,
                     evidence_hash=resolved_evidence_hash,
-                        provider=provider_name,
-                        model=model,
-                        allowlist=allowlist,
-                        candidates=candidates,
-                        policy=self.policy,
+                    provider=provider_name,
+                    model=model,
+                    allowlist=allowlist,
+                    candidates=candidates,
+                    policy=self.policy,
                 )
             ),
             None,
@@ -263,43 +283,65 @@ class CandidateAdjudicator:
             return _cached_record(trusted)
 
         if self._service is None:
-            return _record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=None,
-                outcome="review_required",
-                source="unavailable",
-                confidence=0.0,
                 provider=provider_name,
                 model=model,
+                attempts=(),
                 validation_codes=("LLM_PROVIDER_UNAVAILABLE",),
             )
 
-        primary = self._run_vote_phase(
-            candidate_set,
-            candidates=candidates,
-            allowlist=allowlist,
-            request_hash=request_hash,
-            phase="primary",
-            prior_votes=(),
-            page_crop=page_crop,
-            start_index=1,
-        )
-        if primary.choice is None:
-            return _record(
+        try:
+            primary = self._run_vote_phase(
+                candidate_set,
+                candidates=candidates,
+                allowlist=allowlist,
+                request_hash=request_hash,
+                phase="primary",
+                prior_votes=(),
+                page_crop=page_crop,
+                start_index=1,
+            )
+        except ProviderExecutionError as error:
+            primary_messages = _messages(
+                candidate_set,
+                candidates,
+                phase="primary",
+                prior_votes=(),
+            )
+            failed_attempt = AdjudicationAttempt(
+                attempt_index=1,
+                phase="primary",
+                request_hash=_attempt_request_hash(
+                    request_hash,
+                    phase="primary",
+                    messages=primary_messages,
+                    attempt_index=1,
+                ),
+                status="provider_rejected",
+                validation_codes=(error.code,),
+                provider_retry_count=error.retry_count,
+                provider_repair_count=error.repair_count,
+            )
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=None,
-                outcome="review_required",
-                source=_failed_vote_source(primary),
-                confidence=_last_confidence(primary),
+                provider=provider_name,
+                model=model,
+                attempts=(failed_attempt,),
+                validation_codes=(error.code,),
+            )
+        if primary.choice is None:
+            return _deferred_candidate_record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
                 provider=provider_name,
                 model=model,
                 validation_codes=primary.validation_codes,
-                retry_count=primary.retry_count,
-                repair_count=primary.repair_count,
                 attempts=primary.attempts,
             )
         selected_primary = next(
@@ -341,20 +383,13 @@ class CandidateAdjudicator:
                 attempts=primary.attempts,
             )
         if self.policy.max_confidence_recovery_attempts < 1:
-            return _record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=None,
-                outcome="review_required",
-                source="model",
-                confidence=primary.choice.confidence,
                 provider=provider_name,
                 model=model,
                 validation_codes=("LLM_CONFIDENCE_TOO_LOW",),
-                retry_count=primary.retry_count,
-                repair_count=primary.repair_count,
-                recovery_status="review_required",
                 attempts=primary.attempts,
             )
 
@@ -370,59 +405,35 @@ class CandidateAdjudicator:
         )
         attempts = (*primary.attempts, *recovery.attempts)
         if recovery.choice is None:
-            return _record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=None,
-                outcome="review_required",
-                source=_failed_vote_source(recovery),
-                confidence=_last_confidence(recovery),
                 provider=provider_name,
                 model=model,
                 validation_codes=recovery.validation_codes,
-                retry_count=recovery.retry_count,
-                repair_count=recovery.repair_count,
-                recovery_status="review_required",
                 attempts=attempts,
-                recovery_count=1,
             )
         if recovery.choice.confidence < self.policy.minimum_model_confidence:
-            return _record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=None,
-                outcome="review_required",
-                source="model",
-                confidence=recovery.choice.confidence,
                 provider=provider_name,
                 model=model,
                 validation_codes=("LLM_CONFIDENCE_RECOVERY_EXHAUSTED",),
-                retry_count=recovery.retry_count,
-                repair_count=recovery.repair_count,
-                recovery_status="review_required",
                 attempts=attempts,
-                recovery_count=1,
             )
         if recovery.choice.candidate_id != primary.choice.candidate_id:
             if self.policy.max_confidence_recovery_attempts < 2:
-                return _record(
+                return _deferred_candidate_record(
                     candidate_set,
                     request_hash=request_hash,
                     evidence_hash=resolved_evidence_hash,
-                    selected_candidate_id=None,
-                    outcome="review_required",
-                    source="model",
-                    confidence=recovery.choice.confidence,
                     provider=provider_name,
                     model=model,
                     validation_codes=("LLM_CONSENSUS_NOT_REACHED",),
-                    retry_count=recovery.retry_count,
-                    repair_count=recovery.repair_count,
-                    recovery_status="review_required",
                     attempts=attempts,
-                    recovery_count=1,
                 )
             tiebreak = self._run_vote_phase(
                 candidate_set,
@@ -436,22 +447,14 @@ class CandidateAdjudicator:
             )
             all_attempts = (*attempts, *tiebreak.attempts)
             if tiebreak.choice is None:
-                return _record(
+                return _deferred_candidate_record(
                     candidate_set,
                     request_hash=request_hash,
                     evidence_hash=resolved_evidence_hash,
-                    selected_candidate_id=None,
-                    outcome="review_required",
-                    source=_failed_vote_source(tiebreak),
-                    confidence=_last_confidence(tiebreak),
                     provider=provider_name,
                     model=model,
                     validation_codes=tiebreak.validation_codes,
-                    retry_count=tiebreak.retry_count,
-                    repair_count=tiebreak.repair_count,
-                    recovery_status="review_required",
                     attempts=all_attempts,
-                    recovery_count=2,
                 )
             votes = Counter(
                 (
@@ -486,22 +489,14 @@ class CandidateAdjudicator:
                     consensus_candidate_id=majority_id,
                     recovery_count=2,
                 )
-            return _record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=None,
-                outcome="review_required",
-                source="model",
-                confidence=tiebreak.choice.confidence,
                 provider=provider_name,
                 model=model,
                 validation_codes=("LLM_CONSENSUS_NOT_REACHED",),
-                retry_count=tiebreak.retry_count,
-                repair_count=tiebreak.repair_count,
-                recovery_status="review_required",
                 attempts=all_attempts,
-                recovery_count=2,
             )
         return _record(
             candidate_set,
@@ -554,8 +549,6 @@ class CandidateAdjudicator:
                 messages=generation_messages,
             )
         except ProviderExecutionError as error:
-            if error.kind is not ProviderFailureKind.OUTPUT:
-                raise
             generation_attempt = AdjudicationAttempt(
                 attempt_index=generation_index,
                 phase="generation",
@@ -565,13 +558,14 @@ class CandidateAdjudicator:
                 provider_retry_count=error.retry_count,
                 provider_repair_count=error.repair_count,
             )
-            return _deferred_spacing_record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=evidence_hash,
                 provider=provider,
                 model=model,
                 attempts=(*primary.attempts, generation_attempt),
+                validation_codes=(error.code,),
             )
 
         proposal = SpacingRepairProposal.model_validate(generation_result.structured)
@@ -596,7 +590,7 @@ class CandidateAdjudicator:
                 provider_retry_count=generation_result.metadata.retry_count,
                 provider_repair_count=generation_result.metadata.repair_count,
             )
-            return _deferred_spacing_record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=evidence_hash,
@@ -641,8 +635,6 @@ class CandidateAdjudicator:
                 messages=verification_messages,
             )
         except ProviderExecutionError as error:
-            if error.kind is not ProviderFailureKind.OUTPUT:
-                raise
             verification_attempt = AdjudicationAttempt(
                 attempt_index=verification_index,
                 phase="verification",
@@ -652,13 +644,14 @@ class CandidateAdjudicator:
                 provider_retry_count=error.retry_count,
                 provider_repair_count=error.repair_count,
             )
-            return _deferred_spacing_record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=evidence_hash,
                 provider=provider,
                 model=model,
                 attempts=(*primary.attempts, generation_attempt, verification_attempt),
+                validation_codes=(error.code,),
             )
 
         verification = SpacingVerification.model_validate(verification_result.structured)
@@ -694,7 +687,7 @@ class CandidateAdjudicator:
         )
         attempts = (*primary.attempts, generation_attempt, verification_attempt)
         if not accepted:
-            return _deferred_spacing_record(
+            return _deferred_candidate_record(
                 candidate_set,
                 request_hash=request_hash,
                 evidence_hash=evidence_hash,
@@ -759,8 +752,6 @@ class CandidateAdjudicator:
                     page_crop=page_crop,
                 )
             except ProviderExecutionError as error:
-                if error.kind is not ProviderFailureKind.OUTPUT:
-                    raise
                 attempts.append(
                     AdjudicationAttempt(
                         attempt_index=attempt_index,
@@ -1033,7 +1024,7 @@ def _trusted_decision_matches(
 ) -> bool:
     generated_candidate = decision.generated_candidate
     selected_is_current = decision.selected_candidate_id in allowlist or (
-        generated_candidate is not None
+        isinstance(generated_candidate, SpacingCandidate)
         and generated_candidate.candidate_id == decision.selected_candidate_id
         and generated_candidate.region_id == candidate_set.region_id
         and candidate_set.decision_type == "spacing"
@@ -1212,7 +1203,10 @@ def _generated_audit_matches(
     policy: AdjudicationPolicy,
 ) -> bool:
     generated = decision.generated_candidate
-    if generated is None or decision.source not in {"generated", "cache"}:
+    if not isinstance(generated, SpacingCandidate) or decision.source not in {
+        "generated",
+        "cache",
+    }:
         return False
     if len(decision.attempts) < 3:
         return False
@@ -1411,7 +1405,7 @@ def _record(
     consensus_method: Literal["none", "same_candidate", "two_of_three"] = "none",
     consensus_candidate_id: CandidateId | None = None,
     recovery_count: int = 0,
-    generated_candidate: SpacingCandidate | None = None,
+    generated_candidate: SpacingCandidate | GeneratedSpacingSnapshot | None = None,
 ) -> DecisionRecord:
     if attempts:
         retry_count = sum(item.provider_retry_count for item in attempts)
@@ -1465,17 +1459,15 @@ def _decision_id(decision: DecisionRecord) -> str:
             "consensus_method": decision.consensus_method,
             "consensus_candidate_id": decision.consensus_candidate_id,
             "recovery_count": decision.recovery_count,
-            "generated_candidate": (
-                decision.generated_candidate.model_dump(mode="json")
-                if decision.generated_candidate is not None
-                else None
+            "generated_candidate": _generated_candidate_identity_payload(
+                decision.generated_candidate
             ),
         }
     )
     return f"decision_{digest[:16]}"
 
 
-def _deferred_spacing_record(
+def _deferred_candidate_record(
     candidate_set: CandidateSet,
     *,
     request_hash: Sha256,
@@ -1483,8 +1475,42 @@ def _deferred_spacing_record(
     provider: str,
     model: str,
     attempts: tuple[AdjudicationAttempt, ...],
+    validation_codes: tuple[str, ...] = (),
 ) -> DecisionRecord:
-    fallback = fallback_spacing_candidate(candidate_set)
+    try:
+        fallback = (
+            fallback_spacing_candidate(candidate_set)
+            if candidate_set.decision_type == "spacing"
+            else max(candidate_set.candidates, key=lambda item: (item.score, item.candidate_id))
+        )
+    except ValueError as error:
+        codes = tuple(dict.fromkeys((*validation_codes, str(error))))
+        source: Literal["model", "provider", "unavailable"] = (
+            "unavailable"
+            if provider == "none"
+            else "provider"
+            if attempts and attempts[-1].status == "provider_rejected"
+            else "model"
+        )
+        return _record(
+            candidate_set,
+            request_hash=request_hash,
+            evidence_hash=evidence_hash,
+            selected_candidate_id=None,
+            outcome="review_required",
+            source=source,
+            confidence=0.0,
+            provider=provider,
+            model=model,
+            validation_codes=codes,
+            recovery_status="review_required",
+            attempts=attempts,
+        )
+    deferred_code = (
+        "LLM_SPACING_REPAIR_DEFERRED"
+        if candidate_set.decision_type == "spacing"
+        else "LLM_CANDIDATE_SELECTION_DEFERRED"
+    )
     return _record(
         candidate_set,
         request_hash=request_hash,
@@ -1495,7 +1521,9 @@ def _deferred_spacing_record(
         confidence=fallback.score,
         provider=provider,
         model=model,
-        validation_codes=("LLM_SPACING_REPAIR_DEFERRED",),
+        validation_codes=tuple(
+            dict.fromkeys((*validation_codes, deferred_code))
+        ),
         recovery_status="deferred_review",
         attempts=attempts,
     )
@@ -1503,3 +1531,107 @@ def _deferred_spacing_record(
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def diagnostic_decision_record(decision: DecisionRecord) -> DecisionRecord:
+    generated = decision.generated_candidate
+    if not isinstance(generated, SpacingCandidate):
+        return decision
+    snapshot = GeneratedSpacingSnapshot(
+        candidate_id=generated.candidate_id,
+        region_id=generated.region_id,
+        atom_ids=generated.atom_ids,
+        boundaries=generated.boundaries,
+        score=generated.score,
+        features=generated.features,
+        rendered_text_hash=_text_hash(generated.rendered_text),
+        character_sequence_hash=_text_hash(generated.character_sequence),
+    )
+    return decision.model_copy(update={"generated_candidate": snapshot})
+
+
+def _materialize_generated_candidate(
+    decision: DecisionRecord,
+    *,
+    candidate_set: CandidateSet,
+) -> DecisionRecord | None:
+    generated = decision.generated_candidate
+    if generated is None or isinstance(generated, SpacingCandidate):
+        return decision
+    if candidate_set.decision_type != "spacing" or generated.region_id != candidate_set.region_id:
+        return None
+    spacing_candidates = tuple(
+        candidate
+        for candidate in candidate_set.candidates
+        if isinstance(candidate, SpacingCandidate)
+    )
+    if not spacing_candidates:
+        return None
+    character_sequence = spacing_candidates[0].character_sequence
+    if any(
+        candidate.character_sequence != character_sequence
+        for candidate in spacing_candidates
+    ) or _text_hash(character_sequence) != generated.character_sequence_hash:
+        return None
+    rendered_text = _render_spacing_snapshot(character_sequence, generated.boundaries)
+    if _text_hash(rendered_text) != generated.rendered_text_hash:
+        return None
+    try:
+        materialized = make_spacing_candidate(
+            region_id=generated.region_id,
+            rendered_text=rendered_text,
+            character_sequence=character_sequence,
+            atom_ids=generated.atom_ids,
+            source_whitespace=tuple(
+                boundary.source_whitespace_atom_ids
+                for boundary in generated.boundaries
+            ),
+            score=generated.score,
+            features=generated.features,
+        )
+    except ValueError:
+        return None
+    if materialized.candidate_id != generated.candidate_id:
+        return None
+    return decision.model_copy(update={"generated_candidate": materialized})
+
+
+def _generated_candidate_identity_payload(
+    generated: SpacingCandidate | GeneratedSpacingSnapshot | None,
+) -> dict[str, object] | None:
+    if generated is None:
+        return None
+    if isinstance(generated, SpacingCandidate):
+        rendered_text_hash = _text_hash(generated.rendered_text)
+        character_sequence_hash = _text_hash(generated.character_sequence)
+    else:
+        rendered_text_hash = generated.rendered_text_hash
+        character_sequence_hash = generated.character_sequence_hash
+    return {
+        "candidate_id": generated.candidate_id,
+        "region_id": generated.region_id,
+        "atom_ids": generated.atom_ids,
+        "boundaries": [item.model_dump(mode="json") for item in generated.boundaries],
+        "score": generated.score,
+        "features": generated.features,
+        "rendered_text_hash": rendered_text_hash,
+        "character_sequence_hash": character_sequence_hash,
+    }
+
+
+def _render_spacing_snapshot(
+    character_sequence: str,
+    boundaries: tuple[SpacingBoundary, ...],
+) -> str:
+    rendered: list[str] = []
+    for index, character in enumerate(character_sequence):
+        rendered.append(character)
+        if index >= len(boundaries):
+            continue
+        state = boundaries[index].state
+        rendered.append("\n" if state == "hard_break" else " " if state == "space" else "")
+    return "".join(rendered)
+
+
+def _text_hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()

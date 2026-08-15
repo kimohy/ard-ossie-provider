@@ -319,7 +319,7 @@ def test_docx_ignores_candidate_pdf_mode(
     assert parsed.semantic_validation is None
 
 
-def test_review_required_candidate_report_is_rejected_by_hard_quality_gate(
+def test_unavailable_spacing_provider_continues_with_deferred_review_debt(
     tmp_path: Path,
 ) -> None:
     result = parse_semantic_pdf_v2(
@@ -340,8 +340,20 @@ def test_review_required_candidate_report_is_rejected_by_hard_quality_gate(
 
     findings = _semantic_hard_findings(parsed)
 
-    assert result.validation.status == "review_required"
-    assert [item.code for item in findings] == ["SEMANTIC_CANDIDATE_REVIEW_REQUIRED"]
+    deferred = [
+        decision
+        for decision in result.decisions.decisions
+        if decision.outcome == "deferred_review"
+    ]
+    assert result.validation.status == "review_pending"
+    assert result.validation.publishable is True
+    assert result.markdown
+    assert len(deferred) == 1
+    assert deferred[0].validation_codes == (
+        "LLM_PROVIDER_UNAVAILABLE",
+        "LLM_SPACING_REPAIR_DEFERRED",
+    )
+    assert findings == []
 
 
 def test_deferred_spacing_review_keeps_candidate_markdown_publishable(
