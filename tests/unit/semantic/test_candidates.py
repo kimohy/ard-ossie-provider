@@ -74,4 +74,3 @@ def test_candidate_set_rejects_more_than_five_candidates() -> None:
             decision_type="spacing",
             candidates=candidates,
         )
-

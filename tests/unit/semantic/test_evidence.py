@@ -186,4 +186,3 @@ def test_make_evidence_id_is_stable_namespaced_and_content_sensitive() -> None:
     assert first != changed
     assert first.removeprefix("atom_") == region_id.removeprefix("region_")
     assert re.fullmatch(r"atom_[0-9a-f]{16}", first)
-
