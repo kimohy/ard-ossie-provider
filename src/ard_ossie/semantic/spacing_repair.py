@@ -215,6 +215,9 @@ def _verification_request(
     _validate_scope(candidate_set, candidates, anchor)
     if generated.region_id != candidate_set.region_id:
         raise ValueError("SPACING_REPAIR_SCOPE_MISMATCH")
+    offered = tuple(
+        {candidate.candidate_id: candidate for candidate in (*candidates, generated)}.values()
+    )
     return {
         "task": "verify_whitespace_repair",
         "candidate_set_id": candidate_set.candidate_set_id,
@@ -229,7 +232,7 @@ def _verification_request(
                 "defect_codes": spacing_defect_codes(candidate),
                 "generated": candidate.candidate_id == generated.candidate_id,
             }
-            for candidate in (*candidates, generated)
+            for candidate in offered
         ],
     }
 

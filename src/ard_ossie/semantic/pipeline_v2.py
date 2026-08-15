@@ -18,7 +18,6 @@ from ard_ossie.semantic.candidates import (
     BlockCandidate,
     CandidateSet,
     RecognitionCandidate,
-    is_invariant_proven_table,
 )
 from ard_ossie.semantic.canonical import (
     CanonicalSemanticDocument,
@@ -158,11 +157,7 @@ def parse_semantic_pdf_v2(
                 )
             )
 
-    proven_table_regions = {
-        candidate_set.region_id
-        for candidate_set in table_sets
-        if any(is_invariant_proven_table(candidate) for candidate in candidate_set.candidates)
-    }
+    table_regions = {candidate_set.region_id for candidate_set in table_sets}
     spacing_sets = tuple(
         build_spacing_candidate_set(
             region=region,
@@ -171,7 +166,7 @@ def parse_semantic_pdf_v2(
             scorer=scorer,
         )
         for region in layout.regions
-        if region.region_id not in proven_table_regions
+        if region.region_id not in table_regions
         and any(not _atom_text(evidence, atom_id).isspace() for atom_id in region.atom_ids)
         and not region.repeated_edge
     )

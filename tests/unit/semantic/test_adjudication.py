@@ -21,10 +21,13 @@ from ard_ossie.semantic.adjudication import (
     candidate_choice_schema,
 )
 from ard_ossie.semantic.candidates import (
+    BlockCandidate,
     CandidateSet,
+    make_candidate_id,
     make_candidate_set_id,
     make_spacing_candidate,
 )
+from ard_ossie.semantic.spacing_repair import build_generated_candidate
 
 SOURCE_HASH = "f" * 64
 
@@ -114,6 +117,70 @@ def _spacing_set(*scores: float) -> CandidateSet:
     )
 
 
+def _identifier_spacing_set() -> CandidateSet:
+    renderings = ("marketing _campaign 캠페인", "marketing_campaign캠페인")
+    characters = "marketing_campaign캠페인"
+    atom_ids = tuple(f"atom_{index:016x}" for index in range(1, len(characters) + 1))
+    candidates = tuple(
+        make_spacing_candidate(
+            region_id="region_0000000000000001",
+            rendered_text=rendering,
+            character_sequence=characters,
+            atom_ids=atom_ids,
+            source_whitespace=tuple(() for _ in range(len(atom_ids) - 1)),
+            score=score,
+            features={feature: score},
+        )
+        for rendering, score, feature in zip(
+            renderings,
+            (0.80, 0.76),
+            ("source_spacing", "dense"),
+            strict=True,
+        )
+    )
+    return CandidateSet(
+        candidate_set_id=make_candidate_set_id(
+            SOURCE_HASH,
+            "region_0000000000000001",
+            tuple(candidate.candidate_id for candidate in candidates),
+        ),
+        source_hash=SOURCE_HASH,
+        region_id="region_0000000000000001",
+        decision_type="spacing",
+        candidates=candidates,
+    )
+
+
+def _block_set(*scores: float) -> CandidateSet:
+    region_id = "region_0000000000000001"
+    atom_ids = ("atom_0000000000000001",)
+    kinds = ("paragraph", "caption", "figure")
+    candidates = tuple(
+        BlockCandidate(
+            candidate_id=make_candidate_id(
+                "block",
+                region_id,
+                {"block_kind": kinds[index], "atom_ids": atom_ids},
+            ),
+            region_id=region_id,
+            block_kind=kinds[index],
+            atom_ids=atom_ids,
+            score=score,
+            features={"fixture": score},
+        )
+        for index, score in enumerate(scores)
+    )
+    return CandidateSet(
+        candidate_set_id=make_candidate_set_id(
+            SOURCE_HASH,
+            region_id,
+            tuple(candidate.candidate_id for candidate in candidates),
+        ),
+        source_hash=SOURCE_HASH,
+        region_id=region_id,
+        decision_type="block",
+        candidates=candidates,
+    )
 def _legacy_decision_payload() -> dict[str, object]:
     return {
         "decision_id": "decision_0000000000000001",
@@ -236,7 +303,7 @@ def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> No
 
 
 def test_trusted_recovered_decision_reuses_full_audit_without_provider_call() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     first_provider = RecordingProvider(
         [
@@ -260,7 +327,7 @@ def test_trusted_recovered_decision_reuses_full_audit_without_provider_call() ->
 
 
 def test_cached_recovery_can_be_reused_again_without_provider_call() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     recovered = CandidateAdjudicator(
         RecordingProvider(
@@ -283,7 +350,7 @@ def test_cached_recovery_can_be_reused_again_without_provider_call() -> None:
 
 
 def test_invalid_trusted_consensus_is_ignored() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     recovered = CandidateAdjudicator(
         RecordingProvider(
@@ -303,7 +370,7 @@ def test_invalid_trusted_consensus_is_ignored() -> None:
 
 
 def test_trusted_recovery_is_ignored_when_attempt_votes_contradict_consensus() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     first, second = [candidate.candidate_id for candidate in candidate_set.candidates]
     recovered = CandidateAdjudicator(
         RecordingProvider(
@@ -342,7 +409,7 @@ def test_trusted_recovery_is_ignored_when_active_policy_changes(
     policy: AdjudicationPolicy,
     response: dict[str, float],
 ) -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     recovered = CandidateAdjudicator(
         RecordingProvider(
@@ -368,8 +435,117 @@ def test_unavailable_provider_requires_review() -> None:
     assert unavailable.validation_codes == ("LLM_PROVIDER_UNAVAILABLE",)
 
 
-def test_low_confidence_is_recovered_when_second_vote_matches() -> None:
+def test_high_confidence_identifier_defect_is_replaced_by_verified_generation() -> None:
+    candidate_set = _identifier_spacing_set()
+    damaged = candidate_set.candidates[0]
+    generated = build_generated_candidate(
+        damaged,
+        "marketing_campaign 캠페인",
+        confidence=0.92,
+    )
+    provider = RecordingProvider(
+        [
+            {"candidate_id": damaged.candidate_id, "confidence": 0.91},
+            {
+                "rendered_text": generated.rendered_text,
+                "confidence": 0.92,
+                "repair_reasons": ["identifier_integrity", "korean_morphology"],
+            },
+            {
+                "candidate_id": generated.candidate_id,
+                "confidence": 0.90,
+                "validation_codes": [],
+            },
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "selected"
+    assert decision.source == "generated"
+    assert decision.generated_candidate == generated
+    assert decision.selected_candidate_id == generated.candidate_id
+    assert [attempt.phase for attempt in decision.attempts] == [
+        "primary",
+        "generation",
+        "verification",
+    ]
+    assert len(provider.calls) == 3
+
+    reuse_provider = RecordingProvider()
+    reused = CandidateAdjudicator(reuse_provider, trusted=(decision,)).decide(candidate_set)
+    assert reused.source == "cache"
+    assert reused.generated_candidate == generated
+    assert reuse_provider.calls == []
+
+
+def test_low_confidence_spacing_repair_falls_back_with_deferred_review() -> None:
     candidate_set = _spacing_set(0.80, 0.75)
+    anchor = candidate_set.candidates[0]
+    generated = build_generated_candidate(anchor, "데이터 시맨틱", confidence=0.72)
+    provider = RecordingProvider(
+        [
+            {"candidate_id": anchor.candidate_id, "confidence": 0.70},
+            {
+                "rendered_text": generated.rendered_text,
+                "confidence": 0.72,
+                "repair_reasons": ["korean_morphology"],
+            },
+            {
+                "candidate_id": generated.candidate_id,
+                "confidence": 0.74,
+                "validation_codes": ["LLM_CONFIDENCE_TOO_LOW"],
+            },
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    source = next(
+        candidate
+        for candidate in candidate_set.candidates
+        if "source_spacing" in candidate.features
+    )
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.selected_candidate_id == source.candidate_id
+    assert decision.generated_candidate is None
+    assert decision.validation_codes == ("LLM_SPACING_REPAIR_DEFERRED",)
+    assert [attempt.phase for attempt in decision.attempts] == [
+        "primary",
+        "generation",
+        "verification",
+    ]
+    assert len(provider.calls) == 3
+
+
+def test_character_mutating_generation_is_rejected_before_verification() -> None:
+    candidate_set = _identifier_spacing_set()
+    damaged = candidate_set.candidates[0]
+    provider = RecordingProvider(
+        [
+            {"candidate_id": damaged.candidate_id, "confidence": 0.91},
+            {
+                "rendered_text": "marketing_campaign 캠페인!",
+                "confidence": 0.92,
+                "repair_reasons": ["identifier_integrity"],
+            },
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.generated_candidate is None
+    assert decision.validation_codes == ("LLM_SPACING_REPAIR_DEFERRED",)
+    assert [attempt.phase for attempt in decision.attempts] == ["primary", "generation"]
+    assert decision.attempts[-1].validation_codes == ("SPACING_REPAIR_CHARACTER_MISMATCH",)
+    assert len(provider.calls) == 2
+
+
+def test_low_confidence_is_recovered_when_second_vote_matches() -> None:
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     provider = RecordingProvider(
         [
@@ -393,7 +569,7 @@ def test_low_confidence_is_recovered_when_second_vote_matches() -> None:
 
 
 def test_recovered_decision_id_changes_when_attempt_audit_changes() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
 
     first = CandidateAdjudicator(
@@ -418,7 +594,7 @@ def test_recovered_decision_id_changes_when_attempt_audit_changes() -> None:
 
 
 def test_recovered_decision_aggregates_provider_counts_across_vote_phases() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     transient = ProviderExecutionError(
         "LLM_PROVIDER_TIMEOUT",
@@ -443,7 +619,7 @@ def test_recovered_decision_aggregates_provider_counts_across_vote_phases() -> N
 
 
 def test_disagreement_uses_high_confidence_two_of_three_tiebreak() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     first, second = [item.candidate_id for item in candidate_set.candidates]
     provider = RecordingProvider(
         [
@@ -468,7 +644,7 @@ def test_disagreement_uses_high_confidence_two_of_three_tiebreak() -> None:
 
 
 def test_second_low_confidence_vote_exhausts_recovery_without_tiebreak() -> None:
-    candidate_set = _spacing_set(0.80, 0.75)
+    candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
     provider = RecordingProvider(
         [
@@ -487,7 +663,7 @@ def test_second_low_confidence_vote_exhausts_recovery_without_tiebreak() -> None
 
 
 def test_tiebreak_without_majority_requires_review() -> None:
-    candidate_set = _spacing_set(0.80, 0.75, 0.74)
+    candidate_set = _block_set(0.80, 0.75, 0.74)
     first, second, third = [item.candidate_id for item in candidate_set.candidates]
     provider = RecordingProvider(
         [

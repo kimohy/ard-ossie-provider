@@ -38,6 +38,17 @@ from ard_ossie.semantic.candidates import (
 )
 from ard_ossie.semantic.evidence import RegionId
 from ard_ossie.semantic.models import ImmutableStrictModel
+from ard_ossie.semantic.spacing_repair import (
+    SpacingRepairProposal,
+    SpacingVerification,
+    build_generated_candidate,
+    fallback_spacing_candidate,
+    spacing_defect_codes,
+    spacing_generation_messages,
+    spacing_repair_schema,
+    spacing_verification_messages,
+    spacing_verification_schema,
+)
 
 PROMPT_VERSION = "semantic-candidate-adjudication-v2"
 DecisionId = Annotated[str, StringConstraints(pattern=r"^decision_[0-9a-f]{16}$")]
@@ -61,7 +72,7 @@ class CandidateChoice(ImmutableStrictModel):
 
 class AdjudicationAttempt(ImmutableStrictModel):
     attempt_index: int = Field(ge=1, le=6)
-    phase: Literal["primary", "recovery", "tiebreak"]
+    phase: Literal["primary", "recovery", "tiebreak", "generation", "verification"]
     request_hash: Sha256
     candidate_id: CandidateId | None = None
     confidence: float = Field(default=0.0, ge=0, le=1)
@@ -70,6 +81,7 @@ class AdjudicationAttempt(ImmutableStrictModel):
         "low_confidence",
         "candidate_unknown",
         "provider_rejected",
+        "validation_rejected",
     ]
     validation_codes: tuple[ValidationCode, ...] = Field(default=(), max_length=4)
     provider_retry_count: int = Field(default=0, ge=0, le=2)
@@ -85,7 +97,7 @@ class DecisionRecord(ImmutableStrictModel):
     region_id: RegionId
     decision_type: str = Field(min_length=1, max_length=40)
     selected_candidate_id: CandidateId | None = None
-    outcome: Literal["selected", "review_required"]
+    outcome: Literal["selected", "review_required", "deferred_review"]
     source: Literal[
         "deterministic",
         "model",
@@ -93,6 +105,8 @@ class DecisionRecord(ImmutableStrictModel):
         "cache",
         "unavailable",
         "provider",
+        "generated",
+        "fallback",
     ]
     confidence: float = Field(ge=0, le=1)
     provider: str = Field(min_length=1, max_length=100)
@@ -100,11 +114,18 @@ class DecisionRecord(ImmutableStrictModel):
     validation_codes: tuple[ValidationCode, ...] = Field(default=(), max_length=4)
     retry_count: int = Field(default=0, ge=0, le=12)
     repair_count: int = Field(default=0, ge=0, le=12)
-    recovery_status: Literal["not_needed", "recovered", "review_required"] = "not_needed"
+    recovery_status: Literal[
+        "not_needed",
+        "recovered",
+        "review_required",
+        "generated",
+        "deferred_review",
+    ] = "not_needed"
     attempts: tuple[AdjudicationAttempt, ...] = Field(default=(), max_length=6)
     consensus_method: Literal["none", "same_candidate", "two_of_three"] = "none"
     consensus_candidate_id: CandidateId | None = None
     recovery_count: int = Field(default=0, ge=0, le=2)
+    generated_candidate: SpacingCandidate | None = None
 
 
 class DecisionReport(ImmutableStrictModel):
@@ -199,9 +220,13 @@ class CandidateAdjudicator:
 
         best = candidates[0]
         runner_score = candidates[1].score if len(candidates) > 1 else 0.0
+        best_defects = (
+            spacing_defect_codes(best) if isinstance(best, SpacingCandidate) else ()
+        )
         if (
             best.score >= self.policy.auto_accept_score
             and best.score - runner_score >= self.policy.auto_accept_margin
+            and not best_defects
         ):
             return _record(
                 candidate_set,
@@ -275,6 +300,29 @@ class CandidateAdjudicator:
                 retry_count=primary.retry_count,
                 repair_count=primary.repair_count,
                 attempts=primary.attempts,
+            )
+        selected_primary = next(
+            candidate
+            for candidate in candidates
+            if candidate.candidate_id == primary.choice.candidate_id
+        )
+        if isinstance(selected_primary, SpacingCandidate) and (
+            primary.choice.confidence < self.policy.minimum_model_confidence
+            or spacing_defect_codes(selected_primary)
+        ):
+            return self._run_spacing_repair(
+                candidate_set,
+                candidates=tuple(
+                    candidate
+                    for candidate in candidates
+                    if isinstance(candidate, SpacingCandidate)
+                ),
+                anchor=selected_primary,
+                primary=primary,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                provider=provider_name,
+                model=model,
             )
         if primary.choice.confidence >= self.policy.minimum_model_confidence:
             return _record(
@@ -472,6 +520,201 @@ class CandidateAdjudicator:
             consensus_method="same_candidate",
             consensus_candidate_id=recovery.choice.candidate_id,
             recovery_count=1,
+        )
+
+    def _run_spacing_repair(
+        self,
+        candidate_set: CandidateSet,
+        *,
+        candidates: tuple[SpacingCandidate, ...],
+        anchor: SpacingCandidate,
+        primary: _VotePhaseResult,
+        request_hash: Sha256,
+        evidence_hash: Sha256,
+        provider: str,
+        model: str,
+    ) -> DecisionRecord:
+        assert self._service is not None
+        generation_messages = spacing_generation_messages(
+            candidate_set,
+            candidates,
+            anchor,
+        )
+        generation_index = len(primary.attempts) + 1
+        generation_hash = _attempt_request_hash(
+            request_hash,
+            phase="generation",
+            messages=generation_messages,
+            attempt_index=generation_index,
+        )
+        try:
+            generation_result = self._service.generate_structured(
+                schema=spacing_repair_schema(),
+                messages=generation_messages,
+            )
+        except ProviderExecutionError as error:
+            if error.kind is not ProviderFailureKind.OUTPUT:
+                raise
+            generation_attempt = AdjudicationAttempt(
+                attempt_index=generation_index,
+                phase="generation",
+                request_hash=generation_hash,
+                status="provider_rejected",
+                validation_codes=(error.code,),
+                provider_retry_count=error.retry_count,
+                provider_repair_count=error.repair_count,
+            )
+            return _deferred_spacing_record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=evidence_hash,
+                provider=provider,
+                model=model,
+                attempts=(*primary.attempts, generation_attempt),
+            )
+
+        proposal = SpacingRepairProposal.model_validate(generation_result.structured)
+        try:
+            generated = build_generated_candidate(
+                anchor,
+                proposal.rendered_text,
+                proposal.confidence,
+            )
+            deterministic_codes = spacing_defect_codes(generated)
+            if deterministic_codes:
+                raise ValueError(deterministic_codes[0])
+        except ValueError as error:
+            code = str(error)
+            generation_attempt = AdjudicationAttempt(
+                attempt_index=generation_index,
+                phase="generation",
+                request_hash=generation_hash,
+                confidence=proposal.confidence,
+                status="validation_rejected",
+                validation_codes=(code,),
+                provider_retry_count=generation_result.metadata.retry_count,
+                provider_repair_count=generation_result.metadata.repair_count,
+            )
+            return _deferred_spacing_record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=evidence_hash,
+                provider=provider,
+                model=model,
+                attempts=(*primary.attempts, generation_attempt),
+            )
+
+        generation_low = proposal.confidence < self.policy.minimum_model_confidence
+        generation_attempt = AdjudicationAttempt(
+            attempt_index=generation_index,
+            phase="generation",
+            request_hash=generation_hash,
+            candidate_id=generated.candidate_id,
+            confidence=proposal.confidence,
+            status="low_confidence" if generation_low else "accepted",
+            validation_codes=("LLM_CONFIDENCE_TOO_LOW",) if generation_low else (),
+            provider_retry_count=generation_result.metadata.retry_count,
+            provider_repair_count=generation_result.metadata.repair_count,
+        )
+
+        verification_messages = spacing_verification_messages(
+            candidate_set,
+            candidates,
+            generated,
+        )
+        verification_index = generation_index + 1
+        verification_hash = _attempt_request_hash(
+            request_hash,
+            phase="verification",
+            messages=verification_messages,
+            attempt_index=verification_index,
+        )
+        verification_ids = tuple(
+            dict.fromkeys(
+                candidate.candidate_id for candidate in (*candidates, generated)
+            )
+        )
+        try:
+            verification_result = self._service.generate_structured(
+                schema=spacing_verification_schema(verification_ids),
+                messages=verification_messages,
+            )
+        except ProviderExecutionError as error:
+            if error.kind is not ProviderFailureKind.OUTPUT:
+                raise
+            verification_attempt = AdjudicationAttempt(
+                attempt_index=verification_index,
+                phase="verification",
+                request_hash=verification_hash,
+                status="provider_rejected",
+                validation_codes=(error.code,),
+                provider_retry_count=error.retry_count,
+                provider_repair_count=error.repair_count,
+            )
+            return _deferred_spacing_record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=evidence_hash,
+                provider=provider,
+                model=model,
+                attempts=(*primary.attempts, generation_attempt, verification_attempt),
+            )
+
+        verification = SpacingVerification.model_validate(verification_result.structured)
+        verification_low = verification.confidence < self.policy.minimum_model_confidence
+        generated_selected = verification.candidate_id == generated.candidate_id
+        verification_codes = list(verification.validation_codes)
+        if verification_low and "LLM_CONFIDENCE_TOO_LOW" not in verification_codes:
+            verification_codes.append("LLM_CONFIDENCE_TOO_LOW")
+        if not generated_selected and len(verification_codes) < 4:
+            verification_codes.append("LLM_GENERATED_CANDIDATE_REJECTED")
+        accepted = (
+            not generation_low
+            and not verification_low
+            and generated_selected
+            and not verification.validation_codes
+        )
+        verification_attempt = AdjudicationAttempt(
+            attempt_index=verification_index,
+            phase="verification",
+            request_hash=verification_hash,
+            candidate_id=verification.candidate_id,
+            confidence=verification.confidence,
+            status=(
+                "accepted"
+                if accepted
+                else "low_confidence"
+                if verification_low
+                else "validation_rejected"
+            ),
+            validation_codes=tuple(verification_codes),
+            provider_retry_count=verification_result.metadata.retry_count,
+            provider_repair_count=verification_result.metadata.repair_count,
+        )
+        attempts = (*primary.attempts, generation_attempt, verification_attempt)
+        if not accepted:
+            return _deferred_spacing_record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=evidence_hash,
+                provider=provider,
+                model=model,
+                attempts=attempts,
+            )
+        return _record(
+            candidate_set,
+            request_hash=request_hash,
+            evidence_hash=evidence_hash,
+            selected_candidate_id=generated.candidate_id,
+            outcome="selected",
+            source="generated",
+            confidence=min(proposal.confidence, verification.confidence),
+            provider=provider,
+            model=model,
+            validation_codes=("LLM_SPACING_REPAIR_APPLIED",),
+            recovery_status="generated",
+            attempts=attempts,
+            generated_candidate=generated,
         )
 
     def _run_vote_phase(
@@ -786,6 +1029,19 @@ def _trusted_decision_matches(
     allowlist: set[CandidateId],
     policy: AdjudicationPolicy,
 ) -> bool:
+    generated_candidate = decision.generated_candidate
+    selected_is_current = decision.selected_candidate_id in allowlist or (
+        generated_candidate is not None
+        and generated_candidate.candidate_id == decision.selected_candidate_id
+        and generated_candidate.region_id == candidate_set.region_id
+        and candidate_set.decision_type == "spacing"
+        and all(
+            isinstance(candidate, SpacingCandidate)
+            and candidate.character_sequence == generated_candidate.character_sequence
+            for candidate in candidate_set.candidates
+        )
+        and not spacing_defect_codes(generated_candidate)
+    )
     if not (
         decision.request_hash == request_hash
         and decision.source_hash == candidate_set.source_hash
@@ -795,9 +1051,14 @@ def _trusted_decision_matches(
         and decision.provider == provider
         and decision.model == model
         and decision.outcome == "selected"
-        and decision.selected_candidate_id in allowlist
+        and selected_is_current
     ):
         return False
+    if decision.recovery_status == "generated":
+        return _generated_audit_matches(
+            decision,
+            policy=policy,
+        ) and _decision_identity_matches(decision)
     if decision.recovery_status != "recovered":
         return (
             decision.consensus_method == "none"
@@ -816,6 +1077,40 @@ def _trusted_decision_matches(
         allowlist=allowlist,
         policy=policy,
     ) and _decision_identity_matches(decision)
+
+
+def _generated_audit_matches(
+    decision: DecisionRecord,
+    *,
+    policy: AdjudicationPolicy,
+) -> bool:
+    generated = decision.generated_candidate
+    if generated is None or decision.source not in {"generated", "cache"}:
+        return False
+    if len(decision.attempts) < 3:
+        return False
+    generation, verification = decision.attempts[-2:]
+    if (
+        generation.phase != "generation"
+        or verification.phase != "verification"
+        or generation.status != "accepted"
+        or verification.status != "accepted"
+        or generation.candidate_id != generated.candidate_id
+        or verification.candidate_id != generated.candidate_id
+        or generation.confidence < policy.minimum_model_confidence
+        or verification.confidence < policy.minimum_model_confidence
+        or generation.validation_codes
+        or verification.validation_codes
+    ):
+        return False
+    return (
+        decision.confidence == min(generation.confidence, verification.confidence)
+        and decision.validation_codes == ("LLM_SPACING_REPAIR_APPLIED",)
+        and decision.retry_count
+        == sum(attempt.provider_retry_count for attempt in decision.attempts)
+        and decision.repair_count
+        == sum(attempt.provider_repair_count for attempt in decision.attempts)
+    )
 
 
 def _recovery_audit_matches(
@@ -915,7 +1210,7 @@ def _record(
     request_hash: Sha256,
     evidence_hash: Sha256,
     selected_candidate_id: CandidateId | None,
-    outcome: Literal["selected", "review_required"],
+    outcome: Literal["selected", "review_required", "deferred_review"],
     source: Literal[
         "deterministic",
         "model",
@@ -923,6 +1218,8 @@ def _record(
         "cache",
         "unavailable",
         "provider",
+        "generated",
+        "fallback",
     ],
     confidence: float,
     provider: str,
@@ -930,11 +1227,18 @@ def _record(
     validation_codes: tuple[str, ...] = (),
     retry_count: int = 0,
     repair_count: int = 0,
-    recovery_status: Literal["not_needed", "recovered", "review_required"] = "not_needed",
+    recovery_status: Literal[
+        "not_needed",
+        "recovered",
+        "review_required",
+        "generated",
+        "deferred_review",
+    ] = "not_needed",
     attempts: tuple[AdjudicationAttempt, ...] = (),
     consensus_method: Literal["none", "same_candidate", "two_of_three"] = "none",
     consensus_candidate_id: CandidateId | None = None,
     recovery_count: int = 0,
+    generated_candidate: SpacingCandidate | None = None,
 ) -> DecisionRecord:
     if attempts:
         retry_count = sum(item.provider_retry_count for item in attempts)
@@ -961,6 +1265,7 @@ def _record(
         consensus_method=consensus_method,
         consensus_candidate_id=consensus_candidate_id,
         recovery_count=recovery_count,
+        generated_candidate=generated_candidate,
     )
     return record.model_copy(update={"decision_id": _decision_id(record)})
 
@@ -987,9 +1292,40 @@ def _decision_id(decision: DecisionRecord) -> str:
             "consensus_method": decision.consensus_method,
             "consensus_candidate_id": decision.consensus_candidate_id,
             "recovery_count": decision.recovery_count,
+            "generated_candidate": (
+                decision.generated_candidate.model_dump(mode="json")
+                if decision.generated_candidate is not None
+                else None
+            ),
         }
     )
     return f"decision_{digest[:16]}"
+
+
+def _deferred_spacing_record(
+    candidate_set: CandidateSet,
+    *,
+    request_hash: Sha256,
+    evidence_hash: Sha256,
+    provider: str,
+    model: str,
+    attempts: tuple[AdjudicationAttempt, ...],
+) -> DecisionRecord:
+    fallback = fallback_spacing_candidate(candidate_set)
+    return _record(
+        candidate_set,
+        request_hash=request_hash,
+        evidence_hash=evidence_hash,
+        selected_candidate_id=fallback.candidate_id,
+        outcome="deferred_review",
+        source="fallback",
+        confidence=fallback.score,
+        provider=provider,
+        model=model,
+        validation_codes=("LLM_SPACING_REPAIR_DEFERRED",),
+        recovery_status="deferred_review",
+        attempts=attempts,
+    )
 
 
 def _json(value: object) -> str:
