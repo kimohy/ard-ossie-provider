@@ -27,7 +27,9 @@ or reinterpret tables. Use Korean morphology, punctuation, and line context only
 VERIFICATION_SYSTEM_CONTRACT = """You independently verify whitespace candidates. Return one JSON
 object matching the schema and select only an offered candidate ID. Reject character mutation,
 identifier splitting, punctuation defects, or changed hard line boundaries. Confidence measures
-whether the selected rendering is correct, not whether its characters are conserved."""
+whether the selected rendering is correct, not whether its characters are conserved. Return an
+empty validation_codes array when the selected candidate has no defects; otherwise list defect
+codes only."""
 
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+")
 _IDENTIFIER_WHITESPACE = re.compile(r"(?:\s_|_\s)")

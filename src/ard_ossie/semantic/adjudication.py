@@ -661,7 +661,9 @@ class CandidateAdjudicator:
         verification = SpacingVerification.model_validate(verification_result.structured)
         verification_low = verification.confidence < self.policy.minimum_model_confidence
         generated_selected = verification.candidate_id == generated.candidate_id
-        verification_codes = list(verification.validation_codes)
+        verification_codes = [
+            code for code in verification.validation_codes if code != "VALID"
+        ]
         if verification_low and "LLM_CONFIDENCE_TOO_LOW" not in verification_codes:
             verification_codes.append("LLM_CONFIDENCE_TOO_LOW")
         if not generated_selected and len(verification_codes) < 4:
@@ -670,7 +672,7 @@ class CandidateAdjudicator:
             not generation_low
             and not verification_low
             and generated_selected
-            and not verification.validation_codes
+            and not verification_codes
         )
         verification_attempt = AdjudicationAttempt(
             attempt_index=verification_index,
