@@ -572,8 +572,17 @@ def test_prepare_metrics_rejects_invalid_or_unsafe_provider_output(
         confidence=0.1,
     )
 
-    with pytest.raises(ValueError, match=f"^{expected_code}$"):
-        pipeline._prepare_metrics([suggestion], metric_drafts(tmp_path))
+    if expected_code == "LLM_METRIC_SQL_UNSAFE":
+        prepared = pipeline._prepare_metrics([suggestion], metric_drafts(tmp_path))
+
+        assert prepared.suggestions == []
+        assert prepared.audit_suggestions == []
+        assert prepared.excluded_names == []
+        assert [finding.code for finding in prepared.findings] == [expected_code]
+        assert prepared.findings[0].path == "metrics.provider_suggestion[0]"
+    else:
+        with pytest.raises(ValueError, match=f"^{expected_code}$"):
+            pipeline._prepare_metrics([suggestion], metric_drafts(tmp_path))
 
 
 @pytest.mark.parametrize(
@@ -653,12 +662,13 @@ def test_prepare_metrics_does_not_log_raw_command_fallback(
 ) -> None:
     caplog.set_level(logging.WARNING, logger="sqlglot")
 
-    with pytest.raises(ValueError, match="^LLM_METRIC_SQL_UNSAFE$"):
-        pipeline._prepare_metrics(
-            [metric_suggestion("SHOW PRIVATE_PROVIDER_VALUE")],
-            metric_drafts(tmp_path),
-        )
+    prepared = pipeline._prepare_metrics(
+        [metric_suggestion("SHOW PRIVATE_PROVIDER_VALUE")],
+        metric_drafts(tmp_path),
+    )
 
+    assert [finding.code for finding in prepared.findings] == ["LLM_METRIC_SQL_UNSAFE"]
+    assert prepared.audit_suggestions == []
     assert "PRIVATE_PROVIDER_VALUE" not in caplog.text
 
 
