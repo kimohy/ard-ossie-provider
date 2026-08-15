@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the real Issue #3 OCR artifact without exposing source content."""
+"""Verify the real Issue #3 semantic PDF artifact without exposing source content."""
 
 from __future__ import annotations
 
@@ -19,7 +19,9 @@ from ard_ossie.ingestion import (
     snapshot_source_file,
 )
 from ard_ossie.llm.contracts import LLMMetadata, LLMResult
-from ard_ossie.semantic.adjudication import DecisionRecord
+from ard_ossie.llm.profiles import LLMProfileRegistry
+from ard_ossie.semantic.adjudication import DecisionRecord, DecisionReport
+from ard_ossie.semantic.canonical import SemanticPipelineStatus, SemanticValidationReport
 from ard_ossie.semantic.correction import OcrCorrectionPlanner
 from ard_ossie.semantic.evidence import ExtractedEvidence
 from ard_ossie.semantic.evidence_sources import extract_pdf_evidence
@@ -34,6 +36,7 @@ from ard_ossie.semantic.structure import (
 
 RAW_HTML_TAG = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
 GFM_SEPARATOR_ROW = re.compile(r"(?m)^\|(?:\s*:?-{3,}:?\s*\|)+$")
+ISSUE_3_LLM_PROFILE = "openai-compatible-default"
 
 
 class Issue3VerificationError(RuntimeError):
@@ -41,7 +44,13 @@ class Issue3VerificationError(RuntimeError):
 
 
 class _ProviderMustNotRun:
-    def __init__(self, fidelity: SemanticFidelityReport) -> None:
+    def __init__(
+        self,
+        fidelity: SemanticFidelityReport,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> None:
         reusable = next(
             (
                 page
@@ -50,8 +59,11 @@ class _ProviderMustNotRun:
             ),
             None,
         )
-        self.provider = reusable.provider if reusable is not None else "acceptance-stub"
-        self.model = reusable.model if reusable is not None else "acceptance-stub"
+        self.provider = (
+            provider
+            or (reusable.provider if reusable is not None else "acceptance-stub")
+        )
+        self.model = model or (reusable.model if reusable is not None else "acceptance-stub")
 
     def capabilities(self) -> dict[str, object]:
         return {"provider": self.provider, "model": self.model, "vision": True}
@@ -198,6 +210,82 @@ class ReplayCandidateProvider:
 def _require(condition: bool, code: str) -> None:
     if not condition:
         raise Issue3VerificationError(code)
+
+
+def _quality_artifact_bytes(
+    root: Path,
+    quality_report: dict[str, object],
+    name: str,
+) -> bytes:
+    hashes = quality_report.get("quality_artifact_hashes")
+    _require(isinstance(hashes, dict), "ISSUE_3_QUALITY_HASHES_MISSING")
+    expected_hash = hashes.get(name)
+    _require(isinstance(expected_hash, str), "ISSUE_3_QUALITY_HASH_MISSING")
+    payload = (root / "quality" / name).read_bytes()
+    _require(
+        hashlib.sha256(payload).hexdigest() == expected_hash,
+        "ISSUE_3_DECISION_HASH_MISMATCH"
+        if name == "decision-report.json"
+        else "ISSUE_3_QUALITY_HASH_MISMATCH",
+    )
+    return payload
+
+
+def _trusted_provider_identity() -> tuple[str, str]:
+    profile = LLMProfileRegistry.load_packaged().resolve(ISSUE_3_LLM_PROFILE)
+    return profile.provider, profile.model
+
+
+def _decision_replay_matches(
+    expected: tuple[DecisionRecord, ...],
+    actual: tuple[DecisionRecord, ...],
+) -> bool:
+    if len(expected) != len(actual):
+        return False
+    actual_by_set = {item.candidate_set_id: item for item in actual}
+    if len(actual_by_set) != len(actual):
+        return False
+    for trusted in expected:
+        replayed = actual_by_set.get(trusted.candidate_set_id)
+        if replayed is None:
+            return False
+        expected_source = "deterministic" if trusted.source == "deterministic" else "cache"
+        if replayed.source != expected_source:
+            return False
+        if replayed.model_dump(
+            exclude={"decision_id", "source", "generated_candidate"}
+        ) != trusted.model_dump(
+            exclude={"decision_id", "source", "generated_candidate"}
+        ):
+            return False
+    return True
+
+
+def _verify_correction_reuse(
+    fidelity: SemanticFidelityReport,
+    reused_fidelity: SemanticFidelityReport,
+) -> int:
+    applied_pages = {
+        page.page for page in fidelity.ocr_corrections if page.outcome == "applied"
+    }
+    reused_pages = {
+        page.page for page in reused_fidelity.ocr_corrections if page.outcome == "reused"
+    }
+    _require(applied_pages <= reused_pages, "ISSUE_3_APPLIED_PAGE_NOT_REUSED")
+    applied_patches = {
+        (page.page, patch.span_id)
+        for page in fidelity.ocr_corrections
+        for patch in page.patches
+        if patch.outcome == "applied"
+    }
+    reused_patches = {
+        (page.page, patch.span_id)
+        for page in reused_fidelity.ocr_corrections
+        for patch in page.patches
+        if patch.outcome == "reused"
+    }
+    _require(applied_patches <= reused_patches, "ISSUE_3_APPLIED_PATCH_NOT_REUSED")
+    return len(reused_pages)
 
 
 def capture_evidence(
@@ -536,12 +624,17 @@ def _reject_sensitive_capture_keys(value: object) -> None:
 def verify_issue_3(product_root: Path) -> dict[str, object]:
     root = product_root.expanduser().resolve(strict=True)
     markdown_path = root / "generated" / "data-semantic.md"
-    fidelity_path = root / "quality" / "semantic-fidelity.json"
     markdown_bytes = markdown_path.read_bytes()
     markdown = markdown_bytes.decode("utf-8", errors="strict")
-    fidelity = SemanticFidelityReport.model_validate_json(fidelity_path.read_bytes())
+    quality_report = json.loads((root / "quality" / "quality-report.json").read_bytes())
+    fidelity = SemanticFidelityReport.model_validate_json(
+        _quality_artifact_bytes(root, quality_report, "semantic-fidelity.json")
+    )
 
-    _require(fidelity.extraction_mode is ExtractionMode.OCR, "ISSUE_3_NOT_OCR")
+    _require(
+        fidelity.extraction_mode in {ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR},
+        "ISSUE_3_NOT_PDF",
+    )
     _require(fidelity.page_count == 5, "ISSUE_3_PAGE_COUNT_INVALID")
     _require(fidelity.unmatched_span_count == 0, "ISSUE_3_UNMATCHED_SPANS")
     _require(fidelity.duplicated_span_count == 0, "ISSUE_3_DUPLICATED_SPANS")
@@ -561,42 +654,162 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
     )
 
     source = scan_sources(root / "sources").by_role(SourceRole.SEMANTIC_DOCUMENT)
-    provider = _ProviderMustNotRun(fidelity)
-    reused = DoclingParser(
-        ocr_correction_planner=OcrCorrectionPlanner(provider),
-        trusted_fidelity_report=fidelity,
-    ).parse(source)
+    _require(source.path.suffix.casefold() == ".pdf", "ISSUE_3_NOT_PDF")
+    _require(source.sha256 == fidelity.source_hash, "ISSUE_3_SOURCE_HASH_MISMATCH")
+
+    provider_name, model = _trusted_provider_identity()
+    provider = _ProviderMustNotRun(fidelity, provider=provider_name, model=model)
+    quality_hashes = quality_report["quality_artifact_hashes"]
+    _require(isinstance(quality_hashes, dict), "ISSUE_3_QUALITY_HASHES_MISSING")
+    manifest_mode: str | None = None
+    if "manifest.json" in quality_hashes:
+        manifest = json.loads(
+            _quality_artifact_bytes(root, quality_report, "manifest.json")
+        )
+        _require(isinstance(manifest, dict), "ISSUE_3_MANIFEST_INVALID")
+        manifest_mode = manifest.get("mode")
+        _require(
+            manifest_mode in {"legacy", "shadow", "candidate"},
+            "ISSUE_3_MANIFEST_INVALID",
+        )
+        _require(
+            manifest.get("source_hash") == source.sha256,
+            "ISSUE_3_SOURCE_HASH_MISMATCH",
+        )
+    else:
+        _require(
+            "decision-report.json" not in quality_hashes,
+            "ISSUE_3_MANIFEST_MISSING",
+        )
+    is_candidate_artifact = manifest_mode == "candidate"
+    decision_report: DecisionReport | None = None
+    validation: SemanticValidationReport | None = None
+    if is_candidate_artifact:
+        manifest_reports = manifest.get("reports")
+        _require(isinstance(manifest_reports, dict), "ISSUE_3_MANIFEST_INVALID")
+        _require(
+            all(
+                manifest_reports.get(name) == quality_hashes.get(name)
+                for name in ("decision-report.json", "validation-report.json")
+            ),
+            "ISSUE_3_MANIFEST_REPORT_MISMATCH",
+        )
+        validation = SemanticValidationReport.model_validate_json(
+            _quality_artifact_bytes(root, quality_report, "validation-report.json")
+        )
+        _require(
+            validation.source_hash == source.sha256,
+            "ISSUE_3_SOURCE_HASH_MISMATCH",
+        )
+        _require(
+            validation.status is SemanticPipelineStatus.VERIFIED
+            and validation.publishable,
+            "ISSUE_3_VALIDATION_NOT_VERIFIED",
+        )
+        _require(not fidelity.ocr_corrections, "ISSUE_3_CORRECTION_MODE_INVALID")
+        decision_report = DecisionReport.model_validate_json(
+            _quality_artifact_bytes(root, quality_report, "decision-report.json")
+        )
+        _require(
+            decision_report.source_hash == source.sha256
+            and all(
+                decision.source_hash == source.sha256
+                for decision in decision_report.decisions
+            ),
+            "ISSUE_3_DECISION_SOURCE_MISMATCH",
+        )
+        _require(bool(decision_report.decisions), "ISSUE_3_DECISIONS_MISSING")
+        _require(
+            all(decision.outcome == "selected" for decision in decision_report.decisions),
+            "ISSUE_3_DECISIONS_UNRESOLVED",
+        )
+        _require(
+            {
+                (decision.provider, decision.model)
+                for decision in decision_report.decisions
+            }
+            == {(provider_name, model)},
+            "ISSUE_3_DECISION_PROVIDER_INVALID",
+        )
+        reused = DoclingParser(
+            trusted_fidelity_report=fidelity,
+            semantic_pipeline_mode="candidate",
+            candidate_provider=provider,
+            trusted_candidate_decisions=decision_report.decisions,
+        ).parse(source)
+    else:
+        _require(
+            any(page.outcome == "applied" for page in fidelity.ocr_corrections),
+            "ISSUE_3_DECISION_REPORT_MISSING",
+        )
+        _require(
+            all(
+                page.source_hash == source.sha256
+                and (page.provider, page.model) == (provider_name, model)
+                for page in fidelity.ocr_corrections
+                if page.outcome in {"applied", "reused"}
+            ),
+            "ISSUE_3_CORRECTION_PROVIDER_INVALID",
+        )
+        reused = DoclingParser(
+            trusted_fidelity_report=fidelity,
+            ocr_correction_planner=OcrCorrectionPlanner(provider),
+            semantic_pipeline_mode="legacy",
+        ).parse(source)
     reused_fidelity = reused.semantic_fidelity
     _require(reused_fidelity is not None, "ISSUE_3_REUSED_FIDELITY_MISSING")
+    _require(
+        reused_fidelity.source_hash == source.sha256,
+        "ISSUE_3_REPLAY_SOURCE_HASH_MISMATCH",
+    )
+    _require(
+        reused_fidelity.extraction_mode == fidelity.extraction_mode,
+        "ISSUE_3_REPLAY_MODE_MISMATCH",
+    )
     _require(reused.markdown.encode("utf-8") == markdown_bytes, "ISSUE_3_REUSE_CHANGED_MARKDOWN")
-
-    applied_pages = {
-        page.page for page in fidelity.ocr_corrections if page.outcome == "applied"
-    }
-    reused_pages = {
-        page.page for page in reused_fidelity.ocr_corrections if page.outcome == "reused"
-    }
-    _require(applied_pages <= reused_pages, "ISSUE_3_APPLIED_PAGE_NOT_REUSED")
-    applied_patches = {
-        (page.page, patch.span_id)
-        for page in fidelity.ocr_corrections
-        for patch in page.patches
-        if patch.outcome == "applied"
-    }
-    reused_patches = {
-        (page.page, patch.span_id)
-        for page in reused_fidelity.ocr_corrections
-        for patch in page.patches
-        if patch.outcome == "reused"
-    }
-    _require(applied_patches <= reused_patches, "ISSUE_3_APPLIED_PATCH_NOT_REUSED")
+    reused_page_count = _verify_correction_reuse(fidelity, reused_fidelity)
+    if decision_report is not None:
+        pipeline_result = reused.semantic_pipeline_result
+        _require(pipeline_result is not None, "ISSUE_3_REPLAY_PIPELINE_MISSING")
+        _require(
+            pipeline_result.validation.status is SemanticPipelineStatus.VERIFIED
+            and pipeline_result.validation.publishable,
+            "ISSUE_3_REPLAY_VALIDATION_NOT_VERIFIED",
+        )
+        _require(validation is not None, "ISSUE_3_VALIDATION_REPORT_MISSING")
+        _require(
+            (
+                pipeline_result.validation.source_hash,
+                pipeline_result.validation.canonical_hash,
+                pipeline_result.validation.character_coverage,
+                pipeline_result.validation.missing_atom_count,
+                pipeline_result.validation.duplicate_atom_count,
+                pipeline_result.validation.degraded_block_count,
+            )
+            == (
+                validation.source_hash,
+                validation.canonical_hash,
+                validation.character_coverage,
+                validation.missing_atom_count,
+                validation.duplicate_atom_count,
+                validation.degraded_block_count,
+            ),
+            "ISSUE_3_REPLAY_VALIDATION_MISMATCH",
+        )
+        _require(
+            _decision_replay_matches(
+                decision_report.decisions,
+                pipeline_result.decisions.decisions,
+            ),
+            "ISSUE_3_DECISION_REUSE_MISMATCH",
+        )
 
     return {
         "status": fidelity.status,
         "page_count": fidelity.page_count,
         "source_span_count": fidelity.source_span_count,
         "correction_count": fidelity.ocr_correction_applied_count,
-        "reused_page_count": len(reused_pages),
+        "reused_page_count": reused_page_count,
         "markdown_sha256": hashlib.sha256(markdown_bytes).hexdigest(),
     }
 
