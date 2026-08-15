@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints
@@ -107,6 +109,15 @@ class DecisionRecord(ImmutableStrictModel):
 class DecisionReport(ImmutableStrictModel):
     source_hash: Sha256
     decisions: tuple[DecisionRecord, ...]
+
+
+@dataclass(frozen=True)
+class _VotePhaseResult:
+    choice: CandidateChoice | None
+    attempts: tuple[AdjudicationAttempt, ...]
+    validation_codes: tuple[str, ...]
+    retry_count: int = 0
+    repair_count: int = 0
 
 
 def candidate_choice_schema() -> dict[str, object]:
@@ -229,15 +240,263 @@ class CandidateAdjudicator:
                 validation_codes=("LLM_PROVIDER_UNAVAILABLE",),
             )
 
-        messages = _messages(candidate_set, candidates)
+        primary = self._run_vote_phase(
+            candidate_set,
+            candidates=candidates,
+            allowlist=allowlist,
+            request_hash=request_hash,
+            phase="primary",
+            prior_votes=(),
+            page_crop=page_crop,
+            start_index=1,
+        )
+        if primary.choice is None:
+            return _record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                selected_candidate_id=None,
+                outcome="review_required",
+                source=_failed_vote_source(primary),
+                confidence=_last_confidence(primary),
+                provider=provider_name,
+                model=model,
+                validation_codes=primary.validation_codes,
+                retry_count=primary.retry_count,
+                repair_count=primary.repair_count,
+                attempts=primary.attempts,
+            )
+        if primary.choice.confidence >= self.policy.minimum_model_confidence:
+            return _record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                selected_candidate_id=primary.choice.candidate_id,
+                outcome="selected",
+                source="model",
+                confidence=primary.choice.confidence,
+                provider=provider_name,
+                model=model,
+                retry_count=primary.retry_count,
+                repair_count=primary.repair_count,
+                attempts=primary.attempts,
+            )
+        if self.policy.max_confidence_recovery_attempts < 1:
+            return _record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                selected_candidate_id=None,
+                outcome="review_required",
+                source="model",
+                confidence=primary.choice.confidence,
+                provider=provider_name,
+                model=model,
+                validation_codes=("LLM_CONFIDENCE_TOO_LOW",),
+                retry_count=primary.retry_count,
+                repair_count=primary.repair_count,
+                recovery_status="review_required",
+                attempts=primary.attempts,
+            )
+
+        recovery = self._run_vote_phase(
+            candidate_set,
+            candidates=candidates,
+            allowlist=allowlist,
+            request_hash=request_hash,
+            phase="recovery",
+            prior_votes=primary.attempts,
+            page_crop=page_crop,
+            start_index=len(primary.attempts) + 1,
+        )
+        attempts = (*primary.attempts, *recovery.attempts)
+        if recovery.choice is None:
+            return _record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                selected_candidate_id=None,
+                outcome="review_required",
+                source=_failed_vote_source(recovery),
+                confidence=_last_confidence(recovery),
+                provider=provider_name,
+                model=model,
+                validation_codes=recovery.validation_codes,
+                retry_count=recovery.retry_count,
+                repair_count=recovery.repair_count,
+                recovery_status="review_required",
+                attempts=attempts,
+                recovery_count=1,
+            )
+        if recovery.choice.confidence < self.policy.minimum_model_confidence:
+            return _record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                selected_candidate_id=None,
+                outcome="review_required",
+                source="model",
+                confidence=recovery.choice.confidence,
+                provider=provider_name,
+                model=model,
+                validation_codes=("LLM_CONFIDENCE_RECOVERY_EXHAUSTED",),
+                retry_count=recovery.retry_count,
+                repair_count=recovery.repair_count,
+                recovery_status="review_required",
+                attempts=attempts,
+                recovery_count=1,
+            )
+        if recovery.choice.candidate_id != primary.choice.candidate_id:
+            if self.policy.max_confidence_recovery_attempts < 2:
+                return _record(
+                    candidate_set,
+                    request_hash=request_hash,
+                    evidence_hash=resolved_evidence_hash,
+                    selected_candidate_id=None,
+                    outcome="review_required",
+                    source="model",
+                    confidence=recovery.choice.confidence,
+                    provider=provider_name,
+                    model=model,
+                    validation_codes=("LLM_CONSENSUS_NOT_REACHED",),
+                    retry_count=recovery.retry_count,
+                    repair_count=recovery.repair_count,
+                    recovery_status="review_required",
+                    attempts=attempts,
+                    recovery_count=1,
+                )
+            tiebreak = self._run_vote_phase(
+                candidate_set,
+                candidates=candidates,
+                allowlist=allowlist,
+                request_hash=request_hash,
+                phase="tiebreak",
+                prior_votes=attempts,
+                page_crop=page_crop,
+                start_index=len(attempts) + 1,
+            )
+            all_attempts = (*attempts, *tiebreak.attempts)
+            if tiebreak.choice is None:
+                return _record(
+                    candidate_set,
+                    request_hash=request_hash,
+                    evidence_hash=resolved_evidence_hash,
+                    selected_candidate_id=None,
+                    outcome="review_required",
+                    source=_failed_vote_source(tiebreak),
+                    confidence=_last_confidence(tiebreak),
+                    provider=provider_name,
+                    model=model,
+                    validation_codes=tiebreak.validation_codes,
+                    retry_count=tiebreak.retry_count,
+                    repair_count=tiebreak.repair_count,
+                    recovery_status="review_required",
+                    attempts=all_attempts,
+                    recovery_count=2,
+                )
+            votes = Counter(
+                (
+                    primary.choice.candidate_id,
+                    recovery.choice.candidate_id,
+                    tiebreak.choice.candidate_id,
+                )
+            )
+            majority_id, majority_count = votes.most_common(1)[0]
+            qualified = (
+                tiebreak.choice.confidence >= self.policy.minimum_model_confidence
+                and majority_count >= self.policy.consensus_votes_required
+                and tiebreak.choice.candidate_id == majority_id
+            )
+            if qualified:
+                return _record(
+                    candidate_set,
+                    request_hash=request_hash,
+                    evidence_hash=resolved_evidence_hash,
+                    selected_candidate_id=majority_id,
+                    outcome="selected",
+                    source="recovered",
+                    confidence=tiebreak.choice.confidence,
+                    provider=provider_name,
+                    model=model,
+                    validation_codes=("LLM_LOW_CONFIDENCE_RECOVERED",),
+                    retry_count=tiebreak.retry_count,
+                    repair_count=tiebreak.repair_count,
+                    recovery_status="recovered",
+                    attempts=all_attempts,
+                    consensus_method="two_of_three",
+                    consensus_candidate_id=majority_id,
+                    recovery_count=2,
+                )
+            return _record(
+                candidate_set,
+                request_hash=request_hash,
+                evidence_hash=resolved_evidence_hash,
+                selected_candidate_id=None,
+                outcome="review_required",
+                source="model",
+                confidence=tiebreak.choice.confidence,
+                provider=provider_name,
+                model=model,
+                validation_codes=("LLM_CONSENSUS_NOT_REACHED",),
+                retry_count=tiebreak.retry_count,
+                repair_count=tiebreak.repair_count,
+                recovery_status="review_required",
+                attempts=all_attempts,
+                recovery_count=2,
+            )
+        return _record(
+            candidate_set,
+            request_hash=request_hash,
+            evidence_hash=resolved_evidence_hash,
+            selected_candidate_id=recovery.choice.candidate_id,
+            outcome="selected",
+            source="recovered",
+            confidence=recovery.choice.confidence,
+            provider=provider_name,
+            model=model,
+            validation_codes=("LLM_LOW_CONFIDENCE_RECOVERED",),
+            retry_count=recovery.retry_count,
+            repair_count=recovery.repair_count,
+            recovery_status="recovered",
+            attempts=attempts,
+            consensus_method="same_candidate",
+            consensus_candidate_id=recovery.choice.candidate_id,
+            recovery_count=1,
+        )
+
+    def _run_vote_phase(
+        self,
+        candidate_set: CandidateSet,
+        *,
+        candidates: tuple[Candidate, ...],
+        allowlist: set[CandidateId],
+        request_hash: Sha256,
+        phase: Literal["primary", "recovery", "tiebreak"],
+        prior_votes: tuple[AdjudicationAttempt, ...],
+        page_crop: bytes | None,
+        start_index: int,
+    ) -> _VotePhaseResult:
+        assert self._service is not None
+        messages = _messages(
+            candidate_set,
+            candidates,
+            phase=phase,
+            prior_votes=prior_votes,
+        )
+        attempts: list[AdjudicationAttempt] = []
         validation_codes: list[str] = []
-        last_retry_count = 0
-        last_repair_count = 0
-        for attempt in range(self.policy.max_schema_attempts):
+        for schema_attempt in range(self.policy.max_schema_attempts):
             active_messages = (
                 _corrective_messages(messages, validation_codes[-1])
                 if validation_codes
                 else messages
+            )
+            attempt_index = start_index + schema_attempt
+            attempt_hash = _attempt_request_hash(
+                request_hash,
+                phase=phase,
+                messages=active_messages,
+                attempt_index=attempt_index,
             )
             try:
                 result = _generate(
@@ -248,66 +507,66 @@ class CandidateAdjudicator:
             except ProviderExecutionError as error:
                 if error.kind is not ProviderFailureKind.OUTPUT:
                     raise
-                return _record(
-                    candidate_set,
-                    request_hash=request_hash,
-                    evidence_hash=resolved_evidence_hash,
-                    selected_candidate_id=None,
-                    outcome="review_required",
-                    source="provider",
-                    confidence=0.0,
-                    provider=provider_name,
-                    model=model,
+                attempts.append(
+                    AdjudicationAttempt(
+                        attempt_index=attempt_index,
+                        phase=phase,
+                        request_hash=attempt_hash,
+                        status="provider_rejected",
+                        validation_codes=(error.code,),
+                    )
+                )
+                return _VotePhaseResult(
+                    choice=None,
+                    attempts=tuple(attempts),
                     validation_codes=(error.code,),
                 )
-            last_retry_count = result.metadata.retry_count
-            last_repair_count = result.metadata.repair_count
+
             choice = CandidateChoice.model_validate(result.structured)
             if choice.candidate_id not in allowlist:
                 validation_codes.append("LLM_CANDIDATE_UNKNOWN")
-                if attempt + 1 < self.policy.max_schema_attempts:
+                attempts.append(
+                    AdjudicationAttempt(
+                        attempt_index=attempt_index,
+                        phase=phase,
+                        request_hash=attempt_hash,
+                        confidence=choice.confidence,
+                        status="candidate_unknown",
+                        validation_codes=("LLM_CANDIDATE_UNKNOWN",),
+                        provider_retry_count=result.metadata.retry_count,
+                        provider_repair_count=result.metadata.repair_count,
+                    )
+                )
+                if schema_attempt + 1 < self.policy.max_schema_attempts:
                     continue
-                return _record(
-                    candidate_set,
-                    request_hash=request_hash,
-                    evidence_hash=resolved_evidence_hash,
-                    selected_candidate_id=None,
-                    outcome="review_required",
-                    source="model",
-                    confidence=choice.confidence,
-                    provider=provider_name,
-                    model=model,
+                return _VotePhaseResult(
+                    choice=None,
+                    attempts=tuple(attempts),
                     validation_codes=tuple(validation_codes),
-                    retry_count=last_retry_count,
-                    repair_count=last_repair_count,
+                    retry_count=result.metadata.retry_count,
+                    repair_count=result.metadata.repair_count,
                 )
-            if choice.confidence < self.policy.minimum_model_confidence:
-                return _record(
-                    candidate_set,
-                    request_hash=request_hash,
-                    evidence_hash=resolved_evidence_hash,
-                    selected_candidate_id=None,
-                    outcome="review_required",
-                    source="model",
+
+            low_confidence = choice.confidence < self.policy.minimum_model_confidence
+            attempts.append(
+                AdjudicationAttempt(
+                    attempt_index=attempt_index,
+                    phase=phase,
+                    request_hash=attempt_hash,
+                    candidate_id=choice.candidate_id,
                     confidence=choice.confidence,
-                    provider=provider_name,
-                    model=model,
-                    validation_codes=("LLM_CONFIDENCE_TOO_LOW",),
-                    retry_count=last_retry_count,
-                    repair_count=last_repair_count,
+                    status="low_confidence" if low_confidence else "accepted",
+                    validation_codes=("LLM_CONFIDENCE_TOO_LOW",) if low_confidence else (),
+                    provider_retry_count=result.metadata.retry_count,
+                    provider_repair_count=result.metadata.repair_count,
                 )
-            return _record(
-                candidate_set,
-                request_hash=request_hash,
-                evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=choice.candidate_id,
-                outcome="selected",
-                source="model",
-                confidence=choice.confidence,
-                provider=provider_name,
-                model=model,
-                retry_count=last_retry_count,
-                repair_count=last_repair_count,
+            )
+            return _VotePhaseResult(
+                choice=choice,
+                attempts=tuple(attempts),
+                validation_codes=("LLM_CONFIDENCE_TOO_LOW",) if low_confidence else (),
+                retry_count=result.metadata.retry_count,
+                repair_count=result.metadata.repair_count,
             )
         raise AssertionError("unreachable")
 
@@ -341,19 +600,48 @@ def _generate(
 def _messages(
     candidate_set: CandidateSet,
     candidates: tuple[Candidate, ...],
+    *,
+    phase: Literal["primary", "recovery", "tiebreak"],
+    prior_votes: tuple[AdjudicationAttempt, ...],
 ) -> list[dict[str, str]]:
     instruction = {
         "task": "Select exactly one allowlisted candidate ID.",
         "decision_type": candidate_set.decision_type,
+        "phase": phase,
         "rules": [
             "Do not transcribe or rewrite text.",
             "Return only candidate_id and confidence.",
         ],
     }
+    if phase == "recovery":
+        instruction["recovery_rules"] = [
+            "Reassess the exact differences among candidates independently.",
+            (
+                "For spacing, consider Korean morphology, particles, compounds, "
+                "punctuation, and identifiers."
+            ),
+            "Do not raise confidence merely because this is a recovery request.",
+        ]
+    elif phase == "tiebreak":
+        instruction["recovery_rules"] = [
+            "Prior valid votes disagree; make an independent selection.",
+            "Do not prefer a candidate because it appeared in a prior vote.",
+        ]
     request = {
+        "phase": phase,
         "candidate_set_id": candidate_set.candidate_set_id,
         "region_id": candidate_set.region_id,
         "candidates": [_candidate_summary(candidate) for candidate in candidates],
+        "prior_votes": [
+            {
+                "phase": attempt.phase,
+                "candidate_id": attempt.candidate_id,
+                "confidence": attempt.confidence,
+                "validation_codes": attempt.validation_codes,
+            }
+            for attempt in prior_votes
+            if attempt.candidate_id is not None
+        ],
     }
     return [
         {"role": "system", "content": _json(instruction)},
@@ -452,6 +740,37 @@ def _request_hash(
             ),
         }
     )
+
+
+def _attempt_request_hash(
+    base_request_hash: Sha256,
+    *,
+    phase: str,
+    messages: list[dict[str, str]],
+    attempt_index: int,
+) -> Sha256:
+    return canonical_hash(
+        {
+            "base_request_hash": base_request_hash,
+            "phase": phase,
+            "attempt_index": attempt_index,
+            "messages_hash": canonical_hash(messages),
+        }
+    )
+
+
+def _failed_vote_source(
+    result: _VotePhaseResult,
+) -> Literal["model", "provider"]:
+    return (
+        "provider"
+        if result.attempts and result.attempts[-1].status == "provider_rejected"
+        else "model"
+    )
+
+
+def _last_confidence(result: _VotePhaseResult) -> float:
+    return result.attempts[-1].confidence if result.attempts else 0.0
 
 
 def _record(

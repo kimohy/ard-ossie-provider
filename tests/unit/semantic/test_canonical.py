@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from ard_ossie.semantic.adjudication import CandidateAdjudicator
+from ard_ossie.semantic.adjudication import (
+    AdjudicationAttempt,
+    CandidateAdjudicator,
+    DecisionRecord,
+)
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
     CandidateSet,
@@ -270,9 +274,65 @@ def test_every_source_whitespace_atom_requires_one_disposition() -> None:
     report = validate_canonical(evidence, corrupted)
 
     assert report.status is SemanticPipelineStatus.FAILED
-    assert [finding.code for finding in report.findings] == [
-        "INVARIANT_WHITESPACE_ACCOUNTING"
-    ]
+    assert [finding.code for finding in report.findings] == ["INVARIANT_WHITESPACE_ACCOUNTING"]
+
+
+def test_validation_counts_recovery_calls_but_not_trusted_reuse() -> None:
+    evidence, document = _document()
+    selected = "candidate_0000000000000001"
+    recovered = DecisionRecord(
+        decision_id="decision_0000000000000001",
+        request_hash="2" * 64,
+        source_hash=SOURCE_HASH,
+        evidence_hash="3" * 64,
+        candidate_set_id="candidate_set_0000000000000001",
+        region_id=REGION_A,
+        decision_type="spacing",
+        selected_candidate_id=selected,
+        outcome="selected",
+        source="recovered",
+        confidence=0.92,
+        provider="test",
+        model="test",
+        recovery_status="recovered",
+        attempts=(
+            AdjudicationAttempt(
+                attempt_index=1,
+                phase="primary",
+                request_hash="4" * 64,
+                candidate_id=selected,
+                confidence=0.70,
+                status="low_confidence",
+                provider_retry_count=1,
+            ),
+            AdjudicationAttempt(
+                attempt_index=2,
+                phase="recovery",
+                request_hash="5" * 64,
+                candidate_id=selected,
+                confidence=0.92,
+                status="accepted",
+                provider_repair_count=1,
+            ),
+        ),
+        consensus_method="same_candidate",
+        consensus_candidate_id=selected,
+        recovery_count=1,
+    )
+
+    current = validate_canonical(
+        evidence,
+        document.model_copy(update={"decisions": (recovered,)}),
+    )
+    cached = validate_canonical(
+        evidence,
+        document.model_copy(
+            update={"decisions": (recovered.model_copy(update={"source": "cache"}),)}
+        ),
+    )
+
+    assert current.model_call_count == 4
+    assert cached.model_call_count == 0
 
 
 def test_region_without_spacing_candidates_retains_source_whitespace() -> None:
@@ -570,9 +630,7 @@ def test_low_confidence_decision_keeps_preview_but_blocks_publication() -> None:
         features={"paragraph": 0.95},
     )
     block_set = CandidateSet(
-        candidate_set_id=make_candidate_set_id(
-            SOURCE_HASH, REGION_A, (block.candidate_id,)
-        ),
+        candidate_set_id=make_candidate_set_id(SOURCE_HASH, REGION_A, (block.candidate_id,)),
         source_hash=SOURCE_HASH,
         region_id=REGION_A,
         decision_type="block",

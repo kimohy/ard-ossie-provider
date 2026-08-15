@@ -82,29 +82,23 @@ class RecordingProvider:
         )
 
 
-def _spacing_set(first_score: float, second_score: float) -> CandidateSet:
+def _spacing_set(*scores: float) -> CandidateSet:
     characters = "데이터시맨틱"
     atom_ids = tuple(f"atom_{index:016x}" for index in range(1, len(characters) + 1))
     source_whitespace = tuple(() for _ in range(len(atom_ids) - 1))
-    candidates = (
+    renderings = ("데이터 시맨틱", "데이터시맨틱", "데이터 시맨 틱")
+    feature_names = ("kiwi", "source_spacing", "alternate")
+    candidates = tuple(
         make_spacing_candidate(
             region_id="region_0000000000000001",
-            rendered_text="데이터 시맨틱",
+            rendered_text=renderings[index],
             character_sequence=characters,
             atom_ids=atom_ids,
             source_whitespace=source_whitespace,
-            score=first_score,
-            features={"kiwi": first_score},
-        ),
-        make_spacing_candidate(
-            region_id="region_0000000000000001",
-            rendered_text="데이터시맨틱",
-            character_sequence=characters,
-            atom_ids=atom_ids,
-            source_whitespace=source_whitespace,
-            score=second_score,
-            features={"source_spacing": second_score},
-        ),
+            score=score,
+            features={feature_names[index]: score},
+        )
+        for index, score in enumerate(scores)
     )
     return CandidateSet(
         candidate_set_id=make_candidate_set_id(
@@ -240,24 +234,96 @@ def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> No
     assert len(evidence_miss_provider.calls) == 1
 
 
-def test_unavailable_provider_and_low_confidence_response_require_review() -> None:
+def test_unavailable_provider_requires_review() -> None:
     unavailable = CandidateAdjudicator(None).decide(_spacing_set(0.80, 0.75))
     assert unavailable.outcome == "review_required"
     assert unavailable.validation_codes == ("LLM_PROVIDER_UNAVAILABLE",)
 
+
+def test_low_confidence_is_recovered_when_second_vote_matches() -> None:
     candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
     provider = RecordingProvider(
         [
-            {
-                "candidate_id": candidate_set.candidates[0].candidate_id,
-                "confidence": 0.40,
-            }
+            {"candidate_id": selected, "confidence": 0.70},
+            {"candidate_id": selected, "confidence": 0.92},
         ]
     )
-    uncertain = CandidateAdjudicator(provider).decide(candidate_set)
-    assert uncertain.outcome == "review_required"
-    assert uncertain.validation_codes == ("LLM_CONFIDENCE_TOO_LOW",)
-    assert len(provider.calls) == 1
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "selected"
+    assert decision.source == "recovered"
+    assert decision.selected_candidate_id == selected
+    assert decision.recovery_status == "recovered"
+    assert decision.consensus_method == "same_candidate"
+    assert decision.recovery_count == 1
+    assert [attempt.phase for attempt in decision.attempts] == ["primary", "recovery"]
+    assert [attempt.confidence for attempt in decision.attempts] == [0.70, 0.92]
+    assert decision.validation_codes == ("LLM_LOW_CONFIDENCE_RECOVERED",)
+    assert len(provider.calls) == 2
+
+
+def test_disagreement_uses_high_confidence_two_of_three_tiebreak() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    first, second = [item.candidate_id for item in candidate_set.candidates]
+    provider = RecordingProvider(
+        [
+            {"candidate_id": first, "confidence": 0.70},
+            {"candidate_id": second, "confidence": 0.91},
+            {"candidate_id": first, "confidence": 0.93},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "selected"
+    assert decision.selected_candidate_id == first
+    assert decision.consensus_method == "two_of_three"
+    assert decision.consensus_candidate_id == first
+    assert decision.recovery_count == 2
+    assert [item.phase for item in decision.attempts] == [
+        "primary",
+        "recovery",
+        "tiebreak",
+    ]
+
+
+def test_second_low_confidence_vote_exhausts_recovery_without_tiebreak() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    provider = RecordingProvider(
+        [
+            {"candidate_id": selected, "confidence": 0.70},
+            {"candidate_id": selected, "confidence": 0.74},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "review_required"
+    assert decision.selected_candidate_id is None
+    assert decision.recovery_status == "review_required"
+    assert decision.validation_codes == ("LLM_CONFIDENCE_RECOVERY_EXHAUSTED",)
+    assert len(provider.calls) == 2
+
+
+def test_tiebreak_without_majority_requires_review() -> None:
+    candidate_set = _spacing_set(0.80, 0.75, 0.74)
+    first, second, third = [item.candidate_id for item in candidate_set.candidates]
+    provider = RecordingProvider(
+        [
+            {"candidate_id": first, "confidence": 0.70},
+            {"candidate_id": second, "confidence": 0.91},
+            {"candidate_id": third, "confidence": 0.94},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "review_required"
+    assert decision.validation_codes == ("LLM_CONSENSUS_NOT_REACHED",)
+    assert len(provider.calls) == 3
 
 
 def test_transient_provider_failure_propagates() -> None:
