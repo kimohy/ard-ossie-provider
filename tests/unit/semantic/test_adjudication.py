@@ -15,6 +15,7 @@ from ard_ossie.llm.contracts import (
 )
 from ard_ossie.semantic.adjudication import (
     AdjudicationAttempt,
+    AdjudicationPolicy,
     CandidateAdjudicator,
     DecisionRecord,
     candidate_choice_schema,
@@ -258,6 +259,29 @@ def test_trusted_recovered_decision_reuses_full_audit_without_provider_call() ->
     assert reuse_provider.calls == []
 
 
+def test_cached_recovery_can_be_reused_again_without_provider_call() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    cached = CandidateAdjudicator(RecordingProvider(), trusted=(recovered,)).decide(
+        candidate_set
+    )
+    provider = RecordingProvider()
+
+    reused = CandidateAdjudicator(provider, trusted=(cached,)).decide(candidate_set)
+
+    assert reused.source == "cache"
+    assert reused.attempts == recovered.attempts
+    assert provider.calls == []
+
+
 def test_invalid_trusted_consensus_is_ignored() -> None:
     candidate_set = _spacing_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
@@ -273,6 +297,66 @@ def test_invalid_trusted_consensus_is_ignored() -> None:
     provider = RecordingProvider([{"candidate_id": selected, "confidence": 0.93}])
 
     fresh = CandidateAdjudicator(provider, trusted=(invalid,)).decide(candidate_set)
+
+    assert fresh.source != "cache"
+    assert len(provider.calls) == 1
+
+
+def test_trusted_recovery_is_ignored_when_attempt_votes_contradict_consensus() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    first, second = [candidate.candidate_id for candidate in candidate_set.candidates]
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": first, "confidence": 0.70},
+                {"candidate_id": first, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    contradictory_recovery = recovered.attempts[1].model_copy(update={"candidate_id": second})
+    contradictory = recovered.model_copy(
+        update={"attempts": (recovered.attempts[0], contradictory_recovery)}
+    )
+    provider = RecordingProvider([{"candidate_id": first, "confidence": 0.93}])
+
+    fresh = CandidateAdjudicator(provider, trusted=(contradictory,)).decide(candidate_set)
+
+    assert fresh.source == "model"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "policy,response",
+    [
+        (
+            AdjudicationPolicy(minimum_model_confidence=0.95),
+            {"confidence": 0.96},
+        ),
+        (
+            AdjudicationPolicy(max_confidence_recovery_attempts=0),
+            {"confidence": 0.70},
+        ),
+    ],
+)
+def test_trusted_recovery_is_ignored_when_active_policy_changes(
+    policy: AdjudicationPolicy,
+    response: dict[str, float],
+) -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    provider = RecordingProvider([{"candidate_id": selected, **response}])
+
+    fresh = CandidateAdjudicator(provider, policy=policy, trusted=(recovered,)).decide(
+        candidate_set
+    )
 
     assert fresh.source != "cache"
     assert len(provider.calls) == 1
@@ -306,6 +390,56 @@ def test_low_confidence_is_recovered_when_second_vote_matches() -> None:
     assert [attempt.confidence for attempt in decision.attempts] == [0.70, 0.92]
     assert decision.validation_codes == ("LLM_LOW_CONFIDENCE_RECOVERED",)
     assert len(provider.calls) == 2
+
+
+def test_recovered_decision_id_changes_when_attempt_audit_changes() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+
+    first = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    second = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.99},
+            ]
+        )
+    ).decide(candidate_set)
+
+    assert first.attempts[1].request_hash == second.attempts[1].request_hash
+    assert first.decision_id != second.decision_id
+
+
+def test_recovered_decision_aggregates_provider_counts_across_vote_phases() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    transient = ProviderExecutionError(
+        "LLM_PROVIDER_TIMEOUT",
+        kind=ProviderFailureKind.TRANSIENT,
+    )
+    provider = RecordingProvider(
+        [
+            transient,
+            {"candidate_id": selected, "confidence": 0.70},
+            "invalid repairable output",
+            {"candidate_id": selected, "confidence": 0.92},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(candidate_set)
+
+    assert decision.source == "recovered"
+    assert [attempt.provider_retry_count for attempt in decision.attempts] == [1, 0]
+    assert [attempt.provider_repair_count for attempt in decision.attempts] == [0, 1]
+    assert decision.retry_count == 1
+    assert decision.repair_count == 1
 
 
 def test_disagreement_uses_high_confidence_two_of_three_tiebreak() -> None:
@@ -391,6 +525,9 @@ def test_schema_invalid_free_text_is_never_accepted() -> None:
     assert decision.outcome == "review_required"
     assert decision.selected_candidate_id is None
     assert decision.validation_codes == ("LLM_INVALID_JSON",)
+    assert len(provider.calls) == 3
+    assert decision.attempts[0].provider_repair_count == 2
+    assert decision.repair_count == 2
 
 
 def test_optional_crop_uses_exactly_one_multimodal_image() -> None:

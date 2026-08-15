@@ -97,8 +97,8 @@ class DecisionRecord(ImmutableStrictModel):
     provider: str = Field(min_length=1, max_length=100)
     model: str = Field(min_length=1, max_length=200)
     validation_codes: tuple[ValidationCode, ...] = Field(default=(), max_length=4)
-    retry_count: int = Field(default=0, ge=0, le=2)
-    repair_count: int = Field(default=0, ge=0, le=2)
+    retry_count: int = Field(default=0, ge=0, le=12)
+    repair_count: int = Field(default=0, ge=0, le=12)
     recovery_status: Literal["not_needed", "recovered", "review_required"] = "not_needed"
     attempts: tuple[AdjudicationAttempt, ...] = Field(default=(), max_length=6)
     consensus_method: Literal["none", "same_candidate", "two_of_three"] = "none"
@@ -173,6 +173,7 @@ class CandidateAdjudicator:
             evidence_hash=resolved_evidence_hash,
             provider=provider_name,
             model=model,
+            policy=self.policy,
             page_crop=page_crop,
         )
 
@@ -207,6 +208,7 @@ class CandidateAdjudicator:
                     provider=provider_name,
                     model=model,
                     allowlist=allowlist,
+                    policy=self.policy,
                 )
             ),
             None,
@@ -502,12 +504,16 @@ class CandidateAdjudicator:
                         request_hash=attempt_hash,
                         status="provider_rejected",
                         validation_codes=(error.code,),
+                        provider_retry_count=error.retry_count,
+                        provider_repair_count=error.repair_count,
                     )
                 )
                 return _VotePhaseResult(
                     choice=None,
                     attempts=tuple(attempts),
                     validation_codes=(error.code,),
+                    retry_count=error.retry_count,
+                    repair_count=error.repair_count,
                 )
 
             choice = CandidateChoice.model_validate(result.structured)
@@ -711,6 +717,7 @@ def _request_hash(
     evidence_hash: Sha256,
     provider: str,
     model: str,
+    policy: AdjudicationPolicy,
     page_crop: bytes | None,
 ) -> Sha256:
     return canonical_hash(
@@ -723,6 +730,7 @@ def _request_hash(
             "schema_hash": canonical_hash(candidate_choice_schema()),
             "provider": provider,
             "model": model,
+            "policy": policy.model_dump(mode="json"),
             "page_crop_hash": (
                 hashlib.sha256(page_crop).hexdigest() if page_crop is not None else None
             ),
@@ -756,6 +764,7 @@ def _trusted_decision_matches(
     provider: str,
     model: str,
     allowlist: set[CandidateId],
+    policy: AdjudicationPolicy,
 ) -> bool:
     if not (
         decision.request_hash == request_hash
@@ -770,7 +779,11 @@ def _trusted_decision_matches(
     ):
         return False
     if decision.recovery_status != "recovered":
-        return decision.consensus_method == "none" and decision.recovery_count == 0
+        return (
+            decision.consensus_method == "none"
+            and decision.recovery_count == 0
+            and _decision_identity_matches(decision)
+        )
     if not (
         decision.consensus_method in {"same_candidate", "two_of_three"}
         and decision.consensus_candidate_id == decision.selected_candidate_id
@@ -778,28 +791,87 @@ def _trusted_decision_matches(
         and decision.attempts
     ):
         return False
+    return _recovery_audit_matches(
+        decision,
+        allowlist=allowlist,
+        policy=policy,
+    ) and _decision_identity_matches(decision)
+
+
+def _recovery_audit_matches(
+    decision: DecisionRecord,
+    *,
+    allowlist: set[CandidateId],
+    policy: AdjudicationPolicy,
+) -> bool:
     indexes = tuple(item.attempt_index for item in decision.attempts)
     if indexes != tuple(range(1, len(indexes) + 1)):
         return False
-    recovery_phases = {
-        item.phase for item in decision.attempts if item.phase in {"recovery", "tiebreak"}
-    }
-    return len(recovery_phases) == decision.recovery_count
+    if len({item.request_hash for item in decision.attempts}) != len(decision.attempts):
+        return False
+    expected_phases = (
+        ("primary", "recovery")
+        if decision.consensus_method == "same_candidate"
+        else ("primary", "recovery", "tiebreak")
+    )
+    actual_phases = tuple(dict.fromkeys(item.phase for item in decision.attempts))
+    if actual_phases != expected_phases:
+        return False
+
+    votes: dict[str, AdjudicationAttempt] = {}
+    for phase in expected_phases:
+        phase_attempts = tuple(item for item in decision.attempts if item.phase == phase)
+        valid_votes = tuple(
+            item for item in phase_attempts if item.status in {"accepted", "low_confidence"}
+        )
+        if len(valid_votes) != 1 or phase_attempts[-1] != valid_votes[0]:
+            return False
+        if any(item.status != "candidate_unknown" for item in phase_attempts[:-1]):
+            return False
+        vote = valid_votes[0]
+        if vote.candidate_id not in allowlist:
+            return False
+        expected_status = (
+            "accepted" if vote.confidence >= policy.minimum_model_confidence else "low_confidence"
+        )
+        if vote.status != expected_status:
+            return False
+        votes[phase] = vote
+
+    primary = votes["primary"]
+    recovery = votes["recovery"]
+    if primary.status != "low_confidence" or recovery.status != "accepted":
+        return False
+    terminal = recovery
+    if decision.consensus_method == "same_candidate":
+        if primary.candidate_id != recovery.candidate_id or decision.recovery_count != 1:
+            return False
+    else:
+        tiebreak = votes["tiebreak"]
+        if (
+            primary.candidate_id == recovery.candidate_id
+            or tiebreak.status != "accepted"
+            or decision.recovery_count != 2
+        ):
+            return False
+        vote_counts = Counter((primary.candidate_id, recovery.candidate_id, tiebreak.candidate_id))
+        majority_id, majority_count = vote_counts.most_common(1)[0]
+        if majority_count < policy.consensus_votes_required or tiebreak.candidate_id != majority_id:
+            return False
+        terminal = tiebreak
+    return (
+        terminal.candidate_id == decision.consensus_candidate_id
+        and terminal.confidence == decision.confidence
+        and decision.validation_codes == ("LLM_LOW_CONFIDENCE_RECOVERED",)
+        and decision.retry_count == sum(item.provider_retry_count for item in decision.attempts)
+        and decision.repair_count == sum(item.provider_repair_count for item in decision.attempts)
+    )
 
 
 def _cached_record(trusted: DecisionRecord) -> DecisionRecord:
-    digest = canonical_hash(
-        {
-            "trusted_decision_id": trusted.decision_id,
-            "request_hash": trusted.request_hash,
-            "source": "cache",
-        }
-    )
-    return trusted.model_copy(
-        update={
-            "decision_id": f"decision_{digest[:16]}",
-            "source": "cache",
-        }
+    cached = trusted.model_copy(update={"source": "cache"})
+    return cached.model_copy(
+        update={"decision_id": _decision_id(cached)}
     )
 
 
@@ -844,21 +916,11 @@ def _record(
     consensus_candidate_id: CandidateId | None = None,
     recovery_count: int = 0,
 ) -> DecisionRecord:
-    digest = canonical_hash(
-        {
-            "request_hash": request_hash,
-            "selected_candidate_id": selected_candidate_id,
-            "outcome": outcome,
-            "source": source,
-            "validation_codes": validation_codes,
-            "attempt_request_hashes": [item.request_hash for item in attempts],
-            "recovery_status": recovery_status,
-            "consensus_method": consensus_method,
-            "consensus_candidate_id": consensus_candidate_id,
-        }
-    )
-    return DecisionRecord(
-        decision_id=f"decision_{digest[:16]}",
+    if attempts:
+        retry_count = sum(item.provider_retry_count for item in attempts)
+        repair_count = sum(item.provider_repair_count for item in attempts)
+    record = DecisionRecord(
+        decision_id="decision_0000000000000000",
         request_hash=request_hash,
         source_hash=candidate_set.source_hash,
         evidence_hash=evidence_hash,
@@ -880,6 +942,34 @@ def _record(
         consensus_candidate_id=consensus_candidate_id,
         recovery_count=recovery_count,
     )
+    return record.model_copy(update={"decision_id": _decision_id(record)})
+
+
+def _decision_identity_matches(decision: DecisionRecord) -> bool:
+    return decision.decision_id == _decision_id(decision)
+
+
+def _decision_id(decision: DecisionRecord) -> str:
+    digest = canonical_hash(
+        {
+            "request_hash": decision.request_hash,
+            "selected_candidate_id": decision.selected_candidate_id,
+            "outcome": decision.outcome,
+            "source": decision.source,
+            "validation_codes": decision.validation_codes,
+            "confidence": decision.confidence,
+            "provider": decision.provider,
+            "model": decision.model,
+            "retry_count": decision.retry_count,
+            "repair_count": decision.repair_count,
+            "attempts": [item.model_dump(mode="json") for item in decision.attempts],
+            "recovery_status": decision.recovery_status,
+            "consensus_method": decision.consensus_method,
+            "consensus_candidate_id": decision.consensus_candidate_id,
+            "recovery_count": decision.recovery_count,
+        }
+    )
+    return f"decision_{digest[:16]}"
 
 
 def _json(value: object) -> str:

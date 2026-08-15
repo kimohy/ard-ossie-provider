@@ -68,6 +68,10 @@ class ReplayCandidateProvider:
         "candidate_set_78620dc093a748fe": 0.70,
         "candidate_set_6d08c750276170e3": 0.74,
     }
+    APPROVED_CANDIDATES = {
+        "candidate_set_78620dc093a748fe": "candidate_e6954a2fd1fdfe6f",
+        "candidate_set_6d08c750276170e3": "candidate_2eefa1840c448a35",
+    }
 
     def __init__(self) -> None:
         self.calls = 0
@@ -98,22 +102,28 @@ class ReplayCandidateProvider:
         if phase in {"recovery", "tiebreak"}:
             self.recovery_calls += 1
         self.max_candidate_count = max(self.max_candidate_count, len(candidates))
-        selected = max(
-            candidates,
-            key=lambda candidate: (
-                candidate.get("score", 0.0),
-                len(candidate.get("features", {})),
-                float(
-                    re.match(
-                        r"^\d+(?:\.\d+)*[.)]\s",
-                        str(candidate.get("rendering", "")),
-                    )
-                    is not None
+        approved = self.APPROVED_CANDIDATES.get(candidate_set_id)
+        if approved is not None:
+            if approved not in {candidate["candidate_id"] for candidate in candidates}:
+                raise Issue3VerificationError("EVIDENCE_REPLAY_APPROVED_CANDIDATE_MISSING")
+            selected = approved
+        else:
+            selected = max(
+                candidates,
+                key=lambda candidate: (
+                    candidate.get("score", 0.0),
+                    len(candidate.get("features", {})),
+                    float(
+                        re.match(
+                            r"^\d+(?:\.\d+)*[.)]\s",
+                            str(candidate.get("rendering", "")),
+                        )
+                        is not None
+                    ),
+                    float("source_spacing" in candidate.get("features", {})),
+                    candidate["candidate_id"],
                 ),
-                float("source_spacing" in candidate.get("features", {})),
-                candidate["candidate_id"],
-            ),
-        )["candidate_id"]
+            )["candidate_id"]
         confidence = (
             self.LOW_CONFIDENCE_PRIMARY.get(candidate_set_id, 0.99) if phase == "primary" else 0.99
         )
@@ -277,6 +287,23 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "EVIDENCE_REPLAY_FORBIDDEN_STRING",
     )
     _require("<pre" not in result.markdown, "EVIDENCE_REPLAY_RAW_HTML")
+    candidate_sets = {item.candidate_set_id: item for item in result.candidate_sets}
+    decisions = {item.candidate_set_id: item for item in result.decisions.decisions}
+    for candidate_set_id, expected in golden["recovered_candidates"].items():
+        decision = decisions[candidate_set_id]
+        selected = next(
+            candidate
+            for candidate in candidate_sets[candidate_set_id].candidates
+            if candidate.candidate_id == decision.selected_candidate_id
+        )
+        _require(
+            decision.selected_candidate_id == expected["candidate_id"],
+            "EVIDENCE_REPLAY_RECOVERED_CANDIDATE",
+        )
+        _require(
+            selected.rendered_text == expected["rendering"],
+            "EVIDENCE_REPLAY_RECOVERED_RENDERING",
+        )
     _require(
         result.validation.canonical_hash == repeated.validation.canonical_hash,
         "EVIDENCE_REPLAY_NONDETERMINISTIC",

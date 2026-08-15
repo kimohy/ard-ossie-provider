@@ -40,6 +40,16 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
     assert sorted(item.attempts[0].confidence for item in recovered) == [0.70, 0.74]
     assert all(item.consensus_method == "same_candidate" for item in recovered)
     assert all(item.validation_codes == ("LLM_LOW_CONFIDENCE_RECOVERED",) for item in recovered)
+    candidate_sets = {item.candidate_set_id: item for item in result.candidate_sets}
+    for decision in recovered:
+        expected = golden["recovered_candidates"][decision.candidate_set_id]
+        selected = next(
+            candidate
+            for candidate in candidate_sets[decision.candidate_set_id].candidates
+            if candidate.candidate_id == decision.selected_candidate_id
+        )
+        assert decision.selected_candidate_id == expected["candidate_id"]
+        assert selected.rendered_text == expected["rendering"]
     assert result.validation.canonical_hash == repeated.validation.canonical_hash
     assert repeated_provider.calls == 0
     recovered_candidate_sets = {item.candidate_set_id for item in recovered}
