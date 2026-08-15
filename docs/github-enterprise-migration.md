@@ -128,7 +128,7 @@ gh auth setup-git --hostname "$GH_HOST"
 gh auth status --hostname "$GH_HOST"
 ```
 
-headless GHES 자동화에는 `GH_ENTERPRISE_TOKEN`을 사용합니다. 현재 프로젝트의 repository bootstrap adapter는 `GH_HOST`를 자식 `gh` 명령에 전달하므로 host 선택은 가능하지만, 대상 GHES 버전의 Environment·branch protection·Actions permission API가 동일한지 dry-run으로 검증해야 합니다. GHES REST endpoint는 `https://HOSTNAME/api/v3`이며 `gh api`가 host에 맞게 해석하도록 전체 `api.github.com` URL을 코드나 스크립트에 넣지 않습니다.
+headless GHES 자동화에는 `GH_ENTERPRISE_TOKEN`을 사용합니다. 현재 프로젝트의 repository bootstrap adapter는 `GH_HOST`를 자식 `gh` 명령에 전달하지만 private 저장소를 거부하므로 Enterprise 검증에 사용하지 않습니다. 대상 GHES의 Environment·branch protection·Actions permission API는 8장의 mutation 없는 `gh api` read로 검증합니다. GHES REST endpoint는 `https://HOSTNAME/api/v3`이며 `gh api`가 host에 맞게 해석하도록 전체 `api.github.com` URL을 코드나 스크립트에 넣지 않습니다.
 
 ## 5. GHES Actions 기반 준비
 
@@ -286,7 +286,7 @@ GHES는 최소 runner만 맞춘다고 Action이 모두 동작하는 것이 아�
 
 버전 업그레이드 전후에 다음 smoke matrix를 다시 실행합니다.
 
-- repository bootstrap dry-run
+- private repository, Actions permission, Environment, branch protection의 `gh api` read-back
 - checkout + LFS pull
 - artifact upload/download round trip
 - Python 3.12 + uv locked install
