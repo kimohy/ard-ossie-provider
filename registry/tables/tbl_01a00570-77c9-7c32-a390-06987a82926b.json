@@ -1,0 +1,70 @@
+{
+  "aliases": [],
+  "canonical_hash": "46a1b765b5f6f82dc4b6bde8beda170b3048422fe75369fa98553a1c7937c63e",
+  "columns": [
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-706d-b468-5da5be66769c",
+      "name": "event_date",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-7366-9094-157b68bead60",
+      "name": "campaign_id",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-78d8-bc26-bf640c65c787",
+      "name": "creative_id",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-7457-be20-82997891731b",
+      "name": "audience_cluster",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-7479-8cb5-ee85699a334e",
+      "name": "impression_count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-705d-aee5-fd1c43a5466b",
+      "name": "engagement_count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-7692-a9d7-959c2990640b",
+      "name": "spend_units",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-7246-b34e-336b40937df6",
+      "name": "delivery_status",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a00570-77c9-7640-8104-07144665444b",
+      "name": "loaded_at",
+      "status": "active"
+    }
+  ],
+  "locator": {
+    "catalog": "synthetic_workspace",
+    "schema_name": "marketing_insight",
+    "source_system_id": "unspecified",
+    "table_name": "marketing_delivery"
+  },
+  "schema_hash": "714724fe6f0a79f7cdc6f6ad57f9b6bbd1eebbf771faa1d6547294790ce45118",
+  "status": "active",
+  "table_id": "tbl_01a00570-77c9-7c32-a390-06987a82926b",
+  "version": 1
+}
