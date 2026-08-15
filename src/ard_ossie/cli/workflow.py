@@ -51,6 +51,7 @@ from ard_ossie.application.source_check import (
 )
 from ard_ossie.cli.execution import result_writer
 from ard_ossie.llm.contracts import ProviderExecutionError
+from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -186,6 +187,14 @@ def source_check(
     expected_head: Annotated[str, typer.Option("--expected-head")],
     repository: Annotated[Path, typer.Option("--repository")] = Path("."),
     require_llm: Annotated[bool, typer.Option("--require-llm")] = False,
+    diagnostics_dir: Annotated[Path | None, typer.Option("--diagnostics-dir")] = None,
+    semantic_pipeline_mode: Annotated[
+        SemanticPipelineMode,
+        typer.Option(
+            "--semantic-pipeline-mode",
+            envvar="ARD_SEMANTIC_PDF_PIPELINE",
+        ),
+    ] = SemanticPipelineMode.SHADOW,
 ) -> None:
     command = "workflow.source-check"
     paths = _repository_paths(repository)
@@ -195,6 +204,8 @@ def source_check(
         lambda: _source_check_service(paths, require_llm=require_llm).run(
             product_key,
             expected_head,
+            diagnostics_dir=diagnostics_dir,
+            semantic_pipeline_mode=semantic_pipeline_mode,
         ),
         expose_failure_details=True,
     )
@@ -238,6 +249,13 @@ def process_workflow(
     warnings_as_errors: Annotated[bool, typer.Option("--warnings-as-errors")] = False,
     target_url: Annotated[str, typer.Option("--target-url")] = "",
     repository: Annotated[Path, typer.Option("--repository")] = Path("."),
+    semantic_pipeline_mode: Annotated[
+        SemanticPipelineMode,
+        typer.Option(
+            "--semantic-pipeline-mode",
+            envvar="ARD_SEMANTIC_PDF_PIPELINE",
+        ),
+    ] = SemanticPipelineMode.SHADOW,
 ) -> None:
     command = "workflow.process"
     paths = _repository_paths(repository)
@@ -253,6 +271,7 @@ def process_workflow(
             allow_writeback=allow_writeback,
             warnings_as_errors=warnings_as_errors,
             target_url=target_url,
+            semantic_pipeline_mode=semantic_pipeline_mode,
         )
         return _processing_service(repository_name, paths).run(request)
 

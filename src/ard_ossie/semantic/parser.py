@@ -34,6 +34,12 @@ from ard_ossie.semantic.models import (
     TableCellBlock,
     TableFidelityResult,
 )
+from ard_ossie.semantic.pipeline_v2 import (
+    SemanticPipelineMode,
+    SemanticPipelineResult,
+    canonical_fidelity_report,
+    parse_semantic_pdf_v2,
+)
 from ard_ossie.semantic.render import (
     CoverageResult,
     render_semantic_markdown,
@@ -65,6 +71,7 @@ class SemanticParseResult:
     evidence: tuple[Evidence, ...]
     fidelity: SemanticFidelityReport
     repair_record: SemanticStructureRepairRecord | None
+    pipeline_result: SemanticPipelineResult | None = None
 
 
 def parse_semantic_document(
@@ -77,14 +84,41 @@ def parse_semantic_document(
     correction_planner: OcrCorrectionPlanner | None = None,
     trusted_fidelity: SemanticFidelityReport | None = None,
     pdfium: Any | None = None,
+    semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
+    candidate_provider: Any | None = None,
+    trusted_candidate_decisions: tuple[Any, ...] = (),
 ) -> SemanticParseResult:
     """Parse a PDF or DOCX without allowing structural hints to author text."""
+    mode = SemanticPipelineMode(semantic_pipeline_mode)
     native, skeleton = _native_and_structure(
         source,
         converter=converter,
         full_page_ocr_converter=full_page_ocr_converter,
         pdfium=pdfium,
     )
+    is_pdf = source.path.suffix.casefold() == ".pdf"
+    if is_pdf and mode is SemanticPipelineMode.CANDIDATE:
+        pipeline_result = parse_semantic_pdf_v2(
+            source,
+            hints=skeleton,
+            mode=mode,
+            provider=candidate_provider,
+            trusted_decisions=trusted_candidate_decisions,
+            pdfium=pdfium,
+        )
+        fidelity = canonical_fidelity_report(
+            pipeline_result.evidence,
+            pipeline_result.canonical,
+            pipeline_result.validation,
+        )
+        return SemanticParseResult(
+            markdown=pipeline_result.markdown,
+            has_content=any(block.text.strip() for block in pipeline_result.canonical.blocks),
+            evidence=tuple(_candidate_evidence(source, pipeline_result)),
+            fidelity=fidelity,
+            repair_record=None,
+            pipeline_result=pipeline_result,
+        )
     correction_audits: tuple[OcrCorrectionPageAudit, ...] = ()
     correction_warnings: tuple[str, ...] = ()
     if native.extraction_mode in {ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR}:
@@ -122,13 +156,50 @@ def parse_semantic_document(
     has_content = any(
         not span.text.isspace() for span in native.spans if span.span_id not in excluded_ids
     )
+    pipeline_result: SemanticPipelineResult | None = None
+    if is_pdf and mode is SemanticPipelineMode.SHADOW:
+        try:
+            pipeline_result = parse_semantic_pdf_v2(
+                source,
+                hints=skeleton,
+                mode=mode,
+                legacy_markdown=markdown,
+                provider=candidate_provider,
+                trusted_decisions=trusted_candidate_decisions,
+                pdfium=pdfium,
+            )
+        except (SemanticSourceError, ValueError):
+            pipeline_result = None
     return SemanticParseResult(
         markdown=markdown,
         has_content=has_content,
         evidence=tuple(_semantic_evidence(source, native, completed)),
         fidelity=fidelity,
         repair_record=repair_record,
+        pipeline_result=pipeline_result,
     )
+
+
+def _candidate_evidence(
+    source: SourceFile,
+    result: SemanticPipelineResult,
+) -> Iterable[Evidence]:
+    from ard_ossie.docling_parser import Evidence
+
+    for block in result.canonical.blocks:
+        if not block.atom_ids:
+            continue
+        yield Evidence(
+            source_hash=source.sha256,
+            role=source.role,
+            locator={
+                "document": source.relative_path,
+                "region_id": block.region_id,
+                "page": block.page,
+                "order": block.order,
+            },
+            excerpt=block.text[:500],
+        )
 
 
 def _native_and_structure(

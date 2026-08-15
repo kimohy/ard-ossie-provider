@@ -8,6 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from ard_ossie.ingestion import SourceFile, SourceRole
+from ard_ossie.semantic.evidence_sources import (
+    extract_pdf_evidence,
+    resolve_evidence_authority,
+)
 from ard_ossie.semantic.models import ExtractionMode, make_span_id
 from ard_ossie.semantic.sources import SemanticSourceError, extract_ocr_native, extract_pdf_native
 
@@ -219,6 +223,46 @@ def test_pdf_source_groups_production_shaped_text_object_handles(tmp_path: Path)
 
     assert native is not None
     assert [span.text for span in native.spans] == ["abcd", "ef"]
+
+
+def test_pdf_evidence_uses_character_boxes_without_making_objects_semantic(
+    tmp_path: Path,
+) -> None:
+    pdfium = FakePdfium(["abcdef"])
+
+    selected = resolve_evidence_authority(
+        extract_pdf_evidence(semantic_pdf_source(tmp_path), pdfium=pdfium)
+    )
+
+    assert [atom.text for atom in selected.atoms] == list("abcdef")
+    assert [atom.source_object for atom in selected.atoms] == [0, 0, 0, 0, 1, 1]
+    assert len(selected.regions) == 1
+    assert selected.atoms[0].bbox is not None
+    assert selected.atoms[0].bbox.model_dump() == {
+        "left": 0.0,
+        "bottom": 0.05,
+        "right": 0.01,
+        "top": 0.1,
+    }
+    assert_pdf_handles_closed(pdfium)
+
+
+def test_pdf_evidence_maps_crlf_to_one_line_break_with_original_indices(
+    tmp_path: Path,
+) -> None:
+    pdfium = FakePdfium(["가\r\n나"])
+
+    selected = resolve_evidence_authority(
+        extract_pdf_evidence(semantic_pdf_source(tmp_path), pdfium=pdfium)
+    )
+
+    assert [(atom.text, atom.kind) for atom in selected.atoms] == [
+        ("가", "character"),
+        ("\n", "line_break"),
+        ("나", "character"),
+    ]
+    assert [atom.source_index for atom in selected.atoms] == [0, 1, 3]
+    assert_pdf_handles_closed(pdfium)
 
 
 @pytest.mark.parametrize(

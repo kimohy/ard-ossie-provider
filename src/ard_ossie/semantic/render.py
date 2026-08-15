@@ -243,3 +243,76 @@ def _escape_table_value(value: str) -> str:
 
 def _validate_render_table_limits(block: TableBlock) -> None:
     _validate_grid(block.cells, block.row_count, block.column_count, "TABLE_BLOCK")
+
+
+def render_canonical_markdown(document: object) -> str:
+    """Render only already-validated canonical semantics, without reinterpreting layout."""
+    from ard_ossie.semantic.canonical import CanonicalSemanticDocument
+
+    if not isinstance(document, CanonicalSemanticDocument):
+        raise TypeError("CANONICAL_DOCUMENT_REQUIRED")
+    chunks: list[str] = []
+    list_lines: list[str] = []
+
+    def flush_list() -> None:
+        if list_lines:
+            chunks.append("\n".join(list_lines))
+            list_lines.clear()
+
+    for block in sorted(document.blocks, key=lambda item: item.order):
+        if block.kind == "list_item":
+            depth = block.list_depth or 1
+            marker = "1." if block.list_kind == "ordered" else "-"
+            list_lines.append(
+                f"{'    ' * (depth - 1)}{marker} {_escape_inline(block.text)}"
+            )
+            continue
+        flush_list()
+        if block.kind == "heading":
+            chunks.append(f"{'#' * (block.heading_level or 1)} {_escape_inline(block.text)}")
+        elif block.kind == "table":
+            chunks.append(_render_canonical_table(block))
+        else:
+            chunks.append(_escape_inline(block.text))
+    flush_list()
+    for figure in document.figures:
+        if figure.caption:
+            chunks.append(_escape_inline(figure.caption))
+    rendered = "\n\n".join(chunk.rstrip("\n") for chunk in chunks if chunk) + (
+        "\n" if chunks else ""
+    )
+    if has_raw_html(rendered):
+        raise SemanticRawHtmlError
+    if _HTML_ENTITY.search(rendered) is not None:
+        raise SemanticRawHtmlError("SEMANTIC_HTML_ENTITY_OUTPUT")
+    return rendered
+
+
+def _render_canonical_table(block: object) -> str:
+    row_count = block.row_count
+    column_count = block.column_count
+    if row_count is None or column_count is None:
+        raise ValueError("CANONICAL_TABLE_DIMENSIONS_MISSING")
+    matrix = [["" for _ in range(column_count)] for _ in range(row_count)]
+    header_rows: set[int] = set()
+    for cell in block.cells:
+        value = _escape_table_value(cell.text)
+        for row in range(cell.start_row, cell.end_row):
+            for column in range(cell.start_column, cell.end_column):
+                matrix[row][column] = value
+        if cell.column_header:
+            header_rows.add(cell.start_row)
+    header_row = min(header_rows) if header_rows else None
+    header = matrix[header_row] if header_row is not None else ["" for _ in range(column_count)]
+    data_rows = [
+        row
+        for index, row in enumerate(matrix)
+        if header_row is None or index != header_row
+    ]
+    return "\n".join(
+        [
+            _table_line(header),
+            _table_line(["---" for _ in range(column_count)]),
+            *(_table_line(row) for row in data_rows),
+        ]
+    )

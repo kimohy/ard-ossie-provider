@@ -148,6 +148,30 @@ def replace_quality_sibling(product_root: Path, name: str, value: object) -> Non
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
 
+def add_candidate_diagnostics(product_root: Path, *, status: str) -> None:
+    validation = {
+        "status": status,
+        "publishable": status == "verified",
+        "source_hash": "a" * 64,
+        "canonical_hash": "b" * 64,
+        "findings": [],
+        "character_coverage": 1.0,
+        "missing_atom_count": 0,
+        "duplicate_atom_count": 0,
+        "degraded_block_count": 0,
+        "model_call_count": 0,
+    }
+    for name in (
+        "manifest.json",
+        "evidence-summary.json",
+        "candidate-report.json",
+        "decision-report.json",
+        "failure-report.json",
+    ):
+        replace_quality_sibling(product_root, name, {"name": name})
+    replace_quality_sibling(product_root, "validation-report.json", validation)
+
+
 def test_release_tags_use_immutable_ids_and_numeric_versions() -> None:
     plan = build_release_plan(product(), [table()])
 
@@ -172,6 +196,14 @@ def test_quality_hard_errors_block_release() -> None:
             [table()],
             quality_report={"status": "FAIL", "hard_errors": [{"code": "BAD"}]},
         )
+
+
+def test_candidate_release_requires_verified_semantic_validation(tmp_path: Path) -> None:
+    product_root = release_product_root(tmp_path)
+    add_candidate_diagnostics(product_root, status="review_required")
+
+    with pytest.raises(ReleaseBlocked, match="SEMANTIC_VALIDATION_NOT_VERIFIED"):
+        build_release_bundle(product_root, tmp_path / "candidate.zip")
 
 
 def test_existing_tag_must_point_to_merged_commit() -> None:

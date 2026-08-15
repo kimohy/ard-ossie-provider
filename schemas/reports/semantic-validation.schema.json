@@ -1,0 +1,114 @@
+{
+  "$defs": {
+    "SemanticPipelineStatus": {
+      "enum": [
+        "verified",
+        "review_required",
+        "failed"
+      ],
+      "title": "SemanticPipelineStatus",
+      "type": "string"
+    },
+    "ValidationFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "region_id": {
+          "anyOf": [
+            {
+              "pattern": "^region_[0-9a-f]{16}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region Id"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ValidationFinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "$ref": "#/$defs/SemanticPipelineStatus"
+    },
+    "publishable": {
+      "title": "Publishable",
+      "type": "boolean"
+    },
+    "source_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Hash",
+      "type": "string"
+    },
+    "canonical_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Canonical Hash",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/ValidationFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "character_coverage": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Character Coverage",
+      "type": "number"
+    },
+    "missing_atom_count": {
+      "minimum": 0,
+      "title": "Missing Atom Count",
+      "type": "integer"
+    },
+    "duplicate_atom_count": {
+      "minimum": 0,
+      "title": "Duplicate Atom Count",
+      "type": "integer"
+    },
+    "degraded_block_count": {
+      "minimum": 0,
+      "title": "Degraded Block Count",
+      "type": "integer"
+    },
+    "model_call_count": {
+      "minimum": 0,
+      "title": "Model Call Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "status",
+    "publishable",
+    "source_hash",
+    "canonical_hash",
+    "findings",
+    "character_coverage",
+    "missing_atom_count",
+    "duplicate_atom_count",
+    "degraded_block_count",
+    "model_call_count"
+  ],
+  "title": "SemanticValidationReport",
+  "type": "object"
+}

@@ -25,6 +25,7 @@ from ard_ossie.llm.contracts import (
 from ard_ossie.ports.filesystem import FileSystemPort
 from ard_ossie.ports.git import GitPort
 from ard_ossie.ports.github import GitHubPort, PullRequestState
+from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 
 _PRODUCT_KEY = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _CHANGESET_MARKER = re.compile(
@@ -131,7 +132,14 @@ class SourceCheckService:
         self.paths = paths
         self.provider = provider
 
-    def run(self, product_key: str, expected_head: str) -> WorkflowResult:
+    def run(
+        self,
+        product_key: str,
+        expected_head: str,
+        *,
+        diagnostics_dir: str | Path | None = None,
+        semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
+    ) -> WorkflowResult:
         _validate_product_key(product_key)
         _validate_sha(expected_head)
         product = self.paths.resolve_read(Path("products") / product_key)
@@ -146,6 +154,8 @@ class SourceCheckService:
                 "registry",
                 provider=self.provider,
                 propagate_provider_errors=True,
+                diagnostics_dir=diagnostics_dir,
+                semantic_pipeline_mode=semantic_pipeline_mode,
             )
         except ProviderExecutionError as error:
             if error.kind is ProviderFailureKind.CONFIGURATION:
