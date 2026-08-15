@@ -25,6 +25,8 @@ from ard_ossie.semantic.adjudication import (
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
     CandidateSet,
+    TableCandidate,
+    TableCellCandidate,
     make_candidate_id,
     make_candidate_set_id,
     make_spacing_candidate,
@@ -153,6 +155,38 @@ def _identifier_spacing_set() -> CandidateSet:
     )
 
 
+def _table_scoped_spacing_set() -> CandidateSet:
+    region_id = "region_0000000000000001"
+    atom_ids = tuple(f"atom_{index:016x}" for index in range(1, 5))
+    candidates = tuple(
+        make_spacing_candidate(
+            region_id=region_id,
+            rendered_text=rendered_text,
+            character_sequence="AB가나",
+            atom_ids=atom_ids,
+            source_whitespace=((), (), ()),
+            score=score,
+            features={feature: score},
+            mutable_boundary_indexes=(2,),
+        )
+        for rendered_text, score, feature in (
+            ("AB\n가 나", 0.70, "source_spacing"),
+            ("AB\n가나", 0.65, "table_cell_repair"),
+        )
+    )
+    return CandidateSet(
+        candidate_set_id=make_candidate_set_id(
+            SOURCE_HASH,
+            region_id,
+            tuple(candidate.candidate_id for candidate in candidates),
+        ),
+        source_hash=SOURCE_HASH,
+        region_id=region_id,
+        decision_type="spacing",
+        candidates=candidates,
+    )
+
+
 def _block_set(*scores: float) -> CandidateSet:
     region_id = "region_0000000000000001"
     atom_ids = ("atom_0000000000000001",)
@@ -242,6 +276,59 @@ def test_clear_score_margin_selects_without_provider_call() -> None:
     assert decision.outcome == "selected"
     assert decision.selected_candidate_id == candidate_set.candidates[0].candidate_id
     assert provider.calls == []
+
+
+def test_table_structure_proof_does_not_require_spacing_integrity() -> None:
+    region_id = "region_0000000000000001"
+    atom_ids = ("atom_0000000000000001",)
+    cell = TableCellCandidate(
+        cell_id="cell_0000000000000001",
+        start_row=0,
+        end_row=1,
+        start_column=0,
+        end_column=1,
+        atom_ids=atom_ids,
+        rendered_text="참 조",
+    )
+    proven = TableCandidate(
+        candidate_id=make_candidate_id("table", region_id, "proven-unresolved-spacing"),
+        region_id=region_id,
+        row_count=1,
+        column_count=1,
+        cells=(cell,),
+        atom_ids=atom_ids,
+        score=0.70,
+        features={
+            "atom_bbox_cell_agreement": 1.0,
+            "cell_character_multiset": 1.0,
+            "structure_hint_text": 1.0,
+            "cell_spacing_integrity": 0.0,
+        },
+    )
+    alternate = proven.model_copy(
+        update={
+            "candidate_id": make_candidate_id("table", region_id, "unproven"),
+            "score": 0.69,
+            "features": {"geometry_grid": 0.69},
+        }
+    )
+    candidate_set = CandidateSet(
+        candidate_set_id=make_candidate_set_id(
+            SOURCE_HASH,
+            region_id,
+            (proven.candidate_id, alternate.candidate_id),
+        ),
+        source_hash=SOURCE_HASH,
+        region_id=region_id,
+        decision_type="table",
+        candidates=(proven, alternate),
+    )
+
+    decision = CandidateAdjudicator(RecordingProvider()).decide(candidate_set)
+
+    assert decision.source == "deterministic"
+    assert decision.outcome == "selected"
+    assert decision.selected_candidate_id == proven.candidate_id
 
 
 def test_ambiguous_request_contains_bounded_candidate_text_but_no_raw_catalog() -> None:
@@ -608,6 +695,36 @@ def test_high_confidence_identifier_defect_is_replaced_by_verified_generation() 
     fresh = CandidateAdjudicator(miss_provider, trusted=(forged,)).decide(candidate_set)
     assert fresh.source == "generated"
     assert len(miss_provider.calls) == 3
+
+
+def test_generated_snapshot_preserves_table_mutation_scope_for_cache_replay() -> None:
+    candidate_set = _table_scoped_spacing_set()
+    anchor, repaired = candidate_set.candidates
+    provider = RecordingProvider(
+        [
+            {"candidate_id": anchor.candidate_id, "confidence": 0.70},
+            {
+                "rendered_text": repaired.rendered_text,
+                "confidence": 0.92,
+                "repair_reasons": ["korean_morphology", "table_cell_boundary"],
+            },
+            {
+                "candidate_id": repaired.candidate_id,
+                "confidence": 0.91,
+                "validation_codes": [],
+            },
+        ]
+    )
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    persisted = diagnostic_decision_record(decision)
+    reused = CandidateAdjudicator(RecordingProvider(), trusted=(persisted,)).decide(
+        candidate_set
+    )
+
+    assert reused.source == "cache"
+    assert reused.generated_candidate is not None
+    assert reused.generated_candidate.mutable_boundary_indexes == (2,)
 
 
 def test_low_confidence_spacing_repair_falls_back_with_deferred_review() -> None:

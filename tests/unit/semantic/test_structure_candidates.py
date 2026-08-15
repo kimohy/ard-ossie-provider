@@ -492,7 +492,7 @@ def test_invariant_table_assigns_whitespace_to_its_overlapping_cell() -> None:
     assert whitespace_id not in proven.cells[2].atom_ids
 
 
-def test_fragmented_hangul_spacing_is_not_treated_as_fully_proven() -> None:
+def test_fragmented_hangul_spacing_does_not_block_table_structure_proof() -> None:
     evidence, layout, hints = _spanning_table_fixture()
     table = hints.blocks[0].table
     assert table is not None
@@ -504,8 +504,8 @@ def test_fragmented_hangul_spacing_is_not_treated_as_fully_proven() -> None:
     candidate_set = build_table_candidate_set(layout.regions[0], evidence, layout, hints)
     decision = CandidateAdjudicator(None).decide(candidate_set)
 
-    assert decision.outcome == "deferred_review"
-    assert decision.source == "fallback"
+    assert decision.outcome == "selected"
+    assert decision.source == "deterministic"
     assert decision.selected_candidate_id is not None
 
 

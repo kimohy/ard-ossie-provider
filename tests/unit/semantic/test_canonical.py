@@ -391,6 +391,7 @@ def test_selected_spacing_is_projected_into_table_cell_text() -> None:
         end_column=1,
         atom_ids=region.atom_ids,
         column_header=True,
+        rendered_text="데 이 터",
     )
     table = TableCandidate(
         candidate_id=make_candidate_id("table", REGION_A, "single-cell"),

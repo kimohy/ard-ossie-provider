@@ -40,6 +40,7 @@ class SpacingCandidate(ImmutableStrictModel):
     character_sequence: str = Field(min_length=1)
     atom_ids: tuple[AtomId, ...] = Field(min_length=1)
     boundaries: tuple[SpacingBoundary, ...]
+    mutable_boundary_indexes: tuple[int, ...] | None = None
     score: float = Field(ge=0, le=1)
     features: dict[str, float]
 
@@ -63,6 +64,14 @@ class SpacingCandidate(ImmutableStrictModel):
             raise ValueError("CANDIDATE_BOUNDARY_SEQUENCE_INVALID")
         if _render_boundaries(self.character_sequence, self.boundaries) != self.rendered_text:
             raise ValueError("CANDIDATE_BOUNDARY_RENDER_INVALID")
+        if self.mutable_boundary_indexes is not None:
+            indexes = self.mutable_boundary_indexes
+            if tuple(sorted(set(indexes))) != indexes or any(
+                index < 0 or index >= len(self.boundaries) for index in indexes
+            ):
+                raise ValueError("CANDIDATE_MUTABLE_BOUNDARIES_INVALID")
+            if any(self.boundaries[index].state == "hard_break" for index in indexes):
+                raise ValueError("CANDIDATE_MUTABLE_HARD_BOUNDARY")
         return self
 
 
@@ -207,7 +216,6 @@ INVARIANT_PROVEN_TABLE_FEATURES = (
     "atom_bbox_cell_agreement",
     "cell_character_multiset",
     "structure_hint_text",
-    "cell_spacing_integrity",
 )
 
 
@@ -296,21 +304,21 @@ def make_spacing_candidate(
     source_whitespace: tuple[tuple[AtomId, ...], ...],
     score: float,
     features: dict[str, float],
+    mutable_boundary_indexes: tuple[int, ...] | None = None,
 ) -> SpacingCandidate:
     boundaries = _boundaries_from_rendered(
         rendered_text,
         atom_ids,
         source_whitespace,
     )
-    candidate_id = make_candidate_id(
-        "spacing",
-        region_id,
-        {
-            "rendered_text": rendered_text,
-            "atom_ids": atom_ids,
-            "boundaries": boundaries,
-        },
-    )
+    identity: dict[str, object] = {
+        "rendered_text": rendered_text,
+        "atom_ids": atom_ids,
+        "boundaries": boundaries,
+    }
+    if mutable_boundary_indexes is not None:
+        identity["mutable_boundary_indexes"] = mutable_boundary_indexes
+    candidate_id = make_candidate_id("spacing", region_id, identity)
     return SpacingCandidate(
         candidate_id=candidate_id,
         region_id=region_id,
@@ -318,6 +326,7 @@ def make_spacing_candidate(
         character_sequence=character_sequence,
         atom_ids=atom_ids,
         boundaries=boundaries,
+        mutable_boundary_indexes=mutable_boundary_indexes,
         score=score,
         features=features,
     )

@@ -31,6 +31,9 @@ whether the selected rendering is correct, not whether its characters are conser
 
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+")
 _IDENTIFIER_WHITESPACE = re.compile(r"(?:\s_|_\s)")
+_QUALIFIED_IDENTIFIER = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+"
+)
 _PROTECTED_TOKEN_PATTERNS = (
     re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+"),
     re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}"),
@@ -110,19 +113,22 @@ def spacing_verification_schema(candidate_ids: tuple[CandidateId, ...]) -> dict[
 
 def spacing_defect_codes(candidate: SpacingCandidate) -> tuple[ValidationCode, ...]:
     codes: list[str] = []
+    lines = candidate.rendered_text.splitlines() or [candidate.rendered_text]
     if any(
         character.isspace() and character not in {" ", "\n"}
         for character in candidate.rendered_text
     ):
         codes.append("CONTROL_WHITESPACE_SEPARATOR")
-    identifier_split = _IDENTIFIER_WHITESPACE.search(candidate.rendered_text) is not None
+    identifier_split = any(_IDENTIFIER_WHITESPACE.search(line) is not None for line in lines)
     if identifier_split:
         codes.append("IDENTIFIER_WHITESPACE_SPLIT")
-    elif _has_protected_token_split(candidate.rendered_text):
+    elif _has_qualified_identifier_split(candidate.rendered_text):
+        codes.append("QUALIFIED_IDENTIFIER_WHITESPACE_SPLIT")
+    elif any(_has_protected_token_split(line) for line in lines):
         codes.append("PROTECTED_TOKEN_WHITESPACE_SPLIT")
-    if _SPACE_BEFORE_PUNCTUATION.search(candidate.rendered_text):
+    if any(_SPACE_BEFORE_PUNCTUATION.search(line) is not None for line in lines):
         codes.append("PUNCTUATION_WHITESPACE_BEFORE")
-    if _SPACE_AFTER_OPEN.search(candidate.rendered_text):
+    if any(_SPACE_AFTER_OPEN.search(line) is not None for line in lines):
         codes.append("PUNCTUATION_WHITESPACE_AFTER_OPEN")
     return tuple(codes)
 
@@ -153,9 +159,21 @@ def build_generated_candidate(
         ),
         score=max(0.0, min(1.0, confidence)),
         features={"llm_generated_spacing": max(0.0, min(1.0, confidence))},
+        mutable_boundary_indexes=anchor.mutable_boundary_indexes,
     )
     if _hard_break_pairs(generated) != _hard_break_pairs(anchor):
         raise ValueError("SPACING_REPAIR_HARD_LINE_BOUNDARY_MISMATCH")
+    mutable = (
+        set(range(len(anchor.boundaries)))
+        if anchor.mutable_boundary_indexes is None
+        else set(anchor.mutable_boundary_indexes)
+    )
+    if any(
+        generated.boundaries[index].state != boundary.state
+        for index, boundary in enumerate(anchor.boundaries)
+        if index not in mutable
+    ):
+        raise ValueError("SPACING_REPAIR_IMMUTABLE_BOUNDARY_MISMATCH")
     return generated
 
 
@@ -221,6 +239,7 @@ def _generation_request(
         "hard_line_boundary_indexes": [
             index for index, state in enumerate(anchor_states) if state == "hard_break"
         ],
+        "mutable_boundary_indexes": anchor.mutable_boundary_indexes,
         "anchor_candidate_id": anchor.candidate_id,
         "candidates": [
             {
@@ -261,6 +280,7 @@ def _verification_request(
         "region_id": candidate_set.region_id,
         "exact_character_sequence": generated.character_sequence,
         "protected_identifiers": _protected_tokens(generated.rendered_text),
+        "mutable_boundary_indexes": generated.mutable_boundary_indexes,
         "generated_candidate_id": generated.candidate_id,
         "candidates": [
             {
@@ -287,6 +307,11 @@ def _validate_scope(
         raise ValueError("SPACING_REPAIR_SCOPE_MISMATCH")
     if any(candidate.character_sequence != anchor.character_sequence for candidate in candidates):
         raise ValueError("SPACING_REPAIR_CHARACTER_MISMATCH")
+    if any(
+        candidate.mutable_boundary_indexes != anchor.mutable_boundary_indexes
+        for candidate in candidates
+    ):
+        raise ValueError("SPACING_REPAIR_MUTABLE_SCOPE_MISMATCH")
 
 
 def _hard_break_pairs(candidate: SpacingCandidate) -> tuple[tuple[str, str], ...]:
@@ -306,6 +331,17 @@ def _protected_tokens(rendered_text: str) -> list[str]:
         set(_protected_token_occurrences(rendered_text)),
         key=lambda token: (-len(token), token),
     )
+
+
+def _has_qualified_identifier_split(rendered_text: str) -> bool:
+    for line in rendered_text.splitlines():
+        stripped = line.strip()
+        if not any(character.isspace() for character in stripped):
+            continue
+        dense = _without_whitespace(stripped)
+        if _QUALIFIED_IDENTIFIER.fullmatch(dense) is not None:
+            return True
+    return False
 
 
 def _protected_token_occurrences(rendered_text: str) -> list[str]:
