@@ -64,8 +64,14 @@ class _ProviderMustNotRun:
 
 
 class ReplayCandidateProvider:
+    LOW_CONFIDENCE_PRIMARY = {
+        "candidate_set_78620dc093a748fe": 0.70,
+        "candidate_set_6d08c750276170e3": 0.74,
+    }
+
     def __init__(self) -> None:
         self.calls = 0
+        self.recovery_calls = 0
         self.max_candidate_count = 0
 
     def capabilities(self) -> dict[str, object]:
@@ -84,9 +90,13 @@ class ReplayCandidateProvider:
         del schema
         request = json.loads(messages[-1]["content"])
         candidates = request["candidates"]
+        phase = request["phase"]
+        candidate_set_id = request["candidate_set_id"]
         if not isinstance(candidates, list) or not candidates:
             raise Issue3VerificationError("EVIDENCE_REPLAY_CANDIDATES_EMPTY")
         self.calls += 1
+        if phase in {"recovery", "tiebreak"}:
+            self.recovery_calls += 1
         self.max_candidate_count = max(self.max_candidate_count, len(candidates))
         selected = max(
             candidates,
@@ -104,7 +114,10 @@ class ReplayCandidateProvider:
                 candidate["candidate_id"],
             ),
         )["candidate_id"]
-        structured = {"candidate_id": selected, "confidence": 0.99}
+        confidence = (
+            self.LOW_CONFIDENCE_PRIMARY.get(candidate_set_id, 0.99) if phase == "primary" else 0.99
+        )
+        structured = {"candidate_id": selected, "confidence": confidence}
         return LLMResult(
             text=json.dumps(structured, sort_keys=True),
             structured=structured,
@@ -275,6 +288,10 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "heading_count": len(headings),
         "table_count": len(tables),
         "model_calls": provider.calls,
+        "recovered_decision_count": sum(
+            decision.recovery_status == "recovered" for decision in result.decisions.decisions
+        ),
+        "recovery_model_calls": provider.recovery_calls,
         "cache_model_calls": repeated_provider.calls,
         "max_candidate_count": provider.max_candidate_count,
     }

@@ -34,7 +34,7 @@ gh variable set ARD_SEMANTIC_PDF_PIPELINE --body candidate
 
 Keep both the validation and processing artifacts for the failed and rollback runs. The semantic
 diagnostic bundle must contain its manifest, evidence summary, candidate report, decision report,
-validation report, and failure report. Record:
+application report, validation report, and failure report. Record:
 
 - workflow run URL, source hash, configuration hash, candidate canonical hash, and parser versions;
 - extraction mode, page/atom/region/table counts, validation status, and invariant codes;
@@ -44,6 +44,34 @@ validation report, and failure report. Record:
 
 Open a defect referencing those artifacts. Never paste credentials, page images, or unmasked source
 text into the issue.
+
+## Low-confidence recovery audit
+
+Candidate mode keeps the `0.80` minimum model-confidence threshold. A primary vote below that
+threshold can receive at most one recovery vote and, only when valid votes disagree, one independent
+tie-break vote. Interpret the terminal decision codes as follows:
+
+- `LLM_LOW_CONFIDENCE_RECOVERED` means a bounded same-candidate or two-of-three consensus selected
+  an allowlisted candidate. It is a successful audited recovery, not a validation failure.
+- `LLM_CONFIDENCE_RECOVERY_EXHAUSTED` means the recovery vote was still below the threshold and the
+  decision remains `review_required`.
+- `LLM_CONSENSUS_NOT_REACHED` means the bounded votes conflicted without a qualified majority and the
+  decision remains `review_required`.
+
+Use `application-report.json` to distinguish decision recovery from document publication. Each
+recovered decision has exactly one application outcome:
+
+- `applied`: the canonical document also passed all global invariants and was verified for
+  publication;
+- `not_published`: the recovered candidate was assembled, but another unresolved decision kept the
+  document in review;
+- `rejected_by_invariant`: canonical validation failed, and `invariant_codes` records the overriding
+  document-level failures.
+
+Only `applied` can accompany globally verified publication. Consensus never overrides character
+coverage, atom ownership, ordering, table-grid, raw-HTML, or other canonical invariants. Attempt
+records contain phase-specific request hashes, candidate IDs, confidences, status codes, and retry
+counts; default diagnostics do not retain raw prompts, responses, source text, or image bytes.
 
 ## Stabilization gate
 
