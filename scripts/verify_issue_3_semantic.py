@@ -8,11 +8,29 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from typing import Any
 
+from ard_ossie.canonical import canonical_hash
 from ard_ossie.docling_parser import DoclingParser
-from ard_ossie.ingestion import SourceRole, scan_sources
+from ard_ossie.ingestion import (
+    SourceFile,
+    SourceRole,
+    scan_sources,
+    snapshot_source_file,
+)
+from ard_ossie.llm.contracts import LLMMetadata, LLMResult
+from ard_ossie.semantic.adjudication import DecisionRecord
 from ard_ossie.semantic.correction import OcrCorrectionPlanner
+from ard_ossie.semantic.evidence import ExtractedEvidence
+from ard_ossie.semantic.evidence_sources import extract_pdf_evidence
 from ard_ossie.semantic.models import ExtractionMode, SemanticFidelityReport
+from ard_ossie.semantic.pipeline_v2 import SemanticPipelineResult, parse_semantic_pdf_v2
+from ard_ossie.semantic.structure import (
+    StructureBlock,
+    StructureCell,
+    StructureDocument,
+    StructureTable,
+)
 
 RAW_HTML_TAG = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
 GFM_SEPARATOR_ROW = re.compile(r"(?m)^\|(?:\s*:?-{3,}:?\s*\|)+$")
@@ -45,9 +63,321 @@ class _ProviderMustNotRun:
         raise Issue3VerificationError("ISSUE_3_PROVIDER_CALLED")
 
 
+class ReplayCandidateProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.max_candidate_count = 0
+
+    def capabilities(self) -> dict[str, object]:
+        return {
+            "provider": "openai_compatible",
+            "model": "semantic-replay",
+            "structured_output": "json_schema",
+        }
+
+    def generate_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[dict[str, str]],
+    ) -> LLMResult:
+        del schema
+        request = json.loads(messages[-1]["content"])
+        candidates = request["candidates"]
+        if not isinstance(candidates, list) or not candidates:
+            raise Issue3VerificationError("EVIDENCE_REPLAY_CANDIDATES_EMPTY")
+        self.calls += 1
+        self.max_candidate_count = max(self.max_candidate_count, len(candidates))
+        selected = max(
+            candidates,
+            key=lambda candidate: (
+                candidate.get("score", 0.0),
+                len(candidate.get("features", {})),
+                float(
+                    re.match(
+                        r"^\d+(?:\.\d+)*[.)]\s",
+                        str(candidate.get("rendering", "")),
+                    )
+                    is not None
+                ),
+                float("source_spacing" in candidate.get("features", {})),
+                candidate["candidate_id"],
+            ),
+        )["candidate_id"]
+        structured = {"candidate_id": selected, "confidence": 0.99}
+        return LLMResult(
+            text=json.dumps(structured, sort_keys=True),
+            structured=structured,
+            metadata=LLMMetadata(
+                profile="semantic-replay",
+                provider="openai_compatible",
+                model="semantic-replay",
+                elapsed_ms=0,
+            ),
+        )
+
+    def generate_multimodal_structured(self, **_kwargs: object) -> object:
+        raise Issue3VerificationError("ISSUE_3_PROVIDER_CALLED")
+
+
 def _require(condition: bool, code: str) -> None:
     if not condition:
         raise Issue3VerificationError(code)
+
+
+def capture_evidence(
+    source: SourceFile | Path,
+    destination: Path,
+    *,
+    hints: StructureDocument | None = None,
+    pdfium: Any | None = None,
+) -> Path:
+    active_source = (
+        source
+        if isinstance(source, SourceFile)
+        else snapshot_source_file(
+            source,
+            role=SourceRole.SEMANTIC_DOCUMENT,
+            relative_path=source.name,
+        )
+    )
+    evidence = extract_pdf_evidence(active_source, pdfium=pdfium)
+    if evidence.source_hash != active_source.sha256:
+        raise ValueError("EVIDENCE_REPLAY_SOURCE_HASH_MISMATCH")
+    if hints is None:
+        from ard_ossie.semantic.parser import _ordinary_structure
+
+        hints = _ordinary_structure(active_source, converter=None)
+    payload = {
+        "capture_schema": "semantic-evidence-replay-v1",
+        **evidence.model_dump(mode="json"),
+        "structure_hints": [_structure_block_payload(block) for block in hints.blocks],
+    }
+    payload["capture_sha256"] = canonical_hash(payload)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return destination
+
+
+def load_evidence_replay(path: Path) -> ExtractedEvidence:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise ValueError("EVIDENCE_REPLAY_INVALID") from error
+    if not isinstance(payload, dict) or payload.get("capture_schema") != (
+        "semantic-evidence-replay-v1"
+    ):
+        raise ValueError("EVIDENCE_REPLAY_SCHEMA_INVALID")
+    _reject_sensitive_capture_keys(payload)
+    capture_hash = payload.get("capture_sha256")
+    unsigned = {key: value for key, value in payload.items() if key != "capture_sha256"}
+    if capture_hash != canonical_hash(unsigned):
+        raise ValueError("EVIDENCE_REPLAY_HASH_MISMATCH")
+    evidence_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"capture_schema", "capture_sha256", "structure_hints"}
+    }
+    return ExtractedEvidence.model_validate(evidence_payload)
+
+
+def load_structure_replay(path: Path) -> StructureDocument:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    load_evidence_replay(path)
+    return StructureDocument(
+        blocks=tuple(_structure_block_from_payload(item) for item in payload["structure_hints"])
+    )
+
+
+def run_evidence_replay(
+    path: Path,
+    *,
+    trusted_decisions: tuple[DecisionRecord, ...] = (),
+) -> tuple[SemanticPipelineResult, ReplayCandidateProvider]:
+    evidence = load_evidence_replay(path)
+    provider = ReplayCandidateProvider()
+    source = SourceFile.model_construct(
+        role=SourceRole.SEMANTIC_DOCUMENT,
+        path=Path("issue-3.pdf"),
+        relative_path="sources/semantic/issue-3.pdf",
+        sha256=evidence.source_hash,
+        size_bytes=0,
+        snapshot=b"",
+    )
+    result = parse_semantic_pdf_v2(
+        source,
+        hints=load_structure_replay(path),
+        mode="candidate",
+        provider=provider,
+        trusted_decisions=trusted_decisions,
+        extracted_evidence=evidence,
+    )
+    return result, provider
+
+
+def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, object]:
+    golden = json.loads(golden_path.read_text(encoding="utf-8"))
+    result, provider = run_evidence_replay(evidence_path)
+    repeated, repeated_provider = run_evidence_replay(
+        evidence_path,
+        trusted_decisions=result.decisions.decisions,
+    )
+    headings = [block.text for block in result.canonical.blocks if block.kind == "heading"]
+    tables = [
+        [block.row_count, block.column_count]
+        for block in result.canonical.blocks
+        if block.kind == "table"
+    ]
+    plain_text = "\n".join(
+        [
+            *(block.text for block in result.canonical.blocks),
+            *(
+                cell.text
+                for block in result.canonical.blocks
+                for cell in block.cells
+            ),
+        ]
+    )
+    _require(result.validation.status == "verified", "EVIDENCE_REPLAY_NOT_VERIFIED")
+    _require(result.validation.character_coverage == 1.0, "EVIDENCE_REPLAY_COVERAGE")
+    _require(result.validation.missing_atom_count == 0, "EVIDENCE_REPLAY_MISSING")
+    _require(result.validation.duplicate_atom_count == 0, "EVIDENCE_REPLAY_DUPLICATE")
+    _require(result.validation.degraded_block_count == 0, "EVIDENCE_REPLAY_DEGRADED")
+    _require(result.evidence.source_hash == golden["source_hash"], "EVIDENCE_REPLAY_SOURCE")
+    _require(headings == golden["headings"], "EVIDENCE_REPLAY_HEADINGS")
+    _require(tables == golden["table_dimensions"], "EVIDENCE_REPLAY_TABLES")
+    _require(
+        all(value in plain_text for value in golden["required_phrases"]),
+        "EVIDENCE_REPLAY_REQUIRED_PHRASE",
+    )
+    _require(
+        all(value not in result.markdown for value in golden["forbidden_strings"]),
+        "EVIDENCE_REPLAY_FORBIDDEN_STRING",
+    )
+    _require("<pre" not in result.markdown, "EVIDENCE_REPLAY_RAW_HTML")
+    _require(
+        result.validation.canonical_hash == repeated.validation.canonical_hash,
+        "EVIDENCE_REPLAY_NONDETERMINISTIC",
+    )
+    _require(repeated_provider.calls == 0, "EVIDENCE_REPLAY_CACHE_MISS")
+    return {
+        "status": result.validation.status,
+        "canonical_hash": result.validation.canonical_hash,
+        "heading_count": len(headings),
+        "table_count": len(tables),
+        "model_calls": provider.calls,
+        "cache_model_calls": repeated_provider.calls,
+        "max_candidate_count": provider.max_candidate_count,
+    }
+
+
+def _structure_block_payload(block: StructureBlock) -> dict[str, object]:
+    return {
+        "kind": block.kind,
+        "order": block.order,
+        "page": block.page,
+        "bbox": block.bbox.model_dump(mode="json") if block.bbox is not None else None,
+        "text_hint": block.text_hint,
+        "heading_level": block.heading_level,
+        "list_kind": block.list_kind,
+        "list_depth": block.list_depth,
+        "table": (
+            {
+                "row_count": block.table.row_count,
+                "column_count": block.table.column_count,
+                "cells": [
+                    {
+                        "start_row": cell.start_row,
+                        "end_row": cell.end_row,
+                        "start_column": cell.start_column,
+                        "end_column": cell.end_column,
+                        "text_hint": cell.text_hint,
+                        "column_header": cell.column_header,
+                        "bbox": (
+                            cell.bbox.model_dump(mode="json")
+                            if cell.bbox is not None
+                            else None
+                        ),
+                    }
+                    for cell in block.table.cells
+                ],
+            }
+            if block.table is not None
+            else None
+        ),
+    }
+
+
+def _structure_block_from_payload(payload: dict[str, object]) -> StructureBlock:
+    from ard_ossie.semantic.models import SourceBox
+
+    table_payload = payload.get("table")
+    table = None
+    if isinstance(table_payload, dict):
+        table = StructureTable(
+            row_count=int(table_payload["row_count"]),
+            column_count=int(table_payload["column_count"]),
+            cells=tuple(
+                StructureCell(
+                    start_row=int(cell["start_row"]),
+                    end_row=int(cell["end_row"]),
+                    start_column=int(cell["start_column"]),
+                    end_column=int(cell["end_column"]),
+                    text_hint=str(cell["text_hint"]),
+                    column_header=bool(cell["column_header"]),
+                    bbox=(
+                        SourceBox.model_validate(cell["bbox"])
+                        if cell.get("bbox") is not None
+                        else None
+                    ),
+                )
+                for cell in table_payload["cells"]
+            ),
+        )
+    return StructureBlock(
+        kind=payload["kind"],
+        order=int(payload["order"]),
+        page=int(payload["page"]) if payload.get("page") is not None else None,
+        bbox=(
+            SourceBox.model_validate(payload["bbox"])
+            if payload.get("bbox") is not None
+            else None
+        ),
+        text_hint=str(payload["text_hint"]),
+        heading_level=(
+            int(payload["heading_level"])
+            if payload.get("heading_level") is not None
+            else None
+        ),
+        list_kind=payload.get("list_kind"),
+        list_depth=(
+            int(payload["list_depth"])
+            if payload.get("list_depth") is not None
+            else None
+        ),
+        table=table,
+    )
+
+
+def _reject_sensitive_capture_keys(value: object) -> None:
+    forbidden = {"page_images", "image_bytes", "credentials", "api_key"}
+    if isinstance(value, dict):
+        if forbidden & {str(key).casefold() for key in value}:
+            raise ValueError("EVIDENCE_REPLAY_SENSITIVE_CONTENT")
+        for child in value.values():
+            _reject_sensitive_capture_keys(child)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_sensitive_capture_keys(child)
 
 
 def verify_issue_3(product_root: Path) -> dict[str, object]:
@@ -120,8 +450,32 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--product-root", type=Path, required=True)
+    modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument("--product-root", type=Path)
+    modes.add_argument(
+        "--capture-evidence",
+        nargs=2,
+        metavar=("OUTPUT", "PDF"),
+        type=Path,
+    )
+    modes.add_argument("--evidence", type=Path)
+    parser.add_argument("--golden", type=Path)
     arguments = parser.parse_args()
+    if arguments.capture_evidence is not None:
+        output, source = arguments.capture_evidence
+        capture_evidence(source, output)
+        print(json.dumps({"evidence": str(output)}, sort_keys=True))
+        return 0
+    if arguments.evidence is not None:
+        if arguments.golden is None:
+            parser.error("--evidence requires --golden")
+        print(
+            json.dumps(
+                verify_evidence_replay(arguments.evidence, arguments.golden),
+                sort_keys=True,
+            )
+        )
+        return 0
     print(json.dumps(verify_issue_3(arguments.product_root), sort_keys=True))
     return 0
 

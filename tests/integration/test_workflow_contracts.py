@@ -120,7 +120,12 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert validation["permissions"] == {"contents": "read"}
     assert validation["environment"] == "ard-llm"
     assert "GH_TOKEN" not in str(validation)
-    assert not any(name.startswith("ARD_") for name in validation["env"])
+    assert {
+        name for name in validation["env"] if name.startswith("ARD_")
+    } == {"ARD_SEMANTIC_PDF_PIPELINE"}
+    assert validation["env"]["ARD_SEMANTIC_PDF_PIPELINE"] == (
+        "${{ vars.ARD_SEMANTIC_PDF_PIPELINE || 'candidate' }}"
+    )
     validation_checkouts = [
         step for step in validation["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
@@ -137,6 +142,17 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert validation_run["working-directory"] == "trusted"
     assert '--repository "$CANDIDATE_REPOSITORY"' in validation_run["run"]
     assert "--require-llm" in validation_run["run"]
+    assert '--diagnostics-dir "$CANDIDATE_REPOSITORY/.ard/run/semantic-validate"' in validation_run[
+        "run"
+    ]
+    validation_upload = next(
+        step
+        for step in validation["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    assert validation_upload["if"] == "always()"
+    assert validation_upload["with"]["path"] == "candidate/.ard/run/semantic-validate"
+    assert validation_upload["with"]["if-no-files-found"] == "warn"
     assert validation_run["env"]["ARD_LLM_PROFILE"] == "${{ vars.ARD_LLM_PROFILE }}"
     assert validation_run["env"]["ARD_LLM_API_KEY"] == "${{ secrets.ARD_LLM_API_KEY }}"
     assert validation_run["env"]["ARD_LLM_BASE_URL"] == (
@@ -178,6 +194,9 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert job["env"]["ARD_GCP_PROJECT_ID"] == "${{ vars.ARD_GCP_PROJECT_ID }}"
     assert job["env"]["ARD_VERTEX_CREDENTIALS_JSON"] == (
         "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}"
+    )
+    assert job["env"]["ARD_SEMANTIC_PDF_PIPELINE"] == (
+        "${{ vars.ARD_SEMANTIC_PDF_PIPELINE || 'candidate' }}"
     )
     assert "ARD_LLM_MODEL" not in job["env"]
     assert "ARD_LLM_API_STYLE" not in job["env"]

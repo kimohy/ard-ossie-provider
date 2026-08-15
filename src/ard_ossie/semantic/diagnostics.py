@@ -1,0 +1,230 @@
+"""Privacy-safe, atomic diagnostics for semantic PDF candidate runs."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import tempfile
+from contextlib import suppress
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
+
+from ard_ossie.models import Sha256
+from ard_ossie.semantic.adjudication import DecisionRecord, DecisionReport
+from ard_ossie.semantic.candidates import CandidateSetId
+from ard_ossie.semantic.canonical import SemanticValidationReport
+from ard_ossie.semantic.evidence import RegionId
+from ard_ossie.semantic.models import ImmutableStrictModel
+
+DIAGNOSTIC_REPORT_NAMES = (
+    "manifest.json",
+    "evidence-summary.json",
+    "candidate-report.json",
+    "decision-report.json",
+    "validation-report.json",
+    "failure-report.json",
+)
+
+
+class EvidenceSummary(ImmutableStrictModel):
+    page_count: int = Field(ge=1)
+    atom_count: int = Field(ge=0)
+    whitespace_atom_count: int = Field(ge=0)
+    region_count: int = Field(ge=0)
+    hypothesis_count: int = Field(ge=0)
+    extraction_mode: Literal["pdf_embedded", "pdf_ocr", "pdf_mixed"]
+
+
+class CandidateDiagnostic(ImmutableStrictModel):
+    candidate_set_id: CandidateSetId
+    region_id: RegionId
+    decision_type: str = Field(min_length=1, max_length=40)
+    candidate_count: int = Field(ge=1, le=5)
+    scores: tuple[float, ...] = Field(min_length=1, max_length=5)
+
+
+class SemanticDiagnostics(ImmutableStrictModel):
+    source_hash: Sha256
+    configuration_hash: Sha256
+    mode: Literal["legacy", "shadow", "candidate"]
+    publication_status: Literal["verified", "review_required", "failed"]
+    stage: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9_-]+$")
+    evidence: EvidenceSummary
+    candidates: tuple[CandidateDiagnostic, ...]
+    decisions: DecisionReport
+    validation: SemanticValidationReport
+    failure_codes: tuple[str, ...] = ()
+    raw_previews: tuple[str, ...] = Field(default=(), exclude=True)
+    raw_images: tuple[bytes, ...] = Field(default=(), exclude=True)
+
+
+def build_semantic_diagnostics(
+    result: object,
+    *,
+    configuration_hash: Sha256,
+    stage: str = "validation",
+) -> SemanticDiagnostics:
+    evidence = result.evidence
+    validation = result.validation
+    return SemanticDiagnostics(
+        source_hash=evidence.source_hash,
+        configuration_hash=configuration_hash,
+        mode=result.mode.value,
+        publication_status=validation.status.value,
+        stage=stage,
+        evidence=EvidenceSummary(
+            page_count=evidence.page_count,
+            atom_count=len(evidence.atoms),
+            whitespace_atom_count=sum(atom.text.isspace() for atom in evidence.atoms),
+            region_count=len(evidence.regions),
+            hypothesis_count=len(evidence.hypotheses),
+            extraction_mode=evidence.extraction_mode.value,
+        ),
+        candidates=tuple(
+            CandidateDiagnostic(
+                candidate_set_id=candidate_set.candidate_set_id,
+                region_id=candidate_set.region_id,
+                decision_type=candidate_set.decision_type,
+                candidate_count=len(candidate_set.candidates),
+                scores=tuple(candidate.score for candidate in candidate_set.candidates),
+            )
+            for candidate_set in result.candidate_sets
+        ),
+        decisions=result.decisions,
+        validation=validation,
+        failure_codes=tuple(
+            dict.fromkeys(
+                [
+                    *(finding.code for finding in validation.findings),
+                    *(
+                        code
+                        for decision in result.decisions.decisions
+                        for code in decision.validation_codes
+                    ),
+                ]
+            )
+        ),
+        raw_previews=tuple(block.text for block in result.canonical.blocks),
+    )
+
+
+def write_semantic_diagnostics(
+    destination: Path,
+    diagnostics: SemanticDiagnostics,
+    *,
+    include_raw: bool = False,
+) -> tuple[Path, ...]:
+    if destination.is_symlink():
+        raise ValueError("SEMANTIC_DIAGNOSTICS_SYMLINK_NOT_ALLOWED")
+    destination.mkdir(parents=True, exist_ok=True)
+    encoded = semantic_diagnostic_payloads(diagnostics)
+    written: list[Path] = []
+    for name in DIAGNOSTIC_REPORT_NAMES:
+        path = destination / name
+        _atomic_write(path, encoded[name])
+        written.append(path)
+    if include_raw:
+        raw = destination / "raw"
+        if raw.is_symlink():
+            raise ValueError("SEMANTIC_DIAGNOSTICS_SYMLINK_NOT_ALLOWED")
+        raw.mkdir(exist_ok=True)
+        _atomic_write(raw / "previews.json", _json_bytes(list(diagnostics.raw_previews)))
+        for index, value in enumerate(diagnostics.raw_images, start=1):
+            _atomic_write(raw / f"image-{index:04d}.bin", value)
+    return tuple(written)
+
+
+def semantic_diagnostic_payloads(
+    diagnostics: SemanticDiagnostics,
+) -> dict[str, bytes]:
+    reports: dict[str, object] = {
+        "evidence-summary.json": {
+            "source_hash": diagnostics.source_hash,
+            "configuration_hash": diagnostics.configuration_hash,
+            **diagnostics.evidence.model_dump(mode="json"),
+        },
+        "candidate-report.json": {
+            "source_hash": diagnostics.source_hash,
+            "candidate_sets": [
+                item.model_dump(mode="json") for item in diagnostics.candidates
+            ],
+            "masked_previews": [
+                preview
+                for value in diagnostics.raw_previews
+                if (preview := masked_preview(value)) is not None
+            ],
+            "image_hashes": [
+                hashlib.sha256(value).hexdigest() for value in diagnostics.raw_images
+            ],
+        },
+        "decision-report.json": diagnostics.decisions.model_dump(mode="json"),
+        "validation-report.json": diagnostics.validation.model_dump(mode="json"),
+        "failure-report.json": {
+            "source_hash": diagnostics.source_hash,
+            "stage": diagnostics.stage,
+            "publication_status": diagnostics.publication_status,
+            "failure_codes": diagnostics.failure_codes,
+        },
+    }
+    encoded = {name: _json_bytes(payload) for name, payload in reports.items()}
+    manifest = {
+        "schema_version": "semantic-diagnostics-v1",
+        "source_hash": diagnostics.source_hash,
+        "configuration_hash": diagnostics.configuration_hash,
+        "mode": diagnostics.mode,
+        "publication_status": diagnostics.publication_status,
+        "reports": {
+            name: hashlib.sha256(payload).hexdigest()
+            for name, payload in sorted(encoded.items())
+        },
+    }
+    encoded["manifest.json"] = _json_bytes(manifest)
+    return encoded
+
+
+def masked_preview(value: str) -> str | None:
+    normalized = " ".join(value.split())
+    if len(normalized) < 8:
+        return None
+    bounded = normalized[:24]
+    if len(bounded) <= 9:
+        return f"{bounded[:4]}…{bounded[-4:]}"
+    return f"{bounded[:4]}…{bounded[-4:]}"
+
+
+def load_trusted_decisions(
+    path: Path,
+    *,
+    expected_hash: Sha256,
+) -> tuple[DecisionRecord, ...]:
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != expected_hash:
+        raise ValueError("TRUSTED_DECISION_HASH_MISMATCH")
+    try:
+        report = DecisionReport.model_validate_json(payload)
+    except ValueError as error:
+        raise ValueError("TRUSTED_DECISION_SCHEMA_INVALID") from error
+    return report.decisions
+
+
+def _json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise

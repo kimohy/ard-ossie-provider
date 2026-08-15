@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ard_ossie.docling_parser import Evidence
@@ -16,6 +18,19 @@ from ard_ossie.ir import (
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 ORDERS_TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
 CUSTOMERS_TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14d"
+
+
+@pytest.fixture(scope="session")
+def issue_3_replay():
+    from scripts.verify_issue_3_semantic import run_evidence_replay
+
+    evidence = Path("tests/fixtures/semantic/issue-3-evidence.json")
+    first, first_provider = run_evidence_replay(evidence)
+    repeated, repeated_provider = run_evidence_replay(
+        evidence,
+        trusted_decisions=first.decisions.decisions,
+    )
+    return first, first_provider, repeated, repeated_provider
 
 
 def dictionary_evidence(row: int, excerpt: str) -> Evidence:

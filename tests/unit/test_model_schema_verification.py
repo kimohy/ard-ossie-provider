@@ -192,6 +192,7 @@ def test_model_schema_catalog_requires_semantic_schema_pair() -> None:
         for reference in MODEL_SCHEMA_CATALOG
     } >= {
         Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-validation.schema.json"),
         Path("reports/semantic-structure-repair.schema.json"),
     }
     assert OPTIONAL_MODEL_SCHEMA_GROUPS == ()

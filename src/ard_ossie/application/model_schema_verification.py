@@ -57,6 +57,11 @@ MODEL_SCHEMA_CATALOG = (
         "SemanticFidelityReport",
     ),
     ModelSchemaReference(
+        Path("reports/semantic-validation.schema.json"),
+        "ard_ossie.semantic.canonical",
+        "SemanticValidationReport",
+    ),
+    ModelSchemaReference(
         Path("reports/semantic-structure-repair.schema.json"),
         "ard_ossie.semantic.models",
         "SemanticStructureRepairRecord",

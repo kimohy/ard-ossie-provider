@@ -605,6 +605,7 @@ def test_static_schema_verifier_accepts_built_in_required_semantic_schemas(
     "schema_path",
     (
         Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-validation.schema.json"),
         Path("reports/semantic-structure-repair.schema.json"),
     ),
 )

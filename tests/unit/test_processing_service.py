@@ -393,6 +393,55 @@ def test_processing_passes_only_hash_verified_base_semantic_artifacts_to_process
     ]
 
 
+def test_processing_passes_only_hash_verified_candidate_decisions(tmp_path: Path) -> None:
+    decision_text = json.dumps({"source_hash": "a" * 64, "decisions": []}) + "\n"
+    quality_text = json.dumps(
+        {
+            "quality_artifact_hashes": {
+                "decision-report.json": hashlib.sha256(decision_text.encode()).hexdigest(),
+            }
+        }
+    )
+    git = FakeGit.with_revision_files(
+        base_sha=NEW_SHA,
+        files={
+            "products/sales-order/quality/quality-report.json": quality_text,
+            "products/sales-order/quality/decision-report.json": decision_text,
+        },
+    )
+    service, captured = capturing_processing_service(tmp_path, git=git)
+
+    service.run(request(tmp_path))
+
+    assert captured["trusted_semantic_decisions"] == {
+        "source_hash": "a" * 64,
+        "decisions": [],
+    }
+
+
+def test_processing_rejects_tampered_candidate_decisions(tmp_path: Path) -> None:
+    expected = b'{"source_hash":"' + b"a" * 64 + b'","decisions":[]}\n'
+    tampered = expected + b" "
+    quality_text = json.dumps(
+        {
+            "quality_artifact_hashes": {
+                "decision-report.json": hashlib.sha256(expected).hexdigest(),
+            }
+        }
+    )
+    git = FakeGit.with_revision_files(
+        base_sha=NEW_SHA,
+        files={
+            "products/sales-order/quality/quality-report.json": quality_text,
+            "products/sales-order/quality/decision-report.json": tampered,
+        },
+    )
+    service, _captured = capturing_processing_service(tmp_path, git=git)
+
+    with pytest.raises(WorkflowSecurityError, match="SEMANTIC_REPAIR_TRUST_MISMATCH"):
+        service.run(request(tmp_path))
+
+
 def test_processing_hashes_raw_repair_bytes_and_rejects_invalid_utf8(tmp_path: Path) -> None:
     repair_bytes = b'{"invalid":"\xff"}\n'
     quality_bytes = json.dumps(
