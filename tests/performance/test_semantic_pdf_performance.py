@@ -10,10 +10,16 @@ def test_embedded_table_heavy_candidate_budget(issue_3_replay) -> None:
     ambiguous_decisions = sum(
         decision.source == "model" for decision in result.decisions.decisions
     )
+    audited_calls = sum(
+        len(decision.attempts)
+        for decision in result.decisions.decisions
+        if decision.source != "cache"
+    )
 
     assert len(result.evidence.atoms) >= 700
     assert sum(block.kind == "table" for block in result.canonical.blocks) >= 8
-    assert provider.calls <= ambiguous_decisions
+    assert provider.calls == audited_calls
+    assert provider.calls <= 3 * ambiguous_decisions
     assert provider.max_candidate_count <= 5
     assert len(json.dumps(candidate_choice_schema(), sort_keys=True).encode()) <= 2_048
     assert repeated_provider.calls == 0

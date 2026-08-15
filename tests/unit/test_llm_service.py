@@ -143,6 +143,8 @@ def test_invalid_output_uses_two_repairs_then_fails_without_body() -> None:
         service.generate_structured(schema=closed_schema(), messages=user_messages())
 
     assert provider.calls == 3
+    assert captured.value.retry_count == 0
+    assert captured.value.repair_count == 2
     assert "bad-3" not in repr(captured.value)
     assert provider.messages[1][0]["role"] == "system"
     assert "LLM_INVALID_JSON" in provider.messages[1][0]["content"]

@@ -166,6 +166,7 @@ def add_candidate_diagnostics(product_root: Path, *, status: str) -> None:
         "evidence-summary.json",
         "candidate-report.json",
         "decision-report.json",
+        "application-report.json",
         "failure-report.json",
     ):
         replace_quality_sibling(product_root, name, {"name": name})

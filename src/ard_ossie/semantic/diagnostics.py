@@ -13,8 +13,8 @@ from typing import Literal
 from pydantic import Field
 
 from ard_ossie.models import Sha256
-from ard_ossie.semantic.adjudication import DecisionRecord, DecisionReport
-from ard_ossie.semantic.candidates import CandidateSetId
+from ard_ossie.semantic.adjudication import DecisionId, DecisionRecord, DecisionReport
+from ard_ossie.semantic.candidates import CandidateId, CandidateSetId
 from ard_ossie.semantic.canonical import SemanticValidationReport
 from ard_ossie.semantic.evidence import RegionId
 from ard_ossie.semantic.models import ImmutableStrictModel
@@ -24,6 +24,7 @@ DIAGNOSTIC_REPORT_NAMES = (
     "evidence-summary.json",
     "candidate-report.json",
     "decision-report.json",
+    "application-report.json",
     "validation-report.json",
     "failure-report.json",
 )
@@ -44,6 +45,26 @@ class CandidateDiagnostic(ImmutableStrictModel):
     decision_type: str = Field(min_length=1, max_length=40)
     candidate_count: int = Field(ge=1, le=5)
     scores: tuple[float, ...] = Field(min_length=1, max_length=5)
+
+
+class DecisionApplicationRecord(ImmutableStrictModel):
+    decision_id: DecisionId
+    candidate_set_id: CandidateSetId
+    selected_candidate_id: CandidateId
+    canonical_hash: Sha256
+    validation_status: Literal["verified", "review_required", "failed"]
+    outcome: Literal["applied", "not_published", "rejected_by_invariant"]
+    invariant_codes: tuple[str, ...] = ()
+
+
+class ApplicationReport(ImmutableStrictModel):
+    source_hash: Sha256
+    primary_attempt_count: int = Field(ge=0)
+    confidence_recovery_attempt_count: int = Field(ge=0)
+    tie_break_attempt_count: int = Field(ge=0)
+    recovered_decision_count: int = Field(ge=0)
+    unresolved_low_confidence_count: int = Field(ge=0)
+    applications: tuple[DecisionApplicationRecord, ...] = ()
 
 
 class SemanticDiagnostics(ImmutableStrictModel):
@@ -103,6 +124,7 @@ def build_semantic_diagnostics(
                         code
                         for decision in result.decisions.decisions
                         for code in decision.validation_codes
+                        if code != "LLM_LOW_CONFIDENCE_RECOVERED"
                     ),
                 ]
             )
@@ -140,6 +162,7 @@ def write_semantic_diagnostics(
 def semantic_diagnostic_payloads(
     diagnostics: SemanticDiagnostics,
 ) -> dict[str, bytes]:
+    application_report = _application_report(diagnostics)
     reports: dict[str, object] = {
         "evidence-summary.json": {
             "source_hash": diagnostics.source_hash,
@@ -148,19 +171,16 @@ def semantic_diagnostic_payloads(
         },
         "candidate-report.json": {
             "source_hash": diagnostics.source_hash,
-            "candidate_sets": [
-                item.model_dump(mode="json") for item in diagnostics.candidates
-            ],
+            "candidate_sets": [item.model_dump(mode="json") for item in diagnostics.candidates],
             "masked_previews": [
                 preview
                 for value in diagnostics.raw_previews
                 if (preview := masked_preview(value)) is not None
             ],
-            "image_hashes": [
-                hashlib.sha256(value).hexdigest() for value in diagnostics.raw_images
-            ],
+            "image_hashes": [hashlib.sha256(value).hexdigest() for value in diagnostics.raw_images],
         },
         "decision-report.json": diagnostics.decisions.model_dump(mode="json"),
+        "application-report.json": application_report.model_dump(mode="json"),
         "validation-report.json": diagnostics.validation.model_dump(mode="json"),
         "failure-report.json": {
             "source_hash": diagnostics.source_hash,
@@ -177,12 +197,60 @@ def semantic_diagnostic_payloads(
         "mode": diagnostics.mode,
         "publication_status": diagnostics.publication_status,
         "reports": {
-            name: hashlib.sha256(payload).hexdigest()
-            for name, payload in sorted(encoded.items())
+            name: hashlib.sha256(payload).hexdigest() for name, payload in sorted(encoded.items())
         },
     }
     encoded["manifest.json"] = _json_bytes(manifest)
     return encoded
+
+
+def _application_report(diagnostics: SemanticDiagnostics) -> ApplicationReport:
+    attempts = tuple(
+        attempt for decision in diagnostics.decisions.decisions for attempt in decision.attempts
+    )
+    recovered = tuple(
+        decision
+        for decision in diagnostics.decisions.decisions
+        if decision.recovery_status == "recovered"
+    )
+    if diagnostics.publication_status == "verified":
+        outcome = "applied"
+    elif diagnostics.publication_status == "review_required":
+        outcome = "not_published"
+    else:
+        outcome = "rejected_by_invariant"
+    invariant_codes = (
+        tuple(finding.code for finding in diagnostics.validation.findings)
+        if diagnostics.publication_status == "failed"
+        else ()
+    )
+    applications: list[DecisionApplicationRecord] = []
+    for decision in recovered:
+        if decision.selected_candidate_id is None:
+            raise ValueError("RECOVERED_DECISION_CANDIDATE_MISSING")
+        applications.append(
+            DecisionApplicationRecord(
+                decision_id=decision.decision_id,
+                candidate_set_id=decision.candidate_set_id,
+                selected_candidate_id=decision.selected_candidate_id,
+                canonical_hash=diagnostics.validation.canonical_hash,
+                validation_status=diagnostics.publication_status,
+                outcome=outcome,
+                invariant_codes=invariant_codes,
+            )
+        )
+    return ApplicationReport(
+        source_hash=diagnostics.source_hash,
+        primary_attempt_count=sum(attempt.phase == "primary" for attempt in attempts),
+        confidence_recovery_attempt_count=sum(attempt.phase == "recovery" for attempt in attempts),
+        tie_break_attempt_count=sum(attempt.phase == "tiebreak" for attempt in attempts),
+        recovered_decision_count=len(recovered),
+        unresolved_low_confidence_count=sum(
+            decision.recovery_status == "review_required"
+            for decision in diagnostics.decisions.decisions
+        ),
+        applications=tuple(applications),
+    )
 
 
 def masked_preview(value: str) -> str | None:
