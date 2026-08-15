@@ -440,6 +440,55 @@ def test_create_annotated_tag_reuses_exact_target(tmp_path: Path) -> None:
     assert len(runner.requests) == 1
 
 
+def test_create_annotated_tag_configures_bot_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh Actions checkouts must be able to create annotated release tags."""
+    empty_home = tmp_path / "home"
+    empty_home.mkdir()
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    monkeypatch.setenv("HOME", str(empty_home))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+
+    def git(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    (repository / "README.md").write_text("fixture\n", encoding="utf-8")
+    git("add", "README.md")
+    git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.com",
+        "commit",
+        "-qm",
+        "fixture",
+    )
+    revision = git("rev-parse", "HEAD")
+
+    GitCli(repository, SubprocessRunner()).create_annotated_tag(
+        "product/prd_example/v1",
+        revision,
+        "release",
+    )
+
+    assert git("cat-file", "-t", "product/prd_example/v1") == "tag"
+    assert git("config", "--local", "user.name") == "github-actions[bot]"
+    assert (
+        git("config", "--local", "user.email")
+        == "41898282+github-actions[bot]@users.noreply.github.com"
+    )
+
+
 def test_create_annotated_tag_rejects_other_target(tmp_path: Path) -> None:
     """An existing immutable tag must never move to another commit."""
     runner = RecordingRunner([ok(f"{NEW_SHA}\n")])

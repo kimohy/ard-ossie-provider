@@ -257,6 +257,8 @@ class GitCli:
             if existing != target:
                 raise GitConflict("TAG_TARGET_CONFLICT", f"{tag} already targets {existing}")
             return
+        self._run_required("GIT_IDENTITY_FAILED", "config", "user.name", _BOT_NAME)
+        self._run_required("GIT_IDENTITY_FAILED", "config", "user.email", _BOT_EMAIL)
         self._run_required(
             "TAG_CREATE_FAILED",
             "tag",
