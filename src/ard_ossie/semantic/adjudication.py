@@ -95,6 +95,7 @@ class GeneratedSpacingSnapshot(ImmutableStrictModel):
     region_id: RegionId
     atom_ids: tuple[str, ...] = Field(min_length=1)
     boundaries: tuple[SpacingBoundary, ...]
+    mutable_boundary_indexes: tuple[int, ...] | None = None
     score: float = Field(ge=0, le=1)
     features: dict[str, float]
     rendered_text_hash: Sha256
@@ -1031,6 +1032,8 @@ def _trusted_decision_matches(
         and all(
             isinstance(candidate, SpacingCandidate)
             and candidate.character_sequence == generated_candidate.character_sequence
+            and candidate.mutable_boundary_indexes
+            == generated_candidate.mutable_boundary_indexes
             for candidate in candidate_set.candidates
         )
         and not spacing_defect_codes(generated_candidate)
@@ -1542,6 +1545,7 @@ def diagnostic_decision_record(decision: DecisionRecord) -> DecisionRecord:
         region_id=generated.region_id,
         atom_ids=generated.atom_ids,
         boundaries=generated.boundaries,
+        mutable_boundary_indexes=generated.mutable_boundary_indexes,
         score=generated.score,
         features=generated.features,
         rendered_text_hash=_text_hash(generated.rendered_text),
@@ -1588,6 +1592,7 @@ def _materialize_generated_candidate(
             ),
             score=generated.score,
             features=generated.features,
+            mutable_boundary_indexes=generated.mutable_boundary_indexes,
         )
     except ValueError:
         return None
@@ -1612,6 +1617,7 @@ def _generated_candidate_identity_payload(
         "region_id": generated.region_id,
         "atom_ids": generated.atom_ids,
         "boundaries": [item.model_dump(mode="json") for item in generated.boundaries],
+        "mutable_boundary_indexes": generated.mutable_boundary_indexes,
         "score": generated.score,
         "features": generated.features,
         "rendered_text_hash": rendered_text_hash,

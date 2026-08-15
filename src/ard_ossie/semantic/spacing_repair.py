@@ -153,9 +153,21 @@ def build_generated_candidate(
         ),
         score=max(0.0, min(1.0, confidence)),
         features={"llm_generated_spacing": max(0.0, min(1.0, confidence))},
+        mutable_boundary_indexes=anchor.mutable_boundary_indexes,
     )
     if _hard_break_pairs(generated) != _hard_break_pairs(anchor):
         raise ValueError("SPACING_REPAIR_HARD_LINE_BOUNDARY_MISMATCH")
+    mutable = (
+        set(range(len(anchor.boundaries)))
+        if anchor.mutable_boundary_indexes is None
+        else set(anchor.mutable_boundary_indexes)
+    )
+    if any(
+        generated.boundaries[index].state != boundary.state
+        for index, boundary in enumerate(anchor.boundaries)
+        if index not in mutable
+    ):
+        raise ValueError("SPACING_REPAIR_IMMUTABLE_BOUNDARY_MISMATCH")
     return generated
 
 
@@ -221,6 +233,7 @@ def _generation_request(
         "hard_line_boundary_indexes": [
             index for index, state in enumerate(anchor_states) if state == "hard_break"
         ],
+        "mutable_boundary_indexes": anchor.mutable_boundary_indexes,
         "anchor_candidate_id": anchor.candidate_id,
         "candidates": [
             {
@@ -261,6 +274,7 @@ def _verification_request(
         "region_id": candidate_set.region_id,
         "exact_character_sequence": generated.character_sequence,
         "protected_identifiers": _protected_tokens(generated.rendered_text),
+        "mutable_boundary_indexes": generated.mutable_boundary_indexes,
         "generated_candidate_id": generated.candidate_id,
         "candidates": [
             {
@@ -287,6 +301,11 @@ def _validate_scope(
         raise ValueError("SPACING_REPAIR_SCOPE_MISMATCH")
     if any(candidate.character_sequence != anchor.character_sequence for candidate in candidates):
         raise ValueError("SPACING_REPAIR_CHARACTER_MISMATCH")
+    if any(
+        candidate.mutable_boundary_indexes != anchor.mutable_boundary_indexes
+        for candidate in candidates
+    ):
+        raise ValueError("SPACING_REPAIR_MUTABLE_SCOPE_MISMATCH")
 
 
 def _hard_break_pairs(candidate: SpacingCandidate) -> tuple[tuple[str, str], ...]:
