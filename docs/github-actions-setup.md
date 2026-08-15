@@ -1,6 +1,6 @@
 # GitHub Actions 운영 설정
 
-이 저장소는 public ARD 컨텐츠, GitHub Issue 승인, 같은 PR writeback, 숫자 릴리스와 승인된 후속 연계를 전제로 합니다.
+이 저장소는 public ARD 컨텐츠, GitHub Issue 승인, 같은 PR writeback, 숫자 릴리스와 승인된 후속 연계를 전제로 합니다. 변환 판단의 정책은 [ARD 변환 정책과 거버넌스](policy-and-governance.md), PDF 처리 상태와 보고서 계약은 [시멘틱 PDF 파이프라인](semantic-pdf-pipeline.md)을 먼저 확인하세요. Enterprise Cloud 또는 GHES의 새 저장소를 구성한다면 이 문서보다 먼저 [GitHub Enterprise 이전 및 신규 저장소 구축](github-enterprise-migration.md)의 제품별 호환성 게이트를 완료합니다. 해당 매뉴얼은 GHES 3.18.12를 호환성 기준으로 삼고 3.18.13 보안 hotpatch를 운영 전제조건으로 둡니다.
 
 ## 자동 bootstrap
 
@@ -51,6 +51,7 @@ LLM Secret은 repository-level Secret이 아니라 보호된 Environment에 둡�
 | Variable | `ARD_GCP_PROJECT_ID` | Vertex AI project ID | Gemini 또는 Claude 프로필 선택 시 필수 |
 | Secret | `ARD_VERTEX_CREDENTIALS_JSON` | Vertex service-account JSON | Gemini 또는 Claude 프로필 선택 시 필수 |
 | Variable | `ARD_MAX_ATTACHMENT_BYTES` | 파일 하나의 최대 byte | 선택; 기본값 `52428800` |
+| Variable | `ARD_SEMANTIC_PDF_PIPELINE` | PDF parser mode: `candidate`, `shadow`, `legacy` | 선택; 미설정 시 `candidate` |
 
 선택하지 않은 provider의 값은 없어도 됩니다. 선택된 프로필에 필요한 값만 읽고 검증합니다.
 기존 `ARD_LLM_MODEL`과 `ARD_LLM_API_STYLE` Variable은 삭제합니다. 해당 값은 이제 아래처럼
@@ -113,6 +114,8 @@ uv run ard llm smoke-test --profile openai-compatible-default
 `validate`가 보호된 Environment 밖에서 credential 상태를 `unavailable`로 표시하는 것은
 정상이며 credential 성공을 의미하지 않습니다. 실제 연결 검증은 보호된 smoke workflow로
 수행합니다.
+
+`ARD_SEMANTIC_PDF_PIPELINE=candidate`는 전역 invariant를 통과한 canonical Markdown을 생성합니다. 모델 판단이 끝나지 않아도 결정적으로 안전한 fallback이 있으면 `review_pending`으로 generated output과 PR 처리를 계속하고 `semantic-review.json`을 남깁니다. 안전한 후보가 없는 `review_required`와 전역 invariant가 깨진 `failed`는 canonical 승격을 차단합니다. `WARN`을 무조건 실패로 취급하지 말고 `validation-report.json`, `application-report.json`, `semantic-review.json`의 적용 상태를 함께 확인하세요. 다만 `review_pending` PR은 병합하지 않습니다. 숫자 릴리스는 semantic validation이 정확히 `verified`일 때만 허용되므로, 검토 부채를 해결한 뒤 재처리합니다.
 
 `ard-llm`과 `production-linkage`의 deployment branch는 모두 `main`만 허용합니다. direct branch의 push workflow는 `contents: read` signal만 남기고, 기본 브랜치에서 로드되는 `workflow_run` coordinator가 exact candidate를 검증한 뒤 보호된 processor를 호출합니다. processor는 `trusted/`의 기본 브랜치 CLI만 실행하고 candidate checkout은 `--repository`로 지정한 데이터와 Git state로만 사용합니다. API 키는 credential-free validation job, fork PR, artifact, commit 또는 PR 코멘트에 전달하지 않습니다. Secret 값은 public ARD 문서에 절대로 포함하면 안 됩니다.
 
@@ -194,8 +197,10 @@ downstream은 `(product_id, version, tag, commit)`을 중복 제거 키로 사�
 2. 내용과 첨부가 public 공개 가능한지 검토합니다.
 3. 관리자가 `ard:approved`를 붙입니다.
 4. `ARD approved issue intake` workflow가 Draft PR을 만듭니다.
-5. 변환 결과와 보고서를 검토하고 누락 경고를 보완합니다.
-6. hard error가 0이고 두 required status가 성공한 뒤 병합합니다.
+5. 변환 결과와 보고서를 검토합니다. `deferred_review`가 있으면 적용된 fallback과 attempt audit를 확인하고 후속 개선 사항을 기록합니다.
+6. hard error가 0이고 두 required status가 성공한 뒤 병합합니다. candidate PDF라면 추가로 `validation-report.json`이 `status=verified`, `publishable=true`여야 합니다. `WARN`은 validation이 계속 `verified`인 경우에만 허용하고 `review_pending`은 병합하지 않습니다.
+
+제품 PR 본문은 승인된 Issue를 `Closes #<issue-number>`로 연결합니다. Issue는 이 PR이 병합될 때만 정상 완료로 닫습니다. 처리 실패, `ard:failed`, Draft PR 생성만으로 Issue를 닫지 않습니다.
 
 Issue 첨부에는 외부 URL을 쓰지 않습니다. GitHub Issue에 직접 업로드했을 때 생성되는 다음 두 형태만 최초 링크로 허용합니다.
 
@@ -230,6 +235,9 @@ changeset이 끝난 뒤 다음의 독립 변경에서는 Issue의 Changeset ID�
 - 과거 상태는 Git commit, `product/<product-id>/vN`, `table/<table-id>/vN`, GitHub Release로 조회합니다.
 - 성공 반영은 Registry, `generated/`, `quality/`를 모두 staging하고 함께 승격합니다. 승격 중 실패하면 세 영역을 이전 상태로 복구합니다. 검증 hard error에서는 기존 Registry와 생성물을 보존하고 상세 FAIL quality report를 남깁니다.
 - 잘못된 자동 commit은 강제 덮어쓰기보다 revert PR로 복구합니다.
+- 숫자 릴리스는 `main` push 중 `products/**` 또는 `registry/**` 변경에만 실행됩니다. 코드-only 수정 PR은 릴리스 workflow를 다시 시작하지 않습니다.
+- annotated release tag를 만들기 전에 CLI가 repository-local `github-actions[bot]` identity를 설정합니다. 기존 tag가 같은 commit이면 재사용하고 다른 commit이면 `TAG_TARGET_CONFLICT`로 중단합니다.
+- 실패한 run을 재실행하면 원래 commit의 workflow와 코드를 다시 사용합니다. 이후 코드 수정이 필요한 장애였다면 단순 rerun으로 수정 코드가 적용된다고 가정하지 마세요.
 
 ## 9. 설치 후 점검
 
@@ -252,3 +260,15 @@ Lifecycle 결과는 `.ard/run/` 아래 version 1 JSON envelope로 기록됩니�
 일시 장애이므로 같은 exact head에서 재시도합니다. exit `70`은 tag, commit, dispatch 같은 일부
 mutation이 이미 성공했을 수 있음을 뜻하므로 result의 `outputs`와 `mutations`를 보존하고 같은
 입력으로 수렴시킵니다. immutable tag를 이동하거나 managed branch를 강제로 덮어쓰지 않습니다.
+
+| exit | 분류 | 운영 조치 |
+|---:|---|---|
+| `0` | success 또는 no-op | result와 status를 확인하고 다음 단계 진행 |
+| `10` | validation | 입력, schema, fidelity finding 수정 후 새 PR |
+| `20` | configuration | profile, Variable, Environment 설정 수정 |
+| `30` | transient | 같은 exact input으로 재시도 |
+| `40` | conflict | head, branch, version, immutable tag 충돌 해결 |
+| `50` | security | 권한·경로·source 신뢰 경계 위반 조사 |
+| `70` | partial mutation | mutation journal과 원격 상태를 대조해 같은 입력으로 수렴 |
+
+릴리스가 실패하면 먼저 artifact의 `workflow.release-product-result.json`을 확인합니다. `TAG_CREATE_FAILED`가 push 전에 발생했고 tag가 없다면 runner의 Git identity 경로를 점검합니다. tag 또는 Release가 일부 존재하면 삭제하거나 이동하지 말고 같은 product/version/commit과 bundle hash로 `release-product`를 재실행합니다. 성공 result를 얻은 뒤에만 `release-dispatch`를 실행합니다. 상세 명령과 검증 순서는 [Semantic PDF 운영 가이드](operations/semantic-pdf-rollout.md#릴리스-복구)를 따릅니다.

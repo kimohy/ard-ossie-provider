@@ -1,26 +1,158 @@
 # ARD Ossie Provider
 
-AI Ready Data(ARD) 문서를 GitHub에서 공개적으로 관리하고 Apache Ossie 0.1.1 모델로 변환하는 오픈소스 컴파일러입니다.
+ARD Ossie Provider는 공개 가능한 AI Ready Data 문서를 검증하고 Apache Ossie 0.1.1 모델로 변환하는 오픈소스 컴파일러입니다. 데이터 제품 HTML, 시멘틱 DOCX/PDF, 데이터 딕셔너리 XLSX를 GitHub Issue 또는 신뢰된 branch로 받아, 사람이 읽는 Markdown과 기계가 읽는 모델·Registry·품질 보고서를 함께 생성합니다.
 
-입력은 데이터 제품 HTML, 시멘틱 DOCX/PDF, 데이터 딕셔너리 XLSX의 세 종류입니다. 제품 HTML은 Docling으로, 데이터 딕셔너리는 셀 보존 Excel 어댑터로 파싱합니다. 시멘틱 DOCX/PDF는 이중 소스 권위 경로를 사용합니다. OOXML/PDFium이 추출한 원문 텍스트가 게시 문자열의 유일한 권위이며, 완전한 PDF 내장 텍스트가 없으면 문서 전체 OCR 결과가 그 실행의 권위가 됩니다. 내장 텍스트 페이지와 OCR 페이지를 섞지 않습니다. Docling 텍스트는 논리 구조와 읽기 순서를 맞추는 힌트로만 사용합니다. 그 뒤 다음 결과를 결정적으로 생성합니다.
+## 입력과 결과
 
-- `data-product.md`
-- `data-semantic.md`
-- `data-dictionary.json`
-- `ossie-model.json`
-- `source-manifest.json`
-- 중복·버전·영향도·완전성·LLM 제안 감사 보고서
-- 필수 `semantic-fidelity.json`과 구조 복구를 요청하거나 재사용했을 때만 생성하는 `semantic-structure-repair.json`
+제품 하나는 다음 source를 가집니다.
 
-## 핵심 원칙
+- 제품 설명 HTML 1개
+- 시멘틱 DOCX 또는 PDF 1개
+- 데이터 딕셔너리 XLSX 1개
 
-- 제품, 테이블, 컬럼은 접두어가 붙은 UUIDv7 불변 ID를 사용합니다.
-- 제품과 테이블 버전은 서로 독립적인 단순 숫자 `v1`부터 `v999`까지입니다.
-- 현재 상태만 파일로 보관하고 과거 상태는 Git commit, tag, GitHub Release로 탐색합니다.
-- LLM은 근거가 있는 시멘틱 설명·동의어·ANSI SQL metric만 제안할 수 있습니다. 물리 이름, 타입, PK/FK, 불변 ID는 결정적 코드가 관리하며 FK 관계는 Excel에서 결정적으로 생성합니다.
-- 시멘틱 문서 구조 복구 LLM은 불변 source span ID를 block 종류·순서·표 좌표에 매핑할 뿐이며 게시 텍스트를 작성하거나 수정할 수 없습니다. 구조 복구가 실패하면 원문 span을 문단 또는 lossless block으로 모두 보존하고 `SEMANTIC_STRUCTURE_DEGRADED`와 `WARN`을 기록합니다.
-- Issue, 첨부파일, 생성물과 보고서는 모두 public 저장소에 공개됩니다.
-- 승인 전 Issue와 fork PR에는 LLM Secret이나 쓰기 권한을 전달하지 않습니다.
+성공한 변환은 다음 핵심 산출물을 만듭니다.
+
+| 경로 | 결과 |
+|---|---|
+| `generated/data-product.md` | 제품 설명과 데이터셋 요약 |
+| `generated/data-semantic.md` | source 문자에 결합된 canonical 시멘틱 Markdown |
+| `generated/data-dictionary.json` | 정규화한 테이블·컬럼 dictionary |
+| `generated/ossie-model.json` | Apache Ossie 0.1.1 모델 |
+| `generated/source-manifest.json` | 입력 파일과 SHA-256 binding |
+| `quality/*.json` | fidelity, 후보, 결정, 적용, 검증, 중복, 버전, 영향, LLM 제안 감사 |
+| `registry/**` | 불변 ID, 현재 버전, product-table mapping과 changeset |
+
+## 사용자가 기대할 수 있는 보장
+
+1. **원문 보존:** PDF는 완전한 내장 텍스트 또는 문서 전체 OCR 중 하나를 source authority로 사용합니다. Docling과 LLM은 원문 문자를 대체하지 않습니다.
+2. **결정적 소유권:** 물리 이름, 타입, PK/FK, ID, 버전, relationship, 게시 여부는 검증 가능한 코드가 결정합니다.
+3. **제한된 LLM 보조:** LLM은 allowlist 후보 선택과 검증된 whitespace-only 복구만 수행합니다. 낮은 confidence는 bounded recovery와 독립 검증을 거칩니다.
+4. **감사 가능한 계속 처리:** 안전한 fallback이 있으면 사람의 후속 검토 기록을 남기고 변환을 계속합니다. 안전한 후보가 없거나 전역 invariant가 깨지면 게시하지 않습니다.
+5. **불변 게시:** Registry와 생성물은 원자적으로 승격하며 과거 버전은 exact commit, immutable tag, GitHub Release로 추적합니다.
+
+정확한 정책은 [ARD 변환 정책과 거버넌스](docs/policy-and-governance.md)에 정의되어 있습니다.
+
+## 처리 흐름
+
+```text
+HTML + DOCX/PDF + XLSX
+          │
+          ▼
+source·권한·LFS 검증
+          │
+          ▼
+결정적 파싱과 evidence 생성
+          │
+          ▼
+bounded candidate + LLM 보조 판단
+          │
+          ▼
+canonical 조립과 전역 invariant 검증
+          │
+          ▼
+generated + quality + Registry 원자적 승격
+          │
+          ▼
+PR gate → merge → immutable Release → downstream dispatch
+```
+
+시멘틱 PDF의 candidate, 공백 복구, heading, table, diagnostics 계약은 [시멘틱 PDF 파이프라인](docs/semantic-pdf-pipeline.md)을 참고하세요.
+
+## GitHub 사용
+
+### 승인된 Issue
+
+1. `AI Ready Data submission` Issue Form에 제품 하나와 source 세 개를 첨부합니다.
+2. 공개 가능 여부를 검토한 관리자가 `ard:approved`를 적용합니다.
+3. trusted workflow가 첨부와 권한을 검증하고 `ard/issue-<number>-<product-key>` Draft PR을 만듭니다.
+4. 같은 PR에 generated, quality, Registry 변경을 기록합니다.
+5. hard error가 0이고 `ard/quality-gate`와 `ard/changeset`이 정확한 PR head에서 성공해야 병합할 수 있습니다. candidate PDF라면 추가로 `validation-report.json`이 `status=verified`, `publishable=true`여야 하며, `WARN`은 validation이 계속 `verified`인 경우에만 병합할 수 있습니다.
+6. 제품 PR의 `Closes #N`이 병합되면 Issue가 닫히고 숫자 릴리스가 실행됩니다.
+
+처리 실패나 Draft PR 생성만으로 Issue를 닫지 않습니다. `ard:failed`를 해결해 같은 제품 PR이 검증을 통과하도록 재처리합니다.
+
+### 직접 branch 변경
+
+신뢰된 same-repository non-main branch의 `products/<product-key>/sources/**` 변경도 같은 processor를 사용합니다. 한 변경에는 정확히 한 제품만 허용합니다. fork PR에는 Secret이나 writeback 권한을 전달하지 않고 정적 source/schema 검사만 수행합니다.
+
+PDF/DOCX/XLSX는 Git LFS 객체로 관리합니다. code·workflow·문서 변경과 `products/`·`registry/` data 변경을 한 PR에 섞으면 gate가 차단합니다.
+
+GitHub Environment, Secret, Variable, branch protection 설정은 [GitHub Actions 운영 설정](docs/github-actions-setup.md)을 따릅니다. Enterprise Cloud 또는 GHES의 신규 저장소로 옮길 때는 [GitHub Enterprise 이전 및 신규 저장소 구축](docs/github-enterprise-migration.md)의 호환성 게이트를 먼저 적용합니다. 이 매뉴얼의 GHES 기준은 3.18.12이며, 운영 전 3.18.13 보안 hotpatch가 필요합니다.
+
+## 로컬 빠른 시작
+
+Python 3.12, `uv`, Git LFS가 필요합니다.
+
+```bash
+uv sync --frozen
+git lfs install
+git lfs pull
+uv run --frozen ard process products/500138301 --registry registry
+```
+
+주요 명령을 확인합니다.
+
+```bash
+uv run --frozen ard --help
+uv run --frozen ard workflow --help
+uv run --frozen ard parse --help
+uv run --frozen ard model --help
+uv run --frozen ard validate --help
+uv run --frozen ard release --help
+uv run --frozen ard github --help
+uv run --frozen ard llm --help
+```
+
+제품 이력과 영향을 조회할 수 있습니다.
+
+```bash
+uv run --frozen ard history 500138301
+uv run --frozen ard diff 'product-key@v1..v2'
+uv run --frozen ard impact table <table-id> --registry registry
+```
+
+## LLM 프로필
+
+모델, API 방식, timeout과 output 한도는 review되는 `config/llm-profiles.yaml`이 소유합니다. runtime에서 모델명을 임의로 바꾸지 않습니다.
+
+```bash
+export ARD_LLM_PROFILE='openai-compatible-default'
+export ARD_LLM_BASE_URL='https://api.openai.com/v1'
+read -s ARD_LLM_API_KEY
+export ARD_LLM_API_KEY
+
+uv run --frozen ard llm profiles
+uv run --frozen ard llm validate
+uv run --frozen ard llm smoke-test --profile "$ARD_LLM_PROFILE"
+```
+
+OpenAI-compatible, Azure OpenAI, Vertex AI Gemini, Vertex AI Claude 프로필을 지원합니다. API key와 service-account JSON은 파일, fixture, log, Issue, PR에 저장하지 않습니다. 운영 연결 검증은 보호된 `ARD LLM provider smoke test` workflow에서 수행합니다.
+
+## 결과 해석
+
+### 품질 상태
+
+| 상태 | 의미 | 다음 조치 |
+|---|---|---|
+| `PASS` | 경고 없이 필수 조건 통과 | 게시 가능 |
+| `WARN` | canonical 생성은 가능하지만 OCR, 검증된 복구, review debt 또는 제외된 선택적 제안이 있음 | audit와 validation status 확인 |
+| `FAIL` | source loss, schema, identity, table grid 등 필수 계약 위반 | 게시하지 않고 원인 수정 |
+
+`WARN`을 자동 실패로 해석하지 않습니다. `quality-report.json`의 `hard_errors`, `validation-report.json`의 `status`와 `publishable`, `application-report.json`의 실제 적용 결과를 함께 확인합니다. 단, `review_pending`의 `publishable=true`는 generated output과 PR을 계속 만들 수 있다는 뜻이며 숫자 릴리스 허가는 아닙니다. immutable release는 semantic validation이 `verified`일 때만 가능합니다.
+
+### Lifecycle exit code
+
+| exit | 의미 | 처리 |
+|---:|---|---|
+| `0` | success/no-op | 다음 단계 진행 |
+| `10` | validation | 입력·schema·fidelity 수정 |
+| `20` | configuration | profile·Environment 설정 수정 |
+| `30` | transient | 같은 exact input으로 재시도 |
+| `40` | conflict | head·version·tag 충돌 해결 |
+| `50` | security | 권한·경로·source 신뢰 경계 조사 |
+| `70` | partial mutation | result와 mutation journal로 같은 입력을 수렴 |
+
+Lifecycle 결과는 `.ard/run/<command>-result.json` version 1 envelope에 원자적으로 기록됩니다. 장애와 rollback, release 수렴 절차는 [Semantic PDF 운영 가이드](docs/operations/semantic-pdf-rollout.md)를 참고하세요.
 
 ## 저장 구조
 
@@ -33,168 +165,36 @@ products/<product-key>/
     semantic/semantic.docx|pdf
     dictionary/dictionary.xlsx
   generated/
-    data-product.md
-    data-semantic.md
-    data-dictionary.json
-    ossie-model.json
-    source-manifest.json
   quality/
-    quality-report.json
-    duplicate-report.json
-    version-report.json
-    impact-report.json
-    llm-suggestions.json
-    semantic-fidelity.json
-    semantic-structure-repair.json  # 구조 복구 요청 또는 재사용 시에만 존재
 
 registry/
-  products/<product-id>.json
-  tables/<table-id>.json
-  mappings/<product-id>.json
-  changesets/<changeset-id>.json
+  products/
+  tables/
+  mappings/
+  changesets/
   indexes/
 ```
 
-제품 폴더에 `v1`, `v2` 사본을 중복 저장하지 않습니다. 태그는 `product/<product-id>/vN`, `table/<table-id>/vN` 형식입니다.
+제품 폴더에 버전별 사본을 중복 저장하지 않습니다. 현재 상태만 파일로 보관하고 과거 상태는 Git과 `product/<product-id>/vN`, `table/<table-id>/vN` tag로 조회합니다.
 
-## 처리 경로
+## 문서 지도
 
-### GitHub Issue
+현재 계약과 운영 문서:
 
-1. `AI Ready Data submission` Issue Form에 한 제품과 세 문서를 첨부합니다.
-2. write 이상 권한의 관리자가 `ard:approved` 라벨을 적용합니다.
-3. 첨부 호스트·리다이렉트·크기·MIME·확장자·파일 구조를 검증합니다.
-4. `ard/issue-<number>-<product-key>` 브랜치와 Draft PR을 생성합니다.
-5. 같은 PR에 Docling/LLM 변환 결과, 레지스트리 변경, 품질 보고서를 커밋합니다.
-6. `ard/quality-gate`와 `ard/changeset` 상태를 통과해야 main에 병합할 수 있습니다.
+- [ARD 변환 정책과 거버넌스](docs/policy-and-governance.md)
+- [시멘틱 PDF 파이프라인](docs/semantic-pdf-pipeline.md)
+- [GitHub Actions 운영 설정](docs/github-actions-setup.md)
+- [GitHub Enterprise 이전 및 신규 저장소 구축](docs/github-enterprise-migration.md) — GHES 3.18.12 기준과 3.18.13 운영 보안 gate 포함
+- [Semantic PDF 운영, 검증, rollback](docs/operations/semantic-pdf-rollout.md)
+- [완료 기록과 다음 작업](docs/next-steps.md)
 
-### 직접 브랜치 커밋
+역사적 설계와 구현 기록:
 
-`products/*/sources/**`를 신뢰된 non-main 브랜치에 커밋하면 동일한 처리기가 실행됩니다. 한 변경에는 정확히 한 제품만 허용됩니다. Fork PR은 Secret·writeback 없이 로컬 소스/스키마 검사만 실행합니다.
+- [초기 ARD/Ossie 아키텍처 설계](docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md)
+- [설계 기록 모음](docs/superpowers/specs/)
+- [구현 계획 모음](docs/superpowers/plans/)
 
-직접 커밋의 `product.yaml`에도 `product_id`가 필수입니다. 새 ID는 Issue 수집 경로가 생성하며, 이미 등록된 ID를 갱신하려면 `operation: update`, 현재 `base_version`, 정확히 `+1`인 새 버전을 함께 제출합니다.
-
-DOCX/PDF/XLSX는 Git LFS 객체로 관리합니다. 브랜치 처리 checkout과 Issue 수집 push도 LFS 객체를 명시적으로 내려받고 올립니다.
-
-## 로컬 실행
-
-Python 3.12와 `uv`가 필요합니다.
-
-```bash
-uv sync --frozen
-uv run ard process products/sales-order --registry registry
-uv run ard impact table <table-id> --registry registry
-uv run ard history sales-order
-uv run ard diff sales-order@v1..v2
-```
-
-세분화된 명령과 GitHub lifecycle 명령은 다음 help에서 확인합니다.
-
-```bash
-uv run ard --help
-uv run ard workflow --help
-uv run ard github --help
-uv run ard parse --help
-uv run ard model --help
-uv run ard validate --help
-```
-
-GitHub event fixture가 있으면 승인 단계와 intake를 로컬에서 같은 result envelope 계약으로
-실행할 수 있습니다.
-
-```bash
-uv run ard workflow issue-authorize --event event.json --repository-name owner/repo --actor maintainer --label ard:approved
-uv run ard workflow issue-intake --event event.json --repository-name owner/repo --actor maintainer
-```
-
-각 lifecycle은 `.ard/run/<command>-result.json`을 원자적으로 기록합니다. 공통 exit code는
-`0` 성공/no-op, `10` 검증, `20` 구성, `30` 일시 장애, `40` 충돌, `50` 보안 경계,
-`70` 일부 원격 반영입니다. `30`은 원인을 해소한 뒤 재시도하고, `70`은 mutation journal과
-현재 head를 보존한 채 동일 입력으로 수렴시킵니다. 강제 tag 이동이나 branch 덮어쓰기는 하지
-않습니다.
-
-LLM 모델과 API 방식은 `config/llm-profiles.yaml`의 리뷰된 프로필로 관리합니다. 로컬에서
-기본 OpenAI-compatible 프로필을 사용하려면 다음 값만 설정합니다.
-
-```bash
-read -s ARD_LLM_API_KEY
-export ARD_LLM_API_KEY
-export ARD_LLM_PROFILE='openai-compatible-default'
-export ARD_LLM_BASE_URL='https://api.openai.com/v1'
-uv run ard llm validate
-```
-
-지원 provider는 OpenAI-compatible, Azure OpenAI, Vertex AI Gemini, Vertex AI Claude입니다.
-`uv run ard llm profiles`로 등록된 프로필을 확인하고, 운영 반영 전에는 보호된
-`ARD LLM provider smoke test` workflow로 text와 structured output을 모두 검증합니다.
-`ARD_LLM_MODEL`과 `ARD_LLM_API_STYLE`은 더 이상 runtime 입력이 아닙니다. API 키와 Vertex
-service-account JSON은 파일에 저장하거나 로그로 출력하지 마세요. 상세한 프로필 예제와
-Variable/Secret 매핑은 [GitHub Actions 설정](docs/github-actions-setup.md)을 참고하세요.
-
-### 시멘틱 구조 충실도 acceptance
-
-워크플로가 생성한 실제 제품 디렉터리와 그에 대응하는 Registry 디렉터리를 각각
-`SEMANTIC_PRODUCT_ROOT`, `SEMANTIC_REGISTRY_ROOT`에 지정한 뒤, 먼저 LLM credential 없이
-결정적 파싱을 검증합니다. 생성물이나 Registry 파일을 직접 수정하지 마세요.
-
-```bash
-test -n "${SEMANTIC_PRODUCT_ROOT:-}" && test -d "$SEMANTIC_PRODUCT_ROOT"
-test -n "${SEMANTIC_REGISTRY_ROOT:-}" && test -d "$SEMANTIC_REGISTRY_ROOT"
-export SEMANTIC_PRODUCT_ROOT SEMANTIC_REGISTRY_ROOT
-env -u ARD_LLM_API_KEY -u ARD_LLM_BASE_URL -u ARD_LLM_MODEL -u ARD_LLM_API_STYLE \
-  UV_CACHE_DIR=/tmp/ard-semantic-structure-uv-cache \
-  uv run --frozen ard process "$SEMANTIC_PRODUCT_ROOT" --registry "$SEMANTIC_REGISTRY_ROOT"
-UV_CACHE_DIR=/tmp/ard-semantic-structure-uv-cache uv run --frozen python - <<'PY'
-import json
-import os
-from pathlib import Path
-
-product = Path(os.environ["SEMANTIC_PRODUCT_ROOT"])
-semantic = (product / "generated" / "data-semantic.md").read_text(encoding="utf-8")
-fidelity = json.loads(
-    (product / "quality" / "semantic-fidelity.json").read_text(encoding="utf-8")
-)
-assert "개인정보" in semantic
-assert "유효성" in semantic
-assert "개 인정보" not in semantic
-assert "유 효 성" not in semantic
-assert "|" in semantic
-assert fidelity["source_text_coverage"] == 1.0
-assert fidelity["unmatched_span_count"] == 0
-assert fidelity["duplicated_span_count"] == 0
-PY
-```
-
-결정적 reconciliation 뒤에도 구조가 해결되지 않은 실제 문서는 기존의 보호된
-`ARD_LLM_*` 환경에서 다시 처리하고 `semantic-structure-repair.json`까지 검증합니다. 이때도
-원문 payload와 API key는 출력하지 않습니다. 결정적 reconciliation 또는 검증된 LLM 구조
-복구가 모든 불변식을 만족하면 시멘틱 충실도는 `PASS`입니다. 전체 문서 OCR을 사용하거나
-실패한 구조 복구를 lossless block으로 내리면 `WARN`이며, source span 손실이나 예상하지 않은
-중복은 `FAIL`입니다.
-
-## 중복과 버전 규칙
-
-제품 생성 시 기존 ID, product key, alias, 동일 canonical hash는 차단됩니다. 의미적으로 유사한 후보는 자동 병합하지 않고 경고만 생성합니다. 업데이트 시 제품 ID와 product key는 바꿀 수 없고 retired ID는 다시 활성화할 수 없습니다.
-
-테이블은 정규화한 `(source system, catalog, schema, table)` locator가 같으면 전역 ID를 재사용합니다. 같은 locator에 다른 ID를 지정하면 차단하고, locator가 다른데 스키마만 같으면 clone 가능성 경고만 생성합니다. 컬럼 ID는 같은 테이블 안에서 이름/alias로 재사용하며 제거된 컬럼은 retired 처리합니다.
-
-새 엔터티는 반드시 `v1`입니다. 내용이 바뀌면 현재 버전에서 정확히 `+1`, 내용이 같으면 같은 버전을 유지해야 합니다. stale base, 건너뛴 버전, 충돌, `v999` 이후 변경은 차단합니다.
-
-두 제품 이상이 참조하는 테이블을 변경하려면 changeset이 필요합니다. 중앙 `ard/changeset-<id>` 브랜치가 제품별 준비 상태를 직렬화하며 모든 필수 제품 PR이 준비되기 전까지 `ard/changeset`은 pending입니다.
-
-GitHub Actions YAML은 checkout, 권한, Environment, matrix, artifact 전달 같은 플랫폼 선언만
-담습니다. 분류·검증·Git/Release/GitHub mutation은 모두 `uv run --frozen ard ...` lifecycle을
-통해 실행합니다. `production-linkage` 재시도는 dispatch를 다시 보낼 수 있으므로 downstream은
-`(product_id, version, tag, commit)` 튜플을 중복 제거 키로 사용해야 합니다.
-
-Metric과 relationship도 각각 `met_*`, `rel_*` 불변 ID를 Registry의 제품 레코드에 보존합니다. Metric은 읽기 전용 ANSI SQL만 허용하고 알려지지 않은 `table.column` 참조와 변경 SQL을 차단합니다. relationship은 Excel의 `fk_table`/`fk_column`을 현재 제품 테이블에 해석하지 못하면 hard error입니다. 제품 폐기(retire)는 tombstone 전환 파이프라인이 구현되기 전까지 Issue와 `product.yaml`에서 허용하지 않습니다.
-
-## 문서
-
-- [GitHub Actions 설정](docs/github-actions-setup.md)
-- [다음 작업 로드맵](docs/next-steps.md)
-- [상세 아키텍처](docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md)
-- [구현 계획](docs/superpowers/plans/2026-08-08-ard-github-pipeline.md)
+역사적 문서가 현재 코드나 위 정책 문서와 충돌하면 현재 구현과 현재 계약 문서를 따릅니다.
 
 ## 라이선스
 
