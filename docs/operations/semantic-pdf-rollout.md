@@ -73,6 +73,25 @@ coverage, atom ownership, ordering, table-grid, raw-HTML, or other canonical inv
 records contain phase-specific request hashes, candidate IDs, confidences, status codes, and retry
 counts; default diagnostics do not retain raw prompts, responses, source text, or image bytes.
 
+## Local repository verification
+
+The repository check requires immutable commit IDs for the comparison base and exact candidate
+head. Run it only from a clean candidate worktree:
+
+```bash
+BASE_SHA="$(git rev-parse origin/main)"
+HEAD_SHA="$(git rev-parse HEAD)"
+uv run --frozen ard workflow repository-check \
+  --repository "$PWD" \
+  --base-ref "$BASE_SHA" \
+  --head-ref "$HEAD_SHA" \
+  --head-sha "$HEAD_SHA" \
+  --verification-group static
+```
+
+Passing a branch name to `--base-ref` or `--head-ref` is invalid. `--head-ref` and `--head-sha`
+must both equal the checked-out 40-character candidate commit.
+
 ## Stabilization gate
 
 Keep candidate mode enabled only while representative PDFs have 100% authoritative character
