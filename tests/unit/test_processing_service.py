@@ -34,6 +34,7 @@ from ard_ossie.pipeline import (
     ProcessResult,
     ProviderExecutionError,
     ProviderFailureKind,
+    QualityFinding,
     QualityReport,
     QualityStatus,
 )
@@ -232,6 +233,41 @@ def successful_processor(product_path: Path, **kwargs) -> ProcessResult:
             completeness=1,
             hard_errors=[],
             warnings=[],
+            artifact_hashes={},
+        ),
+    )
+
+
+def review_pending_processor(product_path: Path, **kwargs) -> ProcessResult:
+    del kwargs
+    quality = product_path / "quality"
+    quality.mkdir(exist_ok=True)
+    (quality / "semantic-review.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "semantic-review-v1",
+                "entries": [{"validation_codes": ["LLM_SPACING_REPAIR_DEFERRED"]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return ProcessResult(
+        product_id=PRODUCT_ID,
+        product_version=1,
+        generated_dir=product_path / "generated",
+        quality_report=QualityReport(
+            status=QualityStatus.WARN,
+            product_id=PRODUCT_ID,
+            product_version=1,
+            completeness=1,
+            hard_errors=[],
+            warnings=[
+                QualityFinding(
+                    code="LLM_SPACING_REPAIR_DEFERRED",
+                    message="Draft output requires later human review",
+                    path="quality.semantic-review.json",
+                )
+            ],
             artifact_hashes={},
         ),
     )
@@ -668,6 +704,29 @@ def test_processing_promotes_commits_and_sets_exact_head_status(tmp_path: Path) 
         "status",
     ]
     assert all(status[0] == NEW_SHA for status in github.statuses)
+    assert git.pushes == [("ard/example", True)]
+
+
+def test_review_pending_warning_still_writes_and_promotes_draft_artifacts(
+    tmp_path: Path,
+) -> None:
+    repository(tmp_path)
+    git = FakeGit()
+    github = FakeGitHub(git)
+    service = ProcessingService(
+        RepositoryPaths(tmp_path),
+        git,
+        github,
+        processor=review_pending_processor,
+        provider_factory=lambda: None,
+    )
+
+    result = service.run(request(tmp_path))
+
+    assert result.status is WorkflowStatus.SUCCESS
+    assert (tmp_path / "products/sales-order/quality/semantic-review.json").is_file()
+    assert github.get_pr(7).draft is True
+    assert all(state == "success" for _sha, _context, state in github.statuses)
     assert git.pushes == [("ard/example", True)]
 
 

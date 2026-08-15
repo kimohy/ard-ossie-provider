@@ -12,6 +12,7 @@ from ard_ossie.semantic.adjudication import (
     DecisionRecord,
     DecisionReport,
 )
+from ard_ossie.semantic.candidates import make_spacing_candidate
 from ard_ossie.semantic.diagnostics import (
     CandidateDiagnostic,
     EvidenceSummary,
@@ -68,10 +69,58 @@ def _recovered_decision() -> DecisionRecord:
     )
 
 
+def _deferred_decision() -> DecisionRecord:
+    return DecisionRecord(
+        decision_id="decision_0000000000000002",
+        request_hash="6" * 64,
+        source_hash=SOURCE_HASH,
+        evidence_hash="2" * 64,
+        candidate_set_id="candidate_set_0000000000000001",
+        region_id="region_0000000000000001",
+        decision_type="spacing",
+        selected_candidate_id="candidate_0000000000000002",
+        outcome="deferred_review",
+        source="fallback",
+        confidence=0.45,
+        provider="test",
+        model="test",
+        validation_codes=("LLM_SPACING_REPAIR_DEFERRED",),
+        recovery_status="deferred_review",
+        attempts=(
+            AdjudicationAttempt(
+                attempt_index=1,
+                phase="generation",
+                request_hash="7" * 64,
+                confidence=0.91,
+                status="validation_rejected",
+                validation_codes=("SPACING_REPAIR_CHARACTER_MISMATCH",),
+            ),
+        ),
+    )
+
+
+def _deterministic_decision() -> DecisionRecord:
+    return _recovered_decision().model_copy(
+        update={
+            "decision_id": "decision_0000000000000003",
+            "source": "deterministic",
+            "confidence": 1.0,
+            "validation_codes": (),
+            "recovery_status": "not_needed",
+            "attempts": (),
+            "consensus_method": "none",
+            "consensus_candidate_id": None,
+            "recovery_count": 0,
+        }
+    )
+
+
 def _diagnostics(
     secret_text: str = "민감한 원문 데이터 시맨틱 모델",
     *,
-    publication_status: Literal["verified", "review_required", "failed"] = "failed",
+    publication_status: Literal[
+        "verified", "review_pending", "review_required", "failed"
+    ] = "failed",
     decisions: tuple[DecisionRecord, ...] = (),
 ) -> SemanticDiagnostics:
     findings = (
@@ -99,13 +148,17 @@ def _diagnostics(
                 region_id="region_0000000000000001",
                 decision_type="spacing",
                 candidate_count=2,
+                candidate_ids=(
+                    "candidate_0000000000000001",
+                    "candidate_0000000000000002",
+                ),
                 scores=(0.8, 0.75),
             ),
         ),
         decisions=DecisionReport(source_hash=SOURCE_HASH, decisions=decisions),
         validation={
             "status": publication_status,
-            "publishable": publication_status == "verified",
+            "publishable": publication_status in {"verified", "review_pending"},
             "source_hash": SOURCE_HASH,
             "canonical_hash": "5" * 64,
             "findings": findings,
@@ -141,6 +194,47 @@ def test_default_diagnostics_do_not_contain_source_text_or_image_bytes(tmp_path:
     assert not (tmp_path / "raw").exists()
 
 
+def test_generated_decision_report_persists_hashes_without_generated_text(
+    tmp_path: Path,
+) -> None:
+    rendered = "민감한 생성 간격"
+    character_sequence = "민감한생성간격"
+    atom_ids = tuple(
+        f"atom_{index + 1:016x}" for index in range(len(character_sequence))
+    )
+    generated = make_spacing_candidate(
+        region_id="region_0000000000000001",
+        rendered_text=rendered,
+        character_sequence=character_sequence,
+        atom_ids=atom_ids,
+        source_whitespace=tuple(() for _ in range(len(atom_ids) - 1)),
+        score=0.91,
+        features={"llm_generated_spacing": 0.91},
+    )
+    decision = _recovered_decision().model_copy(
+        update={
+            "selected_candidate_id": generated.candidate_id,
+            "source": "generated",
+            "confidence": 0.91,
+            "validation_codes": ("LLM_SPACING_REPAIR_APPLIED",),
+            "recovery_status": "generated",
+            "generated_candidate": generated,
+        }
+    )
+
+    write_semantic_diagnostics(
+        tmp_path,
+        _diagnostics(publication_status="verified", decisions=(decision,)),
+    )
+
+    payload = (tmp_path / "decision-report.json").read_text()
+    persisted = json.loads(payload)["decisions"][0]["generated_candidate"]
+    assert rendered not in payload
+    assert character_sequence not in payload
+    assert persisted["kind"] == "spacing_snapshot"
+    assert persisted["rendered_text_hash"] == hashlib.sha256(rendered.encode()).hexdigest()
+
+
 def test_application_report_records_recovered_decision_as_applied(tmp_path: Path) -> None:
     write_semantic_diagnostics(
         tmp_path,
@@ -163,7 +257,33 @@ def test_application_report_records_recovered_decision_as_applied(tmp_path: Path
             "canonical_hash": "5" * 64,
             "decision_id": "decision_0000000000000001",
             "invariant_codes": [],
-            "outcome": "applied",
+            "outcome": "applied_existing_candidate",
+            "selected_candidate_id": "candidate_0000000000000001",
+            "validation_status": "verified",
+        }
+    ]
+
+
+def test_application_report_records_ordinary_selected_decisions(tmp_path: Path) -> None:
+    write_semantic_diagnostics(
+        tmp_path,
+        _diagnostics(
+            publication_status="verified",
+            decisions=(_deterministic_decision(),),
+        ),
+    )
+
+    applications = json.loads(
+        (tmp_path / "application-report.json").read_text()
+    )["applications"]
+
+    assert applications == [
+        {
+            "candidate_set_id": "candidate_set_0000000000000001",
+            "canonical_hash": "5" * 64,
+            "decision_id": "decision_0000000000000003",
+            "invariant_codes": [],
+            "outcome": "applied_existing_candidate",
             "selected_candidate_id": "candidate_0000000000000001",
             "validation_status": "verified",
         }
@@ -210,6 +330,55 @@ def test_application_report_contains_no_raw_prompt_or_response(tmp_path: Path) -
     assert "민감한 원문 데이터 시맨틱 모델" not in payload
     assert '"prompt"' not in payload
     assert '"response"' not in payload
+
+
+def test_review_pending_writes_durable_bounded_review_debt(tmp_path: Path) -> None:
+    write_semantic_diagnostics(
+        tmp_path,
+        _diagnostics(
+            publication_status="review_pending",
+            decisions=(_deferred_decision(),),
+        ),
+    )
+
+    review = json.loads((tmp_path / "semantic-review.json").read_text())
+    application = json.loads((tmp_path / "application-report.json").read_text())
+
+    assert review["schema_version"] == "semantic-review-v1"
+    entry = review["entries"][0]
+    assert entry["candidate_set_id"] == "candidate_set_0000000000000001"
+    assert entry["fallback_candidate_id"] == "candidate_0000000000000002"
+    assert entry["fallback_policy_version"] == "safe-candidate-fallback-v1"
+    assert entry["candidate_options"] == [
+        {"candidate_id": "candidate_0000000000000001", "score": 0.8},
+        {"candidate_id": "candidate_0000000000000002", "score": 0.75},
+    ]
+    assert entry["attempts"] == [
+        {
+            "attempt_index": 1,
+            "candidate_id": None,
+            "confidence": 0.91,
+            "phase": "generation",
+            "provider_repair_count": 0,
+            "provider_retry_count": 0,
+            "request_hash": "7" * 64,
+            "status": "validation_rejected",
+            "validation_codes": ["SPACING_REPAIR_CHARACTER_MISMATCH"],
+        }
+    ]
+    assert entry["invariant_rejection_codes"] == [
+        "SPACING_REPAIR_CHARACTER_MISMATCH"
+    ]
+    assert entry["replay_identity"] == {
+        "evidence_hash": "2" * 64,
+        "model": "test",
+        "provider": "test",
+        "request_hash": "6" * 64,
+    }
+    assert application["applications"][0]["outcome"] == (
+        "applied_fallback_pending_review"
+    )
+    assert "민감한 원문" not in (tmp_path / "semantic-review.json").read_text()
 
 
 def test_masked_preview_is_bounded_and_short_values_are_disabled() -> None:

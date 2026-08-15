@@ -13,7 +13,12 @@ from typing import Literal
 from pydantic import Field
 
 from ard_ossie.models import Sha256
-from ard_ossie.semantic.adjudication import DecisionId, DecisionRecord, DecisionReport
+from ard_ossie.semantic.adjudication import (
+    DecisionId,
+    DecisionRecord,
+    DecisionReport,
+    diagnostic_decision_record,
+)
 from ard_ossie.semantic.candidates import CandidateId, CandidateSetId
 from ard_ossie.semantic.canonical import SemanticValidationReport
 from ard_ossie.semantic.evidence import RegionId
@@ -44,6 +49,7 @@ class CandidateDiagnostic(ImmutableStrictModel):
     region_id: RegionId
     decision_type: str = Field(min_length=1, max_length=40)
     candidate_count: int = Field(ge=1, le=5)
+    candidate_ids: tuple[CandidateId, ...] = Field(min_length=1, max_length=5)
     scores: tuple[float, ...] = Field(min_length=1, max_length=5)
 
 
@@ -52,8 +58,16 @@ class DecisionApplicationRecord(ImmutableStrictModel):
     candidate_set_id: CandidateSetId
     selected_candidate_id: CandidateId
     canonical_hash: Sha256
-    validation_status: Literal["verified", "review_required", "failed"]
-    outcome: Literal["applied", "not_published", "rejected_by_invariant"]
+    validation_status: Literal[
+        "verified", "review_pending", "review_required", "failed"
+    ]
+    outcome: Literal[
+        "applied_existing_candidate",
+        "applied_generated_repair",
+        "applied_fallback_pending_review",
+        "not_published",
+        "rejected_by_invariant",
+    ]
     invariant_codes: tuple[str, ...] = ()
 
 
@@ -62,7 +76,11 @@ class ApplicationReport(ImmutableStrictModel):
     primary_attempt_count: int = Field(ge=0)
     confidence_recovery_attempt_count: int = Field(ge=0)
     tie_break_attempt_count: int = Field(ge=0)
+    generation_attempt_count: int = Field(ge=0)
+    verification_attempt_count: int = Field(ge=0)
     recovered_decision_count: int = Field(ge=0)
+    generated_decision_count: int = Field(ge=0)
+    deferred_review_count: int = Field(ge=0)
     unresolved_low_confidence_count: int = Field(ge=0)
     applications: tuple[DecisionApplicationRecord, ...] = ()
 
@@ -71,7 +89,9 @@ class SemanticDiagnostics(ImmutableStrictModel):
     source_hash: Sha256
     configuration_hash: Sha256
     mode: Literal["legacy", "shadow", "candidate"]
-    publication_status: Literal["verified", "review_required", "failed"]
+    publication_status: Literal[
+        "verified", "review_pending", "review_required", "failed"
+    ]
     stage: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9_-]+$")
     evidence: EvidenceSummary
     candidates: tuple[CandidateDiagnostic, ...]
@@ -110,6 +130,9 @@ def build_semantic_diagnostics(
                 region_id=candidate_set.region_id,
                 decision_type=candidate_set.decision_type,
                 candidate_count=len(candidate_set.candidates),
+                candidate_ids=tuple(
+                    candidate.candidate_id for candidate in candidate_set.candidates
+                ),
                 scores=tuple(candidate.score for candidate in candidate_set.candidates),
             )
             for candidate_set in result.candidate_sets
@@ -144,7 +167,11 @@ def write_semantic_diagnostics(
     destination.mkdir(parents=True, exist_ok=True)
     encoded = semantic_diagnostic_payloads(diagnostics)
     written: list[Path] = []
-    for name in DIAGNOSTIC_REPORT_NAMES:
+    report_names = (
+        *DIAGNOSTIC_REPORT_NAMES,
+        *(("semantic-review.json",) if "semantic-review.json" in encoded else ()),
+    )
+    for name in report_names:
         path = destination / name
         _atomic_write(path, encoded[name])
         written.append(path)
@@ -179,7 +206,13 @@ def semantic_diagnostic_payloads(
             ],
             "image_hashes": [hashlib.sha256(value).hexdigest() for value in diagnostics.raw_images],
         },
-        "decision-report.json": diagnostics.decisions.model_dump(mode="json"),
+        "decision-report.json": DecisionReport(
+            source_hash=diagnostics.decisions.source_hash,
+            decisions=tuple(
+                diagnostic_decision_record(decision)
+                for decision in diagnostics.decisions.decisions
+            ),
+        ).model_dump(mode="json"),
         "application-report.json": application_report.model_dump(mode="json"),
         "validation-report.json": diagnostics.validation.model_dump(mode="json"),
         "failure-report.json": {
@@ -189,6 +222,69 @@ def semantic_diagnostic_payloads(
             "failure_codes": diagnostics.failure_codes,
         },
     }
+    deferred = tuple(
+        decision
+        for decision in diagnostics.decisions.decisions
+        if decision.outcome == "deferred_review"
+    )
+    if deferred:
+        candidates_by_set = {
+            item.candidate_set_id: item for item in diagnostics.candidates
+        }
+        reports["semantic-review.json"] = {
+            "schema_version": "semantic-review-v1",
+            "source_hash": diagnostics.source_hash,
+            "entries": [
+                {
+                    "decision_id": decision.decision_id,
+                    "candidate_set_id": decision.candidate_set_id,
+                    "region_id": decision.region_id,
+                    "decision_type": decision.decision_type,
+                    "terminal_status": decision.outcome,
+                    "fallback_candidate_id": decision.selected_candidate_id,
+                    "fallback_policy_version": "safe-candidate-fallback-v1",
+                    "confidence": decision.confidence,
+                    "validation_codes": decision.validation_codes,
+                    "candidate_options": [
+                        {"candidate_id": candidate_id, "score": score}
+                        for candidate_id, score in zip(
+                            candidates_by_set[decision.candidate_set_id].candidate_ids,
+                            candidates_by_set[decision.candidate_set_id].scores,
+                            strict=True,
+                        )
+                    ],
+                    "attempts": [
+                        {
+                            "attempt_index": attempt.attempt_index,
+                            "phase": attempt.phase,
+                            "request_hash": attempt.request_hash,
+                            "candidate_id": attempt.candidate_id,
+                            "confidence": attempt.confidence,
+                            "status": attempt.status,
+                            "validation_codes": attempt.validation_codes,
+                            "provider_retry_count": attempt.provider_retry_count,
+                            "provider_repair_count": attempt.provider_repair_count,
+                        }
+                        for attempt in decision.attempts
+                    ],
+                    "invariant_rejection_codes": list(
+                        dict.fromkeys(
+                            code
+                            for attempt in decision.attempts
+                            if attempt.status == "validation_rejected"
+                            for code in attempt.validation_codes
+                        )
+                    ),
+                    "replay_identity": {
+                        "request_hash": decision.request_hash,
+                        "evidence_hash": decision.evidence_hash,
+                        "provider": decision.provider,
+                        "model": decision.model,
+                    },
+                }
+                for decision in deferred
+            ],
+        }
     encoded = {name: _json_bytes(payload) for name, payload in reports.items()}
     manifest = {
         "schema_version": "semantic-diagnostics-v1",
@@ -208,26 +304,30 @@ def _application_report(diagnostics: SemanticDiagnostics) -> ApplicationReport:
     attempts = tuple(
         attempt for decision in diagnostics.decisions.decisions for attempt in decision.attempts
     )
-    recovered = tuple(
+    tracked = tuple(
         decision
         for decision in diagnostics.decisions.decisions
-        if decision.recovery_status == "recovered"
+        if decision.selected_candidate_id is not None
     )
-    if diagnostics.publication_status == "verified":
-        outcome = "applied"
-    elif diagnostics.publication_status == "review_required":
-        outcome = "not_published"
-    else:
-        outcome = "rejected_by_invariant"
     invariant_codes = (
         tuple(finding.code for finding in diagnostics.validation.findings)
         if diagnostics.publication_status == "failed"
         else ()
     )
     applications: list[DecisionApplicationRecord] = []
-    for decision in recovered:
+    for decision in tracked:
         if decision.selected_candidate_id is None:
             raise ValueError("RECOVERED_DECISION_CANDIDATE_MISSING")
+        if diagnostics.publication_status == "failed":
+            outcome = "rejected_by_invariant"
+        elif diagnostics.publication_status == "review_required":
+            outcome = "not_published"
+        elif decision.recovery_status == "generated":
+            outcome = "applied_generated_repair"
+        elif decision.recovery_status == "deferred_review":
+            outcome = "applied_fallback_pending_review"
+        else:
+            outcome = "applied_existing_candidate"
         applications.append(
             DecisionApplicationRecord(
                 decision_id=decision.decision_id,
@@ -244,7 +344,19 @@ def _application_report(diagnostics: SemanticDiagnostics) -> ApplicationReport:
         primary_attempt_count=sum(attempt.phase == "primary" for attempt in attempts),
         confidence_recovery_attempt_count=sum(attempt.phase == "recovery" for attempt in attempts),
         tie_break_attempt_count=sum(attempt.phase == "tiebreak" for attempt in attempts),
-        recovered_decision_count=len(recovered),
+        generation_attempt_count=sum(attempt.phase == "generation" for attempt in attempts),
+        verification_attempt_count=sum(
+            attempt.phase == "verification" for attempt in attempts
+        ),
+        recovered_decision_count=sum(
+            decision.recovery_status == "recovered" for decision in tracked
+        ),
+        generated_decision_count=sum(
+            decision.recovery_status == "generated" for decision in tracked
+        ),
+        deferred_review_count=sum(
+            decision.recovery_status == "deferred_review" for decision in tracked
+        ),
         unresolved_low_confidence_count=sum(
             decision.recovery_status == "review_required"
             for decision in diagnostics.decisions.decisions

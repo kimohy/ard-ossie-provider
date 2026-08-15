@@ -137,17 +137,6 @@ def parse_semantic_pdf_v2(
     layout = normalize_layout(evidence, hints)
     scorer = spacing_scorer or KiwiSpacingScorer()
 
-    spacing_sets = tuple(
-        build_spacing_candidate_set(
-            region=region,
-            evidence=evidence,
-            layout=layout,
-            scorer=scorer,
-        )
-        for region in layout.regions
-        if any(not _atom_text(evidence, atom_id).isspace() for atom_id in region.atom_ids)
-        and not region.repeated_edge
-    )
     block_sets = build_block_candidate_sets(evidence=evidence, layout=layout, hints=hints)
     reading_set = build_reading_order_candidate_set(layout)
     continuation_sets = build_continuation_candidate_sets(layout)
@@ -167,6 +156,20 @@ def parse_semantic_pdf_v2(
                     spacing_scorer=scorer,
                 )
             )
+
+    table_regions = {candidate_set.region_id for candidate_set in table_sets}
+    spacing_sets = tuple(
+        build_spacing_candidate_set(
+            region=region,
+            evidence=evidence,
+            layout=layout,
+            scorer=scorer,
+        )
+        for region in layout.regions
+        if region.region_id not in table_regions
+        and any(not _atom_text(evidence, atom_id).isspace() for atom_id in region.atom_ids)
+        and not region.repeated_edge
+    )
 
     remaining_sets = (
         *spacing_sets,
@@ -236,7 +239,9 @@ def canonical_fidelity_report(
     region_atoms = {region.region_id: region.atom_ids for region in evidence.regions}
     atom_catalog = {atom.atom_id: atom for atom in evidence.atoms}
     for order, decision in enumerate(
-        item for item in document.decisions if item.outcome == "review_required"
+        item
+        for item in document.decisions
+        if item.outcome in {"review_required", "deferred_review"}
     ):
         atom_ids = region_atoms.get(decision.region_id, ())
         if not atom_ids:
@@ -274,9 +279,10 @@ def canonical_fidelity_report(
     )
     if validation.status is SemanticPipelineStatus.FAILED:
         status = "FAIL"
-    elif validation.status is SemanticPipelineStatus.REVIEW_REQUIRED or (
-        extraction_mode is ExtractionMode.OCR
-    ):
+    elif validation.status in {
+        SemanticPipelineStatus.REVIEW_REQUIRED,
+        SemanticPipelineStatus.REVIEW_PENDING,
+    } or extraction_mode is ExtractionMode.OCR:
         status = "WARN"
     else:
         status = "PASS"

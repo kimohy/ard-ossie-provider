@@ -76,6 +76,8 @@ class ReplayCandidateProvider:
     def __init__(self) -> None:
         self.calls = 0
         self.recovery_calls = 0
+        self.generation_calls = 0
+        self.verification_calls = 0
         self.max_candidate_count = 0
 
     def capabilities(self) -> dict[str, object]:
@@ -94,11 +96,35 @@ class ReplayCandidateProvider:
         del schema
         request = json.loads(messages[-1]["content"])
         candidates = request["candidates"]
-        phase = request["phase"]
         candidate_set_id = request["candidate_set_id"]
         if not isinstance(candidates, list) or not candidates:
             raise Issue3VerificationError("EVIDENCE_REPLAY_CANDIDATES_EMPTY")
         self.calls += 1
+        task = request.get("task")
+        if task == "generate_whitespace_repair":
+            self.generation_calls += 1
+            anchor_id = request["anchor_candidate_id"]
+            anchor = next(
+                candidate
+                for candidate in candidates
+                if candidate["candidate_id"] == anchor_id
+            )
+            structured = {
+                "rendered_text": anchor["rendered_text"],
+                "confidence": 0.99,
+                "repair_reasons": ["korean_morphology"],
+            }
+            return self._result(structured)
+        if task == "verify_whitespace_repair":
+            self.verification_calls += 1
+            structured = {
+                "candidate_id": request["generated_candidate_id"],
+                "confidence": 0.99,
+                "validation_codes": [],
+            }
+            return self._result(structured)
+
+        phase = request["phase"]
         if phase in {"recovery", "tiebreak"}:
             self.recovery_calls += 1
         self.max_candidate_count = max(self.max_candidate_count, len(candidates))
@@ -128,6 +154,10 @@ class ReplayCandidateProvider:
             self.LOW_CONFIDENCE_PRIMARY.get(candidate_set_id, 0.99) if phase == "primary" else 0.99
         )
         structured = {"candidate_id": selected, "confidence": confidence}
+        return self._result(structured)
+
+    @staticmethod
+    def _result(structured: dict[str, object]) -> LLMResult:
         return LLMResult(
             text=json.dumps(structured, sort_keys=True),
             structured=structured,
@@ -287,22 +317,15 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "EVIDENCE_REPLAY_FORBIDDEN_STRING",
     )
     _require("<pre" not in result.markdown, "EVIDENCE_REPLAY_RAW_HTML")
-    candidate_sets = {item.candidate_set_id: item for item in result.candidate_sets}
-    decisions = {item.candidate_set_id: item for item in result.decisions.decisions}
-    for candidate_set_id, expected in golden["recovered_candidates"].items():
-        decision = decisions[candidate_set_id]
-        selected = next(
-            candidate
-            for candidate in candidate_sets[candidate_set_id].candidates
-            if candidate.candidate_id == decision.selected_candidate_id
-        )
+    for region_id, expected_rows in golden["exact_tables"].items():
         _require(
-            decision.selected_candidate_id == expected["candidate_id"],
-            "EVIDENCE_REPLAY_RECOVERED_CANDIDATE",
+            _canonical_table_rows(result, region_id) == expected_rows,
+            "EVIDENCE_REPLAY_EXACT_TABLE",
         )
+        block = next(item for item in result.canonical.blocks if item.region_id == region_id)
         _require(
-            selected.rendered_text == expected["rendering"],
-            "EVIDENCE_REPLAY_RECOVERED_RENDERING",
+            block.text == "\n".join("\t".join(row) for row in expected_rows),
+            "EVIDENCE_REPLAY_EXACT_TABLE_TEXT",
         )
     _require(
         result.validation.canonical_hash == repeated.validation.canonical_hash,
@@ -319,9 +342,23 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
             decision.recovery_status == "recovered" for decision in result.decisions.decisions
         ),
         "recovery_model_calls": provider.recovery_calls,
+        "generation_model_calls": provider.generation_calls,
+        "verification_model_calls": provider.verification_calls,
         "cache_model_calls": repeated_provider.calls,
+        "exact_table_count": len(golden["exact_tables"]),
         "max_candidate_count": provider.max_candidate_count,
     }
+
+
+def _canonical_table_rows(
+    result: SemanticPipelineResult,
+    region_id: str,
+) -> list[list[str]]:
+    block = next(item for item in result.canonical.blocks if item.region_id == region_id)
+    rows = [["" for _ in range(block.column_count or 0)] for _ in range(block.row_count or 0)]
+    for cell in block.cells:
+        rows[cell.start_row][cell.start_column] = cell.text
+    return rows
 
 
 def _structure_block_payload(block: StructureBlock) -> dict[str, object]:
