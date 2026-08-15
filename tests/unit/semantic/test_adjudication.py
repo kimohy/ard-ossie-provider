@@ -234,6 +234,50 @@ def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> No
     assert len(evidence_miss_provider.calls) == 1
 
 
+def test_trusted_recovered_decision_reuses_full_audit_without_provider_call() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    first_provider = RecordingProvider(
+        [
+            {"candidate_id": selected, "confidence": 0.70},
+            {"candidate_id": selected, "confidence": 0.92},
+        ]
+    )
+    recovered = CandidateAdjudicator(first_provider).decide(candidate_set)
+    reuse_provider = RecordingProvider()
+
+    reused = CandidateAdjudicator(reuse_provider, trusted=(recovered,)).decide(candidate_set)
+
+    assert reused.source == "cache"
+    assert reused.selected_candidate_id == selected
+    assert reused.recovery_status == "recovered"
+    assert reused.consensus_method == "same_candidate"
+    assert reused.consensus_candidate_id == selected
+    assert reused.attempts == recovered.attempts
+    assert reused.recovery_count == 1
+    assert reuse_provider.calls == []
+
+
+def test_invalid_trusted_consensus_is_ignored() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    invalid = recovered.model_copy(update={"consensus_candidate_id": "candidate_ffffffffffffffff"})
+    provider = RecordingProvider([{"candidate_id": selected, "confidence": 0.93}])
+
+    fresh = CandidateAdjudicator(provider, trusted=(invalid,)).decide(candidate_set)
+
+    assert fresh.source != "cache"
+    assert len(provider.calls) == 1
+
+
 def test_unavailable_provider_requires_review() -> None:
     unavailable = CandidateAdjudicator(None).decide(_spacing_set(0.80, 0.75))
     assert unavailable.outcome == "review_required"

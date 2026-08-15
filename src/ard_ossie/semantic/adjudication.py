@@ -199,32 +199,20 @@ class CandidateAdjudicator:
             (
                 item
                 for item in self.trusted
-                if item.request_hash == request_hash
-                and item.source_hash == candidate_set.source_hash
-                and item.evidence_hash == resolved_evidence_hash
-                and item.candidate_set_id == candidate_set.candidate_set_id
-                and item.region_id == candidate_set.region_id
-                and item.provider == provider_name
-                and item.model == model
-                and item.outcome == "selected"
-                and item.selected_candidate_id in allowlist
+                if _trusted_decision_matches(
+                    item,
+                    candidate_set=candidate_set,
+                    request_hash=request_hash,
+                    evidence_hash=resolved_evidence_hash,
+                    provider=provider_name,
+                    model=model,
+                    allowlist=allowlist,
+                )
             ),
             None,
         )
         if trusted is not None:
-            return _record(
-                candidate_set,
-                request_hash=request_hash,
-                evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=trusted.selected_candidate_id,
-                outcome="selected",
-                source="cache",
-                confidence=trusted.confidence,
-                provider=provider_name,
-                model=model,
-                retry_count=trusted.retry_count,
-                repair_count=trusted.repair_count,
-            )
+            return _cached_record(trusted)
 
         if self._service is None:
             return _record(
@@ -755,6 +743,62 @@ def _attempt_request_hash(
             "phase": phase,
             "attempt_index": attempt_index,
             "messages_hash": canonical_hash(messages),
+        }
+    )
+
+
+def _trusted_decision_matches(
+    decision: DecisionRecord,
+    *,
+    candidate_set: CandidateSet,
+    request_hash: Sha256,
+    evidence_hash: Sha256,
+    provider: str,
+    model: str,
+    allowlist: set[CandidateId],
+) -> bool:
+    if not (
+        decision.request_hash == request_hash
+        and decision.source_hash == candidate_set.source_hash
+        and decision.evidence_hash == evidence_hash
+        and decision.candidate_set_id == candidate_set.candidate_set_id
+        and decision.region_id == candidate_set.region_id
+        and decision.provider == provider
+        and decision.model == model
+        and decision.outcome == "selected"
+        and decision.selected_candidate_id in allowlist
+    ):
+        return False
+    if decision.recovery_status != "recovered":
+        return decision.consensus_method == "none" and decision.recovery_count == 0
+    if not (
+        decision.consensus_method in {"same_candidate", "two_of_three"}
+        and decision.consensus_candidate_id == decision.selected_candidate_id
+        and decision.consensus_candidate_id in allowlist
+        and decision.attempts
+    ):
+        return False
+    indexes = tuple(item.attempt_index for item in decision.attempts)
+    if indexes != tuple(range(1, len(indexes) + 1)):
+        return False
+    recovery_phases = {
+        item.phase for item in decision.attempts if item.phase in {"recovery", "tiebreak"}
+    }
+    return len(recovery_phases) == decision.recovery_count
+
+
+def _cached_record(trusted: DecisionRecord) -> DecisionRecord:
+    digest = canonical_hash(
+        {
+            "trusted_decision_id": trusted.decision_id,
+            "request_hash": trusted.request_hash,
+            "source": "cache",
+        }
+    )
+    return trusted.model_copy(
+        update={
+            "decision_id": f"decision_{digest[:16]}",
+            "source": "cache",
         }
     )
 
