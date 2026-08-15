@@ -91,7 +91,7 @@ Markdown renderer는 canonical block만 입력으로 받습니다. source에 필
 - 비어 있지 않고 raw HTML이 없는 Markdown
 - stable canonical hash
 
-`review_required` decision이 있으면 invariant finding이 없어도 게시를 차단합니다. `deferred_review`만 있으면 `review_pending`으로 게시 가능하며 검토 부채를 남깁니다.
+`review_required` decision이 있으면 invariant finding이 없어도 canonical 승격을 차단합니다. `deferred_review`만 있으면 `review_pending`으로 generated output과 PR 처리를 계속하고 검토 부채를 남깁니다. 이 상태는 numeric release 대상이 아니며 검토 부채를 해결한 재처리가 `verified`가 되어야 릴리스할 수 있습니다.
 
 ### 10. 원자적 게시
 
@@ -111,11 +111,11 @@ generated 파일, quality 보고서, Registry snapshot을 candidate directory에
 | decision | `deferred_review` | 안전한 fallback을 적용했으며 사람의 후속 검토가 필요함 |
 | decision | `review_required` | 안전하게 적용할 후보가 없어 게시할 수 없음 |
 | validation | `verified` | invariant와 decision이 모두 해결됨 |
-| validation | `review_pending` | fallback을 포함한 canonical이 invariant를 통과해 게시 가능함 |
+| validation | `review_pending` | fallback canonical의 generated output·PR 계속 가능, immutable release 불가 |
 | validation | `review_required` | unresolved decision 때문에 게시 불가 |
 | validation | `failed` | 전역 invariant 위반으로 게시 불가 |
 | fidelity | `PASS` | 경고 없이 충실도 조건 통과 |
-| fidelity | `WARN` | 게시 가능하지만 OCR, 복구 또는 review audit가 있음 |
+| fidelity | `WARN` | canonical은 유효하지만 OCR, 복구 또는 review audit가 있음; release 여부는 validation status로 별도 판단 |
 | fidelity | `FAIL` | source span 손실·중복 등 필수 충실도 위반 |
 
 ## Application outcome

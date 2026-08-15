@@ -63,7 +63,7 @@ Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니�
 
 - [ ] 비소유자 writer를 준비한 뒤 1인 review protection을 활성화합니다.
 - [ ] exit `30`, exit `70`, `TAG_TARGET_CONFLICT`, LFS 누락, symlink, 혼합 code/data PR 복구를 리허설합니다.
-- [ ] `review_pending`의 후속 검토 처리와 `review_required`의 차단·재처리를 운영자가 구분하는지 확인합니다.
+- [ ] `review_pending`의 PR 계속 처리·merge 보류·release 차단과 `review_required`의 canonical 차단·재처리를 운영자가 구분하는지 확인합니다.
 - [ ] downstream consumer가 `(product_id, version, tag, commit)`으로 중복 dispatch를 제거하는지 검증합니다.
 - [ ] 실패 run과 수렴한 최종 상태를 함께 보존하는 incident template을 만듭니다.
 

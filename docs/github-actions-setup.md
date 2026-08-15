@@ -115,7 +115,7 @@ uv run ard llm smoke-test --profile openai-compatible-default
 정상이며 credential 성공을 의미하지 않습니다. 실제 연결 검증은 보호된 smoke workflow로
 수행합니다.
 
-`ARD_SEMANTIC_PDF_PIPELINE=candidate`는 전역 invariant를 통과한 canonical Markdown을 게시합니다. 모델 판단이 끝나지 않아도 결정적으로 안전한 fallback이 있으면 `review_pending`으로 계속하고 `semantic-review.json`을 남깁니다. 안전한 후보가 없는 `review_required`와 전역 invariant가 깨진 `failed`만 게시를 차단합니다. `WARN`을 무조건 실패로 취급하지 말고 `validation-report.json`, `application-report.json`, `semantic-review.json`의 적용 상태를 함께 확인하세요.
+`ARD_SEMANTIC_PDF_PIPELINE=candidate`는 전역 invariant를 통과한 canonical Markdown을 생성합니다. 모델 판단이 끝나지 않아도 결정적으로 안전한 fallback이 있으면 `review_pending`으로 generated output과 PR 처리를 계속하고 `semantic-review.json`을 남깁니다. 안전한 후보가 없는 `review_required`와 전역 invariant가 깨진 `failed`는 canonical 승격을 차단합니다. `WARN`을 무조건 실패로 취급하지 말고 `validation-report.json`, `application-report.json`, `semantic-review.json`의 적용 상태를 함께 확인하세요. 다만 `review_pending` PR은 병합하지 않습니다. 숫자 릴리스는 semantic validation이 정확히 `verified`일 때만 허용되므로, 검토 부채를 해결한 뒤 재처리합니다.
 
 `ard-llm`과 `production-linkage`의 deployment branch는 모두 `main`만 허용합니다. direct branch의 push workflow는 `contents: read` signal만 남기고, 기본 브랜치에서 로드되는 `workflow_run` coordinator가 exact candidate를 검증한 뒤 보호된 processor를 호출합니다. processor는 `trusted/`의 기본 브랜치 CLI만 실행하고 candidate checkout은 `--repository`로 지정한 데이터와 Git state로만 사용합니다. API 키는 credential-free validation job, fork PR, artifact, commit 또는 PR 코멘트에 전달하지 않습니다. Secret 값은 public ARD 문서에 절대로 포함하면 안 됩니다.
 

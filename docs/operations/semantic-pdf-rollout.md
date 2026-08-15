@@ -21,11 +21,11 @@ GitHub processor는 `ARD_SEMANTIC_PDF_PIPELINE`이 없으면 `candidate`를 사�
 | 관찰 | 판정 | 조치 |
 |---|---|---|
 | `verified`, `publishable=true` | 정상 게시 | warning의 감사 이유만 확인 |
-| `review_pending`, `publishable=true` | 안전한 fallback 게시 | `semantic-review.json`을 후속 개선 항목에 연결 |
+| `review_pending`, `publishable=true` | 안전한 fallback으로 generated output·PR 계속 가능, numeric release 불가 | `semantic-review.json`의 부채를 해결하고 `verified`로 재처리할 때까지 merge 보류 |
 | `review_required`, `publishable=false` | 안전한 후보 없음 | 후보·scorer·LLM contract 개선 후 재처리 |
 | `failed`, `publishable=false` | 전역 invariant 실패 | source loss, duplicate, grid, Markdown finding부터 수정 |
 
-`WARN`만 보고 실패로 판단하지 않습니다. OCR, 검증된 spacing repair, review debt, 제외된 선택적 metric은 게시 가능한 경고일 수 있습니다. `hard_errors`, `publishable`, invariant finding을 함께 봅니다.
+`WARN`만 보고 실패로 판단하지 않습니다. OCR, 검증된 spacing repair, review debt, 제외된 선택적 metric은 canonical 생성이 가능한 경고일 수 있습니다. `hard_errors`, validation `status`와 `publishable`, invariant finding을 함께 봅니다. `review_pending`은 파이프라인을 멈추지 않지만 immutable release는 `SEMANTIC_VALIDATION_NOT_VERIFIED`로 차단됩니다.
 
 ## 저신뢰와 공백 복구 triage
 
@@ -48,7 +48,7 @@ GitHub processor는 `ARD_SEMANTIC_PDF_PIPELINE`이 없으면 `candidate`를 사�
 - `llm-suggestions.json`에는 검증을 통과한 제안만 있음
 - 기존 Registry metric이 제외된 suggestion 이름 때문에 삭제되지 않음
 
-이 조건을 만족하면 문서 변환과 릴리스를 계속할 수 있습니다.
+이 조건을 만족하고 validation status가 `verified`이면 문서 변환과 릴리스를 계속할 수 있습니다. 별도 review debt 때문에 `review_pending`이면 suggestion 자체는 hard error가 아니어도 merge와 릴리스는 보류합니다.
 
 ## 증거 보존
 
@@ -119,35 +119,26 @@ gh release view 'product/PRODUCT_ID/vN'
 
 result envelope의 exit, finding, `outputs.commit`, `outputs.artifact_sha256`, mutations를 읽습니다. product/table tag의 실제 peeled target과 Release asset을 대조합니다. tag나 Release가 일부 생겼으면 삭제하거나 이동하지 않습니다.
 
-### 2. 원격 immutable mutation이 없을 때
+### 2. 원래 릴리스 identity 고정
 
-tag, Release, dispatch status가 **모두 없다는 것이 확인된 경우에만** 수정된 최신 `main`에서 수동 release를 새로 시작할 수 있습니다. 보호된 maintainer 환경의 clean checkout에서 source LFS 객체와 tag를 받은 뒤 실행합니다.
-
-```bash
-CURRENT="$(git rev-parse HEAD)"
-uv run --frozen ard workflow release-product \
-  --product-key PRODUCT_KEY \
-  --current "$CURRENT" \
-  --table-ids '["TABLE_ID"]' \
-  --output dist \
-  --repository-name OWNER/REPO
-```
-
-CLI는 annotated tag를 만들기 전에 repository-local bot identity를 설정합니다. 같은 tag가 같은 commit이면 재사용하고, 다른 commit이면 이동하지 않고 `TAG_TARGET_CONFLICT`로 실패합니다.
-
-### 3. tag 또는 Release가 일부 존재할 때
-
-이미 생성된 immutable mutation이 하나라도 있으면 최신 `main`으로 바꾸지 않습니다. result의 `outputs.commit`과 원격 tag target이 같은지 확인하고, 외부 원인을 해소한 뒤 원래 run을 재실행합니다.
+원격 mutation 유무와 관계없이 실패한 version은 원래 merge commit과 최초 `TABLE_IDS` 입력에 묶입니다. 최신 `main`으로 바꾸면 다른 Registry snapshot/version을 선택할 수 있으므로 사용하지 않습니다. result의 `outputs.commit`과 workflow head가 같은지 먼저 확인하고, existing tag가 있다면 각 peeled target도 같은 commit인지 대조합니다.
 
 ```bash
 ORIGINAL_COMMIT="$(jq -r '.outputs.commit' .ard/run/workflow.release-product-result.json)"
 RUN_HEAD="$(gh run view RUN_ID --json headSha --jq .headSha)"
 test "$ORIGINAL_COMMIT" = "$RUN_HEAD"
 git ls-remote --tags origin 'product/*' 'table/*'
-gh run rerun RUN_ID
 ```
 
 출력된 existing tag 각각의 peeled target이 `ORIGINAL_COMMIT`과 같은지 확인합니다. 하나라도 다르면 재실행하지 않고 `TAG_TARGET_CONFLICT` incident로 전환합니다.
+
+### 3. 원래 run 또는 exact commit 재실행
+
+네트워크·권한·provider 같은 외부 원인을 해소했다면 `gh run rerun RUN_ID`가 exact commit과 workflow를 재사용합니다. 위 명령을 실행한 경우 새 run의 head도 `ORIGINAL_COMMIT`인지 확인합니다.
+
+```bash
+gh run rerun RUN_ID
+```
 
 원래 run이 없는 수동 복구라면 exact original commit을 detached checkout하고, 최초 run의 `TABLE_IDS` 입력을 그대로 재사용합니다. 값이나 version을 추정하지 않습니다.
 
@@ -165,6 +156,8 @@ uv run --frozen ard workflow release-product \
   --output dist \
   --repository-name OWNER/REPO
 ```
+
+CLI는 annotated tag를 만들기 전에 repository-local bot identity를 설정합니다. 같은 tag가 같은 commit이면 재사용하고, 다른 commit이면 이동하지 않고 `TAG_TARGET_CONFLICT`로 실패합니다.
 
 원래 commit의 release 구현 자체가 결함이면 이 경로로 수렴시킬 수 없습니다. tag를 이동·삭제하거나 수정 commit에서 같은 version을 재게시하지 말고 incident를 열어 원래 tag/asset 상태를 보존한 채 별도 복구 정책을 승인받습니다.
 

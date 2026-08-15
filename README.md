@@ -135,10 +135,10 @@ OpenAI-compatible, Azure OpenAI, Vertex AI Gemini, Vertex AI Claude 프로필을
 | 상태 | 의미 | 다음 조치 |
 |---|---|---|
 | `PASS` | 경고 없이 필수 조건 통과 | 게시 가능 |
-| `WARN` | 게시 가능하지만 OCR, 검증된 복구, review debt 또는 제외된 선택적 제안이 있음 | 관련 audit 확인 후 진행 |
+| `WARN` | canonical 생성은 가능하지만 OCR, 검증된 복구, review debt 또는 제외된 선택적 제안이 있음 | audit와 validation status 확인 |
 | `FAIL` | source loss, schema, identity, table grid 등 필수 계약 위반 | 게시하지 않고 원인 수정 |
 
-`WARN`을 자동 실패로 해석하지 않습니다. `quality-report.json`의 `hard_errors`, `validation-report.json`의 `publishable`, `application-report.json`의 실제 적용 결과를 함께 확인합니다.
+`WARN`을 자동 실패로 해석하지 않습니다. `quality-report.json`의 `hard_errors`, `validation-report.json`의 `status`와 `publishable`, `application-report.json`의 실제 적용 결과를 함께 확인합니다. 단, `review_pending`의 `publishable=true`는 generated output과 PR을 계속 만들 수 있다는 뜻이며 숫자 릴리스 허가는 아닙니다. immutable release는 semantic validation이 `verified`일 때만 가능합니다.
 
 ### Lifecycle exit code
 

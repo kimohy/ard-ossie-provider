@@ -67,21 +67,21 @@ verification 응답의 `validation_codes=[]`가 정상 계약입니다. 호환�
 
 ## 게시 판정
 
-개별 decision과 문서 게시 상태는 서로 다른 층입니다.
+개별 decision과 canonical/generated 승격 상태는 서로 다른 층입니다. 아래 `게시`는 검증된 파일을 제품 branch/PR에 승격한다는 의미이며, immutable 숫자 릴리스 자격은 별도로 `verified`를 요구합니다.
 
 | 상태 | 의미 | 게시 |
 |---|---|---|
 | `selected` | 결정적·모델·복구 후보 하나가 선택됨 | 전역 검증 결과에 따름 |
-| `deferred_review` | 안전한 fallback을 적용했고 검토 부채가 남음 | 전역 invariant가 통과하면 가능 |
+| `deferred_review` | 안전한 fallback을 적용했고 검토 부채가 남음 | 전역 invariant가 통과하면 generated output·PR 가능, release 불가 |
 | `review_required` | 적용할 안전한 후보가 없음 | 불가 |
-| `verified` | 모든 decision과 전역 invariant가 해결됨 | 가능 |
-| `review_pending` | fallback을 적용했고 전역 invariant가 통과함 | 가능, `WARN`과 review 기록 유지 |
+| `verified` | 모든 decision과 전역 invariant가 해결됨 | canonical 게시 가능, 다른 release gate도 통과하면 immutable release 가능 |
+| `review_pending` | fallback을 적용했고 전역 invariant가 통과함 | generated output·PR 계속 가능, `WARN`과 review 기록 유지; immutable release는 불가 |
 | `failed` | source loss, 중복, grid, Markdown 등 invariant 위반 | 불가 |
 
 품질 최종 상태는 다음처럼 해석합니다.
 
 - `PASS`: 필수 invariant와 품질 조건이 모두 통과했고 경고가 없습니다.
-- `WARN`: 게시 가능한 결과지만 OCR 사용, 감사된 LLM 복구, review debt 또는 제외된 선택적 제안이 있습니다.
+- `WARN`: canonical 생성이 가능한 결과지만 OCR 사용, 감사된 LLM 복구, review debt 또는 제외된 선택적 제안이 있습니다. `review_pending`이면 PR에서 후속 검토를 계속할 수 있지만 immutable release는 아직 허용하지 않습니다.
 - `FAIL`: 필수 invariant 또는 필수 데이터 계약이 깨졌습니다. 기존 게시 가능한 상태는 원자적 승격 전에 보존합니다.
 
 경고를 일괄 오류로 승격하는 운영 모드가 아니라면 `WARN` 자체는 파이프라인 중단 사유가 아닙니다.
@@ -131,6 +131,8 @@ LLM metric과 시멘틱 설명은 선택적입니다. `LLM_METRIC_SQL_UNSAFE`가
 - 처리 실패나 Draft PR 생성만으로 Issue를 닫아서는 안 됩니다.
 
 ## 버전·릴리스·재시도
+
+`validation-report.json`의 `publishable`은 canonical/generated 결과를 원자적으로 승격하고 PR 처리를 계속할 수 있다는 의미입니다. 숫자 릴리스는 더 엄격하며 semantic validation status가 정확히 `verified`이고 `publishable=true`여야 합니다. 따라서 `review_pending` PR은 검토 부채를 해결하고 다시 처리해 `verified`가 되기 전에는 병합·릴리스하지 않습니다.
 
 제품과 테이블은 독립적인 숫자 버전을 가지며 tag는 `product/<product-id>/vN`, `table/<table-id>/vN` 형식입니다. annotated tag를 만들기 전에 repository-local GitHub Actions bot identity를 설정합니다.
 
