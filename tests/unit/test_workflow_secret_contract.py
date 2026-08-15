@@ -95,7 +95,10 @@ class TestWorkflowSecretContract(unittest.TestCase):
         validation = jobs["validate"]
         self.assertIsInstance(validation, dict)
         self.assertEqual(validation["environment"], "ard-llm")
-        self.assertFalse(any(name.startswith("ARD_") for name in validation["env"]))
+        self.assertEqual(
+            {name for name in validation["env"] if name.startswith("ARD_")},
+            {"ARD_SEMANTIC_PDF_PIPELINE"},
+        )
         source_check = next(
             step for step in validation["steps"] if step.get("id") == "source_check"
         )

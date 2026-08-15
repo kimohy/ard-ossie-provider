@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ard_ossie.semantic.adjudication import CandidateAdjudicator
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
     ContinuationCandidate,
@@ -21,7 +22,12 @@ from ard_ossie.semantic.layout import (
     ReadingOrderEdge,
 )
 from ard_ossie.semantic.models import SourceBox
-from ard_ossie.semantic.structure import StructureBlock, StructureDocument
+from ard_ossie.semantic.structure import (
+    StructureBlock,
+    StructureCell,
+    StructureDocument,
+    StructureTable,
+)
 from ard_ossie.semantic.structure_candidates import (
     build_block_candidate_sets,
     build_continuation_candidate_sets,
@@ -163,6 +169,65 @@ def test_docling_heading_hint_cannot_override_ordinary_text_evidence() -> None:
     assert isinstance(best, BlockCandidate)
     assert best.block_kind == "paragraph"
     assert any(item.block_kind == "heading" for item in candidate_set.candidates)
+
+
+def test_short_exact_heading_hint_is_deterministic() -> None:
+    evidence, layout = _embedded_fixture(((1, "문서 제목", BOX, "heading"),))
+    hints = StructureDocument(
+        blocks=(
+            StructureBlock(
+                kind="heading",
+                order=0,
+                page=1,
+                bbox=BOX,
+                text_hint="문서 제목",
+                heading_level=1,
+            ),
+        )
+    )
+
+    candidate_set = build_block_candidate_sets(
+        evidence=evidence,
+        layout=layout,
+        hints=hints,
+    )[0]
+    decision = CandidateAdjudicator(None).decide(candidate_set)
+
+    selected = next(
+        item
+        for item in candidate_set.candidates
+        if item.candidate_id == decision.selected_candidate_id
+    )
+    assert decision.outcome == "selected"
+    assert selected.block_kind == "heading"
+
+
+def test_incidental_hint_overlap_does_not_create_table_candidate() -> None:
+    evidence, layout = _embedded_fixture(((1, "제목", BOX, None),))
+    hints = StructureDocument(
+        blocks=(
+            StructureBlock(
+                kind="table",
+                order=0,
+                page=1,
+                bbox=SourceBox(left=0.1, bottom=0.69, right=0.8, top=0.71),
+                text_hint="",
+                table=StructureTable(
+                    row_count=1,
+                    column_count=1,
+                    cells=(StructureCell(0, 1, 0, 1, "", True, None),),
+                ),
+            ),
+        )
+    )
+
+    candidate_set = build_block_candidate_sets(
+        evidence=evidence,
+        layout=layout,
+        hints=hints,
+    )[0]
+
+    assert not any(item.block_kind == "table" for item in candidate_set.candidates)
 
 
 def test_list_depth_and_caption_candidates_are_bounded() -> None:

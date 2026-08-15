@@ -120,7 +120,12 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert validation["permissions"] == {"contents": "read"}
     assert validation["environment"] == "ard-llm"
     assert "GH_TOKEN" not in str(validation)
-    assert not any(name.startswith("ARD_") for name in validation["env"])
+    assert {
+        name for name in validation["env"] if name.startswith("ARD_")
+    } == {"ARD_SEMANTIC_PDF_PIPELINE"}
+    assert validation["env"]["ARD_SEMANTIC_PDF_PIPELINE"] == (
+        "${{ vars.ARD_SEMANTIC_PDF_PIPELINE || 'candidate' }}"
+    )
     validation_checkouts = [
         step for step in validation["steps"] if step.get("uses", "").startswith("actions/checkout@")
     ]
@@ -189,6 +194,9 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert job["env"]["ARD_GCP_PROJECT_ID"] == "${{ vars.ARD_GCP_PROJECT_ID }}"
     assert job["env"]["ARD_VERTEX_CREDENTIALS_JSON"] == (
         "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}"
+    )
+    assert job["env"]["ARD_SEMANTIC_PDF_PIPELINE"] == (
+        "${{ vars.ARD_SEMANTIC_PDF_PIPELINE || 'candidate' }}"
     )
     assert "ARD_LLM_MODEL" not in job["env"]
     assert "ARD_LLM_API_STYLE" not in job["env"]

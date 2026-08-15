@@ -406,6 +406,32 @@ def test_source_check_preserves_quality_finding_details(
     assert "path=quality.semantic-structure-repair.json" in caught.value.message
 
 
+def test_source_check_forwards_candidate_pipeline_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_product_fixture(tmp_path)
+    captured: dict[str, object] = {}
+
+    class RecordingModelingService:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def validate(self, *_args: object, **kwargs: object) -> ValidationResult:
+            captured.update(kwargs)
+            return ValidationResult(passed=True)
+
+    monkeypatch.setattr(source_check_module, "ModelingService", RecordingModelingService)
+
+    SourceCheckService(RepositoryPaths(tmp_path)).run(
+        "sales-order",
+        SHA,
+        semantic_pipeline_mode="candidate",
+    )
+
+    assert captured["semantic_pipeline_mode"] == "candidate"
+
+
 @pytest.mark.parametrize(
     ("kind", "expected_error", "expected_exit_code"),
     [

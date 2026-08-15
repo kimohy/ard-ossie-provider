@@ -109,6 +109,7 @@ def normalize_layout(
 ) -> LayoutDocument:
     lines = _cluster_lines(evidence)
     regions = _group_regions(evidence, lines)
+    regions = _merge_hint_regions(evidence, lines, regions, hints)
     regions = _apply_structure_hints(regions, hints)
     regions = _mark_repeated_edges(
         evidence,
@@ -136,7 +137,7 @@ def _cluster_lines(evidence: EvidenceDocument) -> tuple[LayoutLine, ...]:
     lines: list[LayoutLine] = []
     for evidence_region in evidence.regions:
         ordered = [atoms[atom_id] for atom_id in evidence_region.atom_ids]
-        for chunk in _line_chunks(ordered):
+        for chunk in _attach_degenerate_chunks(_line_chunks(ordered)):
             boxes = [atom.bbox for atom in chunk if atom.bbox is not None]
             bbox = _union_boxes(boxes)
             if bbox is None:
@@ -161,6 +162,30 @@ def _cluster_lines(evidence: EvidenceDocument) -> tuple[LayoutLine, ...]:
                 )
             )
     return tuple(sorted(lines, key=lambda item: (item.page, -item.bbox.top, item.bbox.left)))
+
+
+def _attach_degenerate_chunks(
+    chunks: list[list[EvidenceAtom]],
+) -> list[list[EvidenceAtom]]:
+    result: list[list[EvidenceAtom]] = []
+    pending: list[EvidenceAtom] = []
+    for chunk in chunks:
+        has_geometry = any(
+            atom.bbox is not None
+            and atom.bbox.right > atom.bbox.left
+            and atom.bbox.top > atom.bbox.bottom
+            for atom in chunk
+        )
+        if has_geometry:
+            result.append([*pending, *chunk])
+            pending = []
+        elif result:
+            result[-1].extend(chunk)
+        else:
+            pending.extend(chunk)
+    if pending and result:
+        result[-1].extend(pending)
+    return result
 
 
 def _line_chunks(atoms: list[EvidenceAtom]) -> list[list[EvidenceAtom]]:
@@ -298,15 +323,175 @@ def _apply_structure_hints(
 ) -> tuple[LayoutRegion, ...]:
     result: list[LayoutRegion] = []
     for region in regions:
+        if region.hint is not None:
+            result.append(region)
+            continue
         matches = [
             (_box_overlap_fraction(region.bbox, block.bbox), block)
             for block in hints.blocks
             if block.bbox is not None and block.page == region.page
         ]
         best = max(matches, default=None, key=lambda item: (item[0], -item[1].order))
-        hint = best[1].kind if best is not None and best[0] > 0 else None
+        hint = best[1].kind if best is not None and best[0] >= 0.50 else None
         result.append(region.model_copy(update={"hint": hint}))
     return tuple(result)
+
+
+def _merge_hint_regions(
+    evidence: EvidenceDocument,
+    lines: tuple[LayoutLine, ...],
+    regions: tuple[LayoutRegion, ...],
+    hints: StructureDocument,
+) -> tuple[LayoutRegion, ...]:
+    bounded_hints = tuple(
+        block
+        for block in sorted(hints.blocks, key=lambda item: item.order)
+        if block.bbox is not None
+    )
+    if not bounded_hints:
+        return regions
+    atom_catalog = {atom.atom_id: atom for atom in evidence.atoms}
+    atom_rank = {atom.atom_id: atom.ordinal for atom in evidence.atoms}
+    line_catalog = {line.line_id: line for line in lines}
+    region_by_line = {
+        line_id: region
+        for region in regions
+        for line_id in region.line_ids
+    }
+    claimed: set[LineId] = set()
+    merged: list[LayoutRegion] = []
+    for hint in bounded_hints:
+        members = [
+            line
+            for line in lines
+            if line.line_id not in claimed
+            and line.page == hint.page
+            and _box_overlap_fraction(line.bbox, hint.bbox) >= 0.50
+        ]
+        if not members:
+            continue
+        members = list(order_lines_by_text_hint(members, hint.text_hint, atom_catalog))
+        claimed.update(line.line_id for line in members)
+        atom_ids = tuple(
+            atom_id for line in members for atom_id in line.atom_ids
+        )
+        line_ids = tuple(line.line_id for line in members)
+        evidence_region_ids = tuple(
+            dict.fromkeys(
+                region_id
+                for line in members
+                for region_id in line.evidence_region_ids
+            )
+        )
+        bbox = _union_boxes([line.bbox for line in members])
+        assert bbox is not None
+        merged.append(
+            LayoutRegion(
+                region_id=make_evidence_id(
+                    "region",
+                    evidence.source_hash,
+                    "layout-table",
+                    hint.order,
+                    atom_ids[0],
+                    atom_ids[-1],
+                ),
+                page=members[0].page,
+                bbox=bbox,
+                line_ids=line_ids,
+                atom_ids=atom_ids,
+                evidence_region_ids=evidence_region_ids,
+                column=min(region_by_line[line.line_id].column for line in members),
+                hint=hint.kind,
+            )
+        )
+    remainder: list[LayoutRegion] = []
+    for region in regions:
+        line_ids = tuple(line_id for line_id in region.line_ids if line_id not in claimed)
+        if not line_ids:
+            continue
+        remaining_lines = [line_catalog[line_id] for line_id in line_ids]
+        atom_ids = tuple(
+            sorted(
+                (atom_id for line in remaining_lines for atom_id in line.atom_ids),
+                key=atom_rank.get,
+            )
+        )
+        bbox = _union_boxes([line.bbox for line in remaining_lines])
+        assert bbox is not None
+        remainder.append(
+            region.model_copy(
+                update={
+                    "region_id": make_evidence_id(
+                        "region",
+                        evidence.source_hash,
+                        "layout-remainder",
+                        atom_ids[0],
+                        atom_ids[-1],
+                    ),
+                    "bbox": bbox,
+                    "line_ids": line_ids,
+                    "atom_ids": atom_ids,
+                    "evidence_region_ids": tuple(
+                        dict.fromkeys(
+                            region_id
+                            for line in remaining_lines
+                            for region_id in line.evidence_region_ids
+                        )
+                    ),
+                    "hint": None,
+                }
+            )
+        )
+    return tuple([*remainder, *merged])
+
+
+def order_lines_by_text_hint(
+    lines: list[LayoutLine],
+    text_hint: str,
+    atom_catalog: dict[AtomId, EvidenceAtom],
+) -> tuple[LayoutLine, ...]:
+    target = "".join(character for character in text_hint if not character.isspace())
+    ranked: list[tuple[int, int, LayoutLine, str]] = []
+    whitespace_only: list[tuple[int, LayoutLine]] = []
+    for index, line in enumerate(lines):
+        text = "".join(
+            atom_catalog[atom_id].text
+            for atom_id in line.atom_ids
+            if not atom_catalog[atom_id].text.isspace()
+        )
+        if not text:
+            whitespace_only.append((index, line))
+            continue
+        position = target.find(text)
+        if position < 0:
+            return tuple(lines)
+        ranked.append((position, index, line, text))
+    ordered = sorted(ranked, key=lambda item: (item[0], item[1]))
+    if "".join(item[3] for item in ordered) != target:
+        return tuple(lines)
+    if not whitespace_only:
+        return tuple(item[2] for item in ordered)
+    anchored: dict[LineId, list[tuple[int, LayoutLine]]] = defaultdict(list)
+    for item in whitespace_only:
+        anchor = min(
+            (ranked_item[2] for ranked_item in ordered),
+            key=lambda line: _box_center_distance(line.bbox, item[1].bbox),
+        )
+        anchored[anchor.line_id].append(item)
+    return tuple(
+        line
+        for item in ordered
+        for line in (
+            item[2],
+            *(extra for _index, extra in sorted(anchored[item[2].line_id])),
+        )
+    )
+
+
+def _box_center_distance(first: SourceBox, second: SourceBox) -> float:
+    horizontal = (first.left + first.right) - (second.left + second.right)
+    vertical = (first.bottom + first.top) - (second.bottom + second.top)
+    return horizontal * horizontal + vertical * vertical
 
 
 def _mark_repeated_edges(
@@ -338,6 +523,15 @@ def _mark_repeated_edges(
     result: list[LayoutRegion] = []
     for region in regions:
         edge = repeated.get(region.region_id)
+        if (
+            edge is None
+            and region.bbox.bottom <= page_edge_band
+            and _PAGE_NUMBER.fullmatch(region_text[region.region_id])
+        ):
+            result.append(
+                region.model_copy(update={"hint": "page_number", "repeated_edge": True})
+            )
+            continue
         if edge is None:
             result.append(region)
             continue

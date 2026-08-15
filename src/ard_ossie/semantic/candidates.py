@@ -150,6 +150,7 @@ class TableCellCandidate(ImmutableStrictModel):
     end_column: int = Field(gt=0, le=MAX_TABLE_COLUMNS)
     atom_ids: tuple[AtomId, ...] = ()
     column_header: bool = False
+    rendered_text: str | None = None
 
     @model_validator(mode="after")
     def validate_cell(self) -> TableCellCandidate:

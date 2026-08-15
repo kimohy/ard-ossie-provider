@@ -259,7 +259,7 @@ def assemble_canonical(
                 if table_decision is not None:
                     decision_ids = (*decision_ids, table_decision.decision_id)
             canonical_cells = (
-                _canonical_cells(table_candidate, atom_catalog)
+                _canonical_cells(table_candidate, atom_catalog, spacing_candidate)
                 if table_candidate is not None
                 else ()
             )
@@ -386,24 +386,24 @@ def validate_canonical(
             _finding("INVARIANT_ATOM_ALLOCATION_MISSING", "Evidence atoms are not allocated.")
         )
 
-    expected_text = "".join(
-        atom.text
-        for atom in evidence.atoms
-        if not atom.text.isspace() and atom.atom_id not in set(excluded_ids)
-    )
-    actual_text = "".join(
-        character
-        for block in sorted(document.blocks, key=lambda item: item.order)
-        for character in block.text
-        if not character.isspace()
-    )
-    actual_text += "".join(
-        character
+    character_mismatch = any(
+        _non_whitespace(block.text)
+        != _atom_text_sequence(block.atom_ids, atom_catalog)
+        or (
+            block.kind == "table"
+            and any(
+                _non_whitespace(cell.text)
+                != _atom_text_sequence(cell.atom_ids, atom_catalog)
+                for cell in block.cells
+            )
+        )
+        for block in document.blocks
+    ) or any(
+        _non_whitespace(figure.caption or "")
+        != _atom_text_sequence(figure.caption_atom_ids, atom_catalog)
         for figure in document.figures
-        for character in (figure.caption or "")
-        if not character.isspace()
     )
-    if expected_text != actual_text:
+    if character_mismatch:
         findings.append(
             _finding(
                 "INVARIANT_CHARACTER_LOSS",
@@ -468,7 +468,7 @@ def validate_canonical(
     )
     preserved = len(set(source_non_whitespace) & set(all_references))
     coverage = 1.0 if not source_non_whitespace else preserved / len(source_non_whitespace)
-    document_hash = canonical_hash(document.model_dump(mode="json"))
+    document_hash = canonical_hash(_canonical_content_payload(document))
     return SemanticValidationReport(
         status=status,
         publishable=status is SemanticPipelineStatus.VERIFIED,
@@ -484,6 +484,35 @@ def validate_canonical(
             }
         ),
         model_call_count=sum(item.source in {"model", "provider"} for item in document.decisions),
+    )
+
+
+def _non_whitespace(value: str) -> str:
+    return "".join(character for character in value if not character.isspace())
+
+
+def _canonical_content_payload(document: CanonicalSemanticDocument) -> dict[str, object]:
+    payload = document.model_dump(mode="json")
+    payload.pop("decisions", None)
+    for block in payload["blocks"]:
+        block.pop("decision_ids", None)
+    for figure in payload["figures"]:
+        figure.pop("decision_ids", None)
+    for disposition in payload["whitespace_dispositions"]:
+        disposition.pop("decision_id", None)
+    for continuation in payload["continuations"]:
+        continuation.pop("decision_id", None)
+    return payload
+
+
+def _atom_text_sequence(
+    atom_ids: tuple[AtomId, ...],
+    atom_catalog: dict[AtomId, EvidenceAtom],
+) -> str:
+    return "".join(
+        atom_catalog[atom_id].text
+        for atom_id in atom_ids
+        if atom_id in atom_catalog and not atom_catalog[atom_id].text.isspace()
     )
 
 
@@ -509,6 +538,7 @@ def _selected_candidate(
 def _canonical_cells(
     table: TableCandidate,
     atom_catalog: dict[AtomId, EvidenceAtom],
+    spacing: SpacingCandidate | None,
 ) -> tuple[CanonicalCell, ...]:
     return tuple(
         CanonicalCell(
@@ -517,7 +547,11 @@ def _canonical_cells(
             end_row=cell.end_row,
             start_column=cell.start_column,
             end_column=cell.end_column,
-            text="".join(atom_catalog[item].text for item in cell.atom_ids),
+            text=(
+                cell.rendered_text
+                if cell.rendered_text is not None
+                else _project_cell_spacing(cell.atom_ids, atom_catalog, spacing)
+            ),
             atom_ids=tuple(
                 item for item in cell.atom_ids if not atom_catalog[item].text.isspace()
             ),
@@ -525,6 +559,45 @@ def _canonical_cells(
         )
         for cell in table.cells
     )
+
+
+def _project_cell_spacing(
+    atom_ids: tuple[AtomId, ...],
+    atom_catalog: dict[AtomId, EvidenceAtom],
+    spacing: SpacingCandidate | None,
+) -> str:
+    characters = [atom_id for atom_id in atom_ids if not atom_catalog[atom_id].text.isspace()]
+    if not characters:
+        return ""
+    selected = (
+        {
+            (boundary.left_atom_id, boundary.right_atom_id): boundary.state
+            for boundary in spacing.boundaries
+        }
+        if spacing is not None
+        else {}
+    )
+    position = {atom_id: index for index, atom_id in enumerate(atom_ids)}
+    result: list[str] = []
+    for index, atom_id in enumerate(characters):
+        result.append(atom_catalog[atom_id].text)
+        if index == len(characters) - 1:
+            continue
+        following = characters[index + 1]
+        state = selected.get((atom_id, following))
+        if state is None:
+            source = atom_ids[position[atom_id] + 1 : position[following]]
+            if any(atom_catalog[item].kind == "line_break" for item in source):
+                state = "hard_break"
+            elif any(atom_catalog[item].text.isspace() for item in source):
+                state = "space"
+            else:
+                state = "none"
+        if state == "space":
+            result.append(" ")
+        elif state == "hard_break":
+            result.append("\n")
+    return "".join(result)
 
 
 def _whitespace_dispositions(
@@ -536,9 +609,9 @@ def _whitespace_dispositions(
     decision_id = decision.decision_id if decision else "decision_0000000000000000"
     boundary_by_atom = {
         atom_id: boundary
-        for boundary in spacing.boundaries if spacing is not None
+        for boundary in spacing.boundaries
         for atom_id in boundary.source_whitespace_atom_ids
-    }
+    } if spacing is not None else {}
     result: list[WhitespaceDisposition] = []
     for atom_id in region.atom_ids:
         atom = atom_catalog[atom_id]

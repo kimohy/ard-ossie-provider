@@ -25,8 +25,14 @@ from ard_ossie.semantic.evidence import (
     ExtractedEvidence,
     RegionId,
 )
-from ard_ossie.semantic.layout import LayoutDocument, LayoutLine, LayoutRegion
+from ard_ossie.semantic.layout import (
+    LayoutDocument,
+    LayoutLine,
+    LayoutRegion,
+    order_lines_by_text_hint,
+)
 from ard_ossie.semantic.models import SourceBox
+from ard_ossie.semantic.spacing import KoreanSpacingScorer
 from ard_ossie.semantic.structure import StructureDocument, StructureTable
 
 _HEADING_NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*)(?:[.)]|\s)")
@@ -187,6 +193,8 @@ def build_table_candidate_set(
     evidence: EvidenceDocument,
     layout: LayoutDocument,
     hints: StructureDocument,
+    *,
+    spacing_scorer: KoreanSpacingScorer | None = None,
 ) -> CandidateSet:
     if evidence.source_hash != layout.source_hash:
         raise ValueError("TABLE_SOURCE_HASH_MISMATCH")
@@ -209,11 +217,69 @@ def build_table_candidate_set(
     table_hint = _matching_table_hint(region, hints)
     geometry = _geometry_table_candidate(region, lines, atom_catalog, table_hint)
     candidates = [geometry]
+    language_spacing = _language_spacing_table_candidate(
+        region,
+        geometry,
+        spacing_scorer,
+    )
+    if language_spacing is not None:
+        candidates.append(language_spacing)
     split = _split_spanning_cells(region, geometry, atom_catalog, lines)
     if split is not None and split.candidate_id != geometry.candidate_id:
         candidates.append(split)
     ordered = tuple(sorted(candidates, key=lambda item: (-item.score, item.candidate_id))[:5])
     return _candidate_set(layout.source_hash, region.region_id, "table", ordered)
+
+
+def _language_spacing_table_candidate(
+    region: LayoutRegion,
+    candidate: TableCandidate,
+    scorer: KoreanSpacingScorer | None,
+) -> TableCandidate | None:
+    if scorer is None:
+        return None
+    changed = False
+    cells: list[TableCellCandidate] = []
+    for cell in candidate.cells:
+        source = cell.rendered_text
+        if source is None or not source.strip() or not _has_suspicious_hangul_spacing(source):
+            cells.append(cell)
+            continue
+        replacement = next(
+            (
+                proposal
+                for proposal in scorer.propose(source, (source,))
+                if _without_whitespace(proposal) == _without_whitespace(source)
+                and proposal != source
+            ),
+            None,
+        )
+        if replacement is None:
+            cells.append(cell)
+            continue
+        changed = True
+        cells.append(cell.model_copy(update={"rendered_text": replacement}))
+    if not changed:
+        return None
+    return _make_table_candidate(
+        region,
+        row_count=candidate.row_count,
+        column_count=candidate.column_count,
+        cells=tuple(cells),
+        score=0.95,
+        features={**candidate.features, "cell_spacing_language": 0.95},
+    )
+
+
+def _without_whitespace(value: str) -> str:
+    return "".join(character for character in value if not character.isspace())
+
+
+def _has_suspicious_hangul_spacing(value: str) -> bool:
+    return any(
+        len(token) == 1 and "가" <= token <= "힣"
+        for token in value.split()
+    )
 
 
 def _block_features(
@@ -226,7 +292,9 @@ def _block_features(
     hint_kinds = {
         block.kind
         for block in hints.blocks
-        if block.page == region.page and block.bbox is not None and _overlaps(region, block.bbox)
+        if block.page == region.page
+        and block.bbox is not None
+        and _overlap_fraction(region, block.bbox) >= 0.50
     }
     if region.hint is not None:
         hint_kinds.add(region.hint)
@@ -256,7 +324,9 @@ def _block_candidates(
         0.78
         + 0.10 * float(len(text.strip()) > 48)
         + 0.08 * features["terminal_punctuation"]
-        + 0.04 * features["paragraph_hint"],
+        + 0.04 * features["paragraph_hint"]
+        - 0.12 * features["table_hint"]
+        - 0.08 * features["heading_hint"],
     )
     specs.append(("paragraph", paragraph_score, None, None, None))
 
@@ -268,8 +338,9 @@ def _block_candidates(
             0.44
             + 0.45 * features["numbered_heading"]
             + 0.12 * features["large_geometry"]
-            + 0.10 * features["heading_hint"]
-            + 0.04 * features["short_text"],
+            + 0.44 * features["heading_hint"]
+            + 0.04 * features["short_text"]
+            - 0.30 * features["terminal_punctuation"],
         )
         specs.append(("heading", heading_score, heading_level, None, None))
 
@@ -282,14 +353,15 @@ def _block_candidates(
             0.96,
             0.72
             + 0.20 * float(list_match is not None)
-            + 0.04 * features["list_hint"],
+            + 0.04 * features["list_hint"]
+            - 0.20 * features["heading_hint"],
         )
         specs.append(("list_item", list_score, None, list_kind, list_depth))
 
     if features["caption_shape"]:
         specs.append(("caption", 0.90, None, None, None))
     if features["table_hint"]:
-        specs.append(("table", 0.92, None, None, None))
+        specs.append(("table", 0.98, None, None, None))
 
     candidates = [
         BlockCandidate(
@@ -362,6 +434,7 @@ def _geometry_table_candidate(
         cell_specs = _hinted_cell_specs(
             lines,
             table_hint,
+            atom_catalog,
             row_count=row_count,
             column_count=column_count,
         )
@@ -378,6 +451,8 @@ def _geometry_table_candidate(
         score = 0.82
         features = {"geometry_grid": 0.82, "docling_grid_agreement": 0.0}
     cells = _complete_cells(region.region_id, cell_specs, row_count, column_count)
+    if table_hint is not None:
+        cells = _apply_cell_text_hints(cells, table_hint, atom_catalog)
     return _make_table_candidate(
         region,
         row_count=row_count,
@@ -386,6 +461,44 @@ def _geometry_table_candidate(
         score=score,
         features=features,
     )
+
+
+def _apply_cell_text_hints(
+    cells: tuple[TableCellCandidate, ...],
+    table_hint: StructureTable,
+    atom_catalog: dict[str, EvidenceAtom],
+) -> tuple[TableCellCandidate, ...]:
+    hints = {
+        (cell.start_row, cell.end_row, cell.start_column, cell.end_column): cell.text_hint
+        for cell in table_hint.cells
+    }
+    result: list[TableCellCandidate] = []
+    for cell in cells:
+        text_hint = hints.get(
+            (cell.start_row, cell.end_row, cell.start_column, cell.end_column)
+        )
+        source_characters = "".join(
+            atom_catalog[atom_id].text
+            for atom_id in cell.atom_ids
+            if not atom_catalog[atom_id].text.isspace()
+        )
+        hint_characters = (
+            "".join(character for character in text_hint if not character.isspace())
+            if text_hint is not None
+            else None
+        )
+        result.append(
+            cell.model_copy(
+                update={
+                    "rendered_text": (
+                        text_hint
+                        if hint_characters == source_characters
+                        else None
+                    )
+                }
+            )
+        )
+    return tuple(result)
 
 
 def _row_groups(lines: tuple[LayoutLine, ...]) -> tuple[tuple[LayoutLine, ...], ...]:
@@ -475,11 +588,12 @@ def _geometric_cell_specs(
 def _hinted_cell_specs(
     lines: tuple[LayoutLine, ...],
     table_hint: StructureTable,
+    atom_catalog: dict[str, EvidenceAtom],
     *,
     row_count: int,
     column_count: int,
 ) -> list[tuple[int, int, int, int, tuple[str, ...], bool]]:
-    assignments: dict[int, list[str]] = defaultdict(list)
+    assignments: dict[int, list[LayoutLine]] = defaultdict(list)
     for line in lines:
         eligible = [
             (index, cell)
@@ -492,14 +606,22 @@ def _hinted_cell_specs(
             eligible,
             key=lambda item: (_box_overlap_area(line.bbox, item[1].bbox), -item[0]),
         )
-        assignments[best_index].extend(line.atom_ids)
+        assignments[best_index].append(line)
     specs = [
         (
             cell.start_row,
             cell.end_row,
             cell.start_column,
             cell.end_column,
-            tuple(assignments[index]),
+            tuple(
+                atom_id
+                for line in order_lines_by_text_hint(
+                    assignments[index],
+                    cell.text_hint,
+                    atom_catalog,
+                )
+                for atom_id in line.atom_ids
+            ),
             cell.column_header,
         )
         for index, cell in enumerate(table_hint.cells)
@@ -752,6 +874,21 @@ def _overlaps(region: LayoutRegion, box: object) -> bool:
         min(region.bbox.right, box.right) > max(region.bbox.left, box.left)
         and min(region.bbox.top, box.top) > max(region.bbox.bottom, box.bottom)
     )
+
+
+def _overlap_fraction(region: LayoutRegion, box: SourceBox) -> float:
+    width = max(
+        0.0,
+        min(region.bbox.right, box.right) - max(region.bbox.left, box.left),
+    )
+    height = max(
+        0.0,
+        min(region.bbox.top, box.top) - max(region.bbox.bottom, box.bottom),
+    )
+    area = (region.bbox.right - region.bbox.left) * (
+        region.bbox.top - region.bbox.bottom
+    )
+    return 0.0 if area <= 0 else width * height / area
 
 
 def _candidate_set(

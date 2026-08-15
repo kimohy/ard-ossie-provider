@@ -8,7 +8,12 @@ from ard_ossie.semantic.evidence import (
 )
 from ard_ossie.semantic.layout import normalize_layout, topological_region_order
 from ard_ossie.semantic.models import SourceBox
-from ard_ossie.semantic.structure import StructureDocument
+from ard_ossie.semantic.structure import (
+    StructureBlock,
+    StructureCell,
+    StructureDocument,
+    StructureTable,
+)
 
 SOURCE_HASH = "c" * 64
 
@@ -137,6 +142,26 @@ def test_repeated_page_edge_text_is_marked_as_header_only() -> None:
     assert all(region.bbox.top >= 0.9 for region in repeated)
 
 
+def test_unique_numeric_page_labels_are_marked_as_page_numbers() -> None:
+    evidence = document_from_regions(
+        [
+            (
+                page,
+                str(page),
+                SourceBox(left=0.9, bottom=0.02, right=0.92, top=0.04),
+                (page,),
+            )
+            for page in range(1, 4)
+        ],
+        page_count=3,
+    )
+
+    layout = normalize_layout(evidence, StructureDocument(blocks=()))
+
+    assert all(region.repeated_edge for region in layout.regions)
+    assert {region.hint for region in layout.regions} == {"page_number"}
+
+
 def test_normalization_never_synthesizes_or_drops_atom_ids() -> None:
     evidence = document_from_regions(
         [
@@ -150,3 +175,140 @@ def test_normalization_never_synthesizes_or_drops_atom_ids() -> None:
 
     allocated = [atom_id for region in layout.regions for atom_id in region.atom_ids]
     assert sorted(allocated) == sorted(atom.atom_id for atom in evidence.atoms)
+
+
+def test_degenerate_trailing_whitespace_is_owned_by_layout() -> None:
+    evidence = document_from_regions(
+        [
+            (
+                1,
+                "A ",
+                SourceBox(left=0.1, bottom=0.7, right=0.3, top=0.75),
+                (0, 1),
+            )
+        ]
+    )
+    trailing = evidence.atoms[-1].model_copy(
+        update={"bbox": SourceBox(left=0.3, bottom=0.7, right=0.3, top=0.7)}
+    )
+    evidence = evidence.model_copy(update={"atoms": (*evidence.atoms[:-1], trailing)})
+
+    layout = normalize_layout(evidence, StructureDocument(blocks=()))
+
+    allocated = [atom_id for region in layout.regions for atom_id in region.atom_ids]
+    assert allocated == [atom.atom_id for atom in evidence.atoms]
+
+
+def test_table_hint_merges_cell_columns_into_one_layout_region() -> None:
+    evidence = document_from_regions(
+        [
+            (1, "A", SourceBox(left=0.1, bottom=0.7, right=0.3, top=0.8), (0,)),
+            (1, "B", SourceBox(left=0.5, bottom=0.7, right=0.7, top=0.8), (1,)),
+            (1, "C", SourceBox(left=0.1, bottom=0.5, right=0.3, top=0.6), (2,)),
+            (1, "D", SourceBox(left=0.5, bottom=0.5, right=0.7, top=0.6), (3,)),
+        ]
+    )
+    table_box = SourceBox(left=0.05, bottom=0.45, right=0.75, top=0.85)
+    hints = StructureDocument(
+        blocks=(
+            StructureBlock(
+                kind="table",
+                order=0,
+                page=1,
+                bbox=table_box,
+                text_hint="A B C D",
+                table=StructureTable(
+                    row_count=2,
+                    column_count=2,
+                    cells=(
+                        StructureCell(0, 1, 0, 1, "A", True, None),
+                        StructureCell(0, 1, 1, 2, "B", True, None),
+                        StructureCell(1, 2, 0, 1, "C", False, None),
+                        StructureCell(1, 2, 1, 2, "D", False, None),
+                    ),
+                ),
+            ),
+        )
+    )
+
+    layout = normalize_layout(evidence, hints)
+    table_regions = [region for region in layout.regions if region.hint == "table"]
+
+    assert len(table_regions) == 1
+    assert set(table_regions[0].atom_ids) == {atom.atom_id for atom in evidence.atoms}
+    assert len(table_regions[0].line_ids) == 4
+
+
+def test_heading_hint_merges_fragments_across_layout_columns() -> None:
+    evidence = document_from_regions(
+        [
+            (1, "(비즈니스 로직)", SourceBox(left=0.6, bottom=0.8, right=0.9, top=0.85), (1,) * 9),
+            (1, "5. 업무 규칙", SourceBox(left=0.1, bottom=0.8, right=0.4, top=0.85), (0,) * 8),
+        ]
+    )
+    hints = StructureDocument(
+        blocks=(
+            StructureBlock(
+                kind="heading",
+                order=0,
+                page=1,
+                bbox=SourceBox(left=0.05, bottom=0.75, right=0.95, top=0.9),
+                text_hint="5. 업무 규칙 (비즈니스 로직)",
+                heading_level=1,
+            ),
+        )
+    )
+
+    layout = normalize_layout(evidence, hints)
+
+    assert len(layout.regions) == 1
+    assert layout.regions[0].hint == "heading"
+    assert set(layout.regions[0].atom_ids) == {atom.atom_id for atom in evidence.atoms}
+    atom_text = {atom.atom_id: atom.text for atom in evidence.atoms}
+    rendered = "".join(atom_text[atom_id] for atom_id in layout.regions[0].atom_ids)
+    assert "".join(rendered.split()) == "".join(hints.blocks[0].text_hint.split())
+
+
+def test_incidental_table_edge_overlap_does_not_reclassify_heading() -> None:
+    evidence = document_from_regions(
+        [
+            (
+                1,
+                "제목",
+                SourceBox(left=0.1, bottom=0.76, right=0.4, top=0.84),
+                (0, 0),
+            ),
+            (
+                1,
+                "표",
+                SourceBox(left=0.1, bottom=0.50, right=0.4, top=0.60),
+                (1,),
+            ),
+        ]
+    )
+    hints = StructureDocument(
+        blocks=(
+            StructureBlock(
+                kind="table",
+                order=0,
+                page=1,
+                bbox=SourceBox(left=0.1, bottom=0.50, right=0.4, top=0.77),
+                text_hint="표",
+                table=StructureTable(
+                    row_count=1,
+                    column_count=1,
+                    cells=(StructureCell(0, 1, 0, 1, "표", True, None),),
+                ),
+            ),
+        )
+    )
+
+    layout = normalize_layout(evidence, hints)
+    atom_text = {atom.atom_id: atom.text for atom in evidence.atoms}
+    by_text = {
+        "".join(atom_text[atom_id] for atom_id in region.atom_ids): region
+        for region in layout.regions
+    }
+
+    assert by_text["제목"].hint is None
+    assert by_text["표"].hint == "table"

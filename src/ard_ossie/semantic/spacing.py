@@ -22,6 +22,11 @@ DEFAULT_KOREAN_TECH_TERMS = (
     "모델",
     "캠페인",
     "마케팅",
+    "개인정보",
+    "매체명",
+    "결과값",
+    "임계값",
+    "선집계",
 )
 _SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([%℃°,:;.!?)}\]])")
 _SPACE_AFTER_OPEN = re.compile(r"([({\[])\s+")

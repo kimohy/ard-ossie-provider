@@ -28,6 +28,11 @@ SOURCE_HASH = "e" * 64
 REGION_ID = "region_00000000000000ff"
 
 
+class FixedSpacingScorer:
+    def propose(self, text: str, line_chunks: tuple[str, ...]) -> tuple[str, ...]:
+        return ("테이블 결합",) if text == "테이 블 결 합" else (text,)
+
+
 def _table_fixture(
     specs: tuple[tuple[int, int, int, int, str, SourceBox], ...],
     *,
@@ -221,6 +226,83 @@ def test_vertically_split_text_remains_in_one_grid_cell() -> None:
         cell for cell in selected.cells if (cell.start_row, cell.start_column) == (1, 0)
     )
     assert len(split_cell.atom_ids) == len("긴텍스트")
+
+
+def test_cell_hint_reorders_whole_line_fragments_without_changing_characters() -> None:
+    specs = (
+        (0, 0, 1, 1, "뒤", SourceBox(left=0.5, bottom=0.8, right=0.7, top=0.9)),
+        (0, 0, 1, 1, "앞", SourceBox(left=0.1, bottom=0.8, right=0.3, top=0.9)),
+    )
+    hints = (
+        StructureCell(
+            0,
+            1,
+            0,
+            1,
+            "앞 뒤",
+            True,
+            SourceBox(left=0.1, bottom=0.8, right=0.7, top=0.9),
+        ),
+    )
+    region, evidence, layout, structure = _table_fixture(
+        specs,
+        row_count=1,
+        column_count=1,
+        hinted_cells=hints,
+    )
+
+    selected = max(
+        build_table_candidate_set(region, evidence, layout, structure).candidates,
+        key=lambda item: item.score,
+    )
+    atom_text = {atom.atom_id: atom.text for atom in evidence.atoms}
+    rendered = "".join(atom_text[atom_id] for atom_id in selected.cells[0].atom_ids)
+
+    assert rendered == "앞뒤"
+    assert selected.cells[0].rendered_text == "앞 뒤"
+
+
+def test_table_candidates_include_bounded_language_spacing_variant() -> None:
+    specs = (
+        (
+            0,
+            0,
+            1,
+            1,
+            "테이 블 결 합",
+            SourceBox(left=0.1, bottom=0.8, right=0.7, top=0.9),
+        ),
+    )
+    hints = (
+        StructureCell(
+            0,
+            1,
+            0,
+            1,
+            "테이 블 결 합",
+            True,
+            SourceBox(left=0.1, bottom=0.8, right=0.7, top=0.9),
+        ),
+    )
+    region, evidence, layout, structure = _table_fixture(
+        specs,
+        row_count=1,
+        column_count=1,
+        hinted_cells=hints,
+    )
+
+    candidate_set = build_table_candidate_set(
+        region,
+        evidence,
+        layout,
+        structure,
+        spacing_scorer=FixedSpacingScorer(),
+    )
+
+    assert 1 < len(candidate_set.candidates) <= 5
+    assert {
+        candidate.cells[0].rendered_text for candidate in candidate_set.candidates
+    } >= {"테이 블 결 합", "테이블 결합"}
 
 
 def test_genuinely_ambiguous_header_yields_two_complete_candidates() -> None:

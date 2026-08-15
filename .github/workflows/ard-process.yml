@@ -40,6 +40,7 @@ jobs:
       PRODUCT_KEY: ${{ inputs.product_key }}
       EXPECTED_HEAD: ${{ inputs.expected_head }}
       CANDIDATE_REPOSITORY: ${{ github.workspace }}/candidate
+      ARD_SEMANTIC_PDF_PIPELINE: ${{ vars.ARD_SEMANTIC_PDF_PIPELINE || 'candidate' }}
     steps:
       - name: Checkout trusted validation code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -121,6 +122,7 @@ jobs:
       TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       CANDIDATE_REPOSITORY: ${{ github.workspace }}/candidate
       PROCESS_INVOCATION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ARD_SEMANTIC_PDF_PIPELINE: ${{ vars.ARD_SEMANTIC_PDF_PIPELINE || 'candidate' }}
     steps:
       - name: Checkout trusted processor code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

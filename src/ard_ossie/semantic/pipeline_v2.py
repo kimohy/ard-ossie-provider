@@ -164,6 +164,7 @@ def parse_semantic_pdf_v2(
                     evidence,
                     layout,
                     hints,
+                    spacing_scorer=scorer,
                 )
             )
 

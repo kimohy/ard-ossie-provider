@@ -380,6 +380,14 @@ def _candidate_summary(candidate: Candidate) -> dict[str, object]:
             }
             for cell in candidate.cells
         ]
+        summary["cell_renderings"] = [
+            {
+                "cell_id": cell.cell_id,
+                "rendering": cell.rendered_text[:96],
+            }
+            for cell in candidate.cells
+            if cell.rendered_text
+        ][:32]
     return summary
 
 
