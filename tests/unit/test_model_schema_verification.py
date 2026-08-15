@@ -192,17 +192,10 @@ def test_model_schema_catalog_requires_semantic_schema_pair() -> None:
         for reference in MODEL_SCHEMA_CATALOG
     } >= {
         Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-validation.schema.json"),
         Path("reports/semantic-structure-repair.schema.json"),
     }
-    assert (
-        (
-            ModelSchemaReference(
-                Path("reports/semantic-validation.schema.json"),
-                "ard_ossie.semantic.canonical",
-                "SemanticValidationReport",
-            ),
-        ),
-    ) == OPTIONAL_MODEL_SCHEMA_GROUPS
+    assert OPTIONAL_MODEL_SCHEMA_GROUPS == ()
 
 
 def test_model_schema_helper_receipt_retains_catalog_verified_before_model_mutation(

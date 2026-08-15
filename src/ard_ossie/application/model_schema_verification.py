@@ -78,15 +78,7 @@ MODEL_SCHEMA_CATALOG = (
     ),
 )
 
-OPTIONAL_MODEL_SCHEMA_GROUPS: tuple[tuple[ModelSchemaReference, ...], ...] = (
-    (
-        ModelSchemaReference(
-            Path("reports/semantic-validation.schema.json"),
-            "ard_ossie.semantic.canonical",
-            "SemanticValidationReport",
-        ),
-    ),
-)
+OPTIONAL_MODEL_SCHEMA_GROUPS: tuple[tuple[ModelSchemaReference, ...], ...] = ()
 
 
 class ModelSchemaVerificationError(RuntimeError):

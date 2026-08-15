@@ -601,31 +601,11 @@ def test_static_schema_verifier_accepts_built_in_required_semantic_schemas(
     ).run("schemas")
 
 
-def test_static_schema_verifier_accepts_optional_semantic_validation_schema(
-    tmp_path: Path,
-) -> None:
-    source = Path(__file__).parents[2] / "schemas"
-    shutil.copytree(source, tmp_path / "schemas")
-    candidate = tmp_path / "schemas" / "reports" / "semantic-validation.schema.json"
-    candidate.write_text(
-        json.dumps(
-            {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    RepositoryVerificationTools(
-        RepositoryPaths(tmp_path), runner=None  # type: ignore[arg-type]
-    ).run("schemas")
-
-
 @pytest.mark.parametrize(
     "schema_path",
     (
         Path("reports/semantic-fidelity.schema.json"),
+        Path("reports/semantic-validation.schema.json"),
         Path("reports/semantic-structure-repair.schema.json"),
     ),
 )
