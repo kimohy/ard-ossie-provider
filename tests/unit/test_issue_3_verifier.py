@@ -93,13 +93,28 @@ def _write_artifact(
         }
     ).encode()
     (root / "quality" / "decision-report.json").write_bytes(decision_bytes)
+    report_hashes = {
+        "decision-report.json": hashlib.sha256(decision_bytes).hexdigest(),
+        "validation-report.json": hashlib.sha256(validation_bytes).hexdigest(),
+    }
+    manifest_bytes = json.dumps(
+        {
+            "schema_version": "semantic-diagnostics-v1",
+            "source_hash": "a" * 64,
+            "configuration_hash": "e" * 64,
+            "mode": "candidate",
+            "publication_status": "verified",
+            "reports": report_hashes,
+        }
+    ).encode()
+    (root / "quality" / "manifest.json").write_bytes(manifest_bytes)
     (root / "quality" / "quality-report.json").write_text(
         json.dumps(
             {
                 "quality_artifact_hashes": {
-                    "decision-report.json": hashlib.sha256(decision_bytes).hexdigest(),
+                    **report_hashes,
+                    "manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),
                     "semantic-fidelity.json": hashlib.sha256(fidelity_bytes).hexdigest(),
-                    "validation-report.json": hashlib.sha256(validation_bytes).hexdigest(),
                 }
             }
         ),
@@ -113,6 +128,7 @@ def _convert_to_legacy_correction_artifact(
     fidelity: SemanticFidelityReport,
     *,
     correction_model: str = "gpt-5.6-terra",
+    shadow: bool = False,
 ) -> None:
     corrected_text = "교정"
     payload = fidelity.model_dump(mode="json")
@@ -162,13 +178,39 @@ def _convert_to_legacy_correction_artifact(
     (root / "quality" / "semantic-fidelity.json").write_bytes(fidelity_bytes)
     quality_path = root / "quality" / "quality-report.json"
     quality = json.loads(quality_path.read_text(encoding="utf-8"))
-    quality["quality_artifact_hashes"].pop("decision-report.json")
-    quality["quality_artifact_hashes"].pop("validation-report.json")
+    if shadow:
+        manifest_path = root / "quality" / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["mode"] = "shadow"
+        manifest_bytes = json.dumps(manifest).encode()
+        manifest_path.write_bytes(manifest_bytes)
+        quality["quality_artifact_hashes"]["manifest.json"] = hashlib.sha256(
+            manifest_bytes
+        ).hexdigest()
+    else:
+        quality["quality_artifact_hashes"].pop("decision-report.json")
+        quality["quality_artifact_hashes"].pop("validation-report.json")
+        quality["quality_artifact_hashes"].pop("manifest.json")
+        (root / "quality" / "validation-report.json").unlink()
     quality["quality_artifact_hashes"]["semantic-fidelity.json"] = hashlib.sha256(
         fidelity_bytes
     ).hexdigest()
     quality_path.write_text(json.dumps(quality), encoding="utf-8")
-    (root / "quality" / "validation-report.json").unlink()
+
+
+def _set_candidate_report_hash(root: Path, name: str, digest: str) -> None:
+    manifest_path = root / "quality" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["reports"][name] = digest
+    manifest_bytes = json.dumps(manifest).encode()
+    manifest_path.write_bytes(manifest_bytes)
+    quality_path = root / "quality" / "quality-report.json"
+    quality = json.loads(quality_path.read_text(encoding="utf-8"))
+    quality["quality_artifact_hashes"][name] = digest
+    quality["quality_artifact_hashes"]["manifest.json"] = hashlib.sha256(
+        manifest_bytes
+    ).hexdigest()
+    quality_path.write_text(json.dumps(quality), encoding="utf-8")
 
 
 class ReusingParser:
@@ -357,10 +399,7 @@ def test_issue_3_verifier_rejects_decision_report_hash_mismatch(
 ) -> None:
     root = tmp_path / "product"
     _write_artifact(root, ExtractionMode.PDF_EMBEDDED)
-    quality_path = root / "quality" / "quality-report.json"
-    quality = json.loads(quality_path.read_text(encoding="utf-8"))
-    quality["quality_artifact_hashes"]["decision-report.json"] = "0" * 64
-    quality_path.write_text(json.dumps(quality), encoding="utf-8")
+    _set_candidate_report_hash(root, "decision-report.json", "0" * 64)
     _install_replay(monkeypatch)
 
     with pytest.raises(
@@ -381,12 +420,11 @@ def test_issue_3_verifier_binds_saved_validation_to_replay(
     validation["canonical_hash"] = "e" * 64
     validation_bytes = json.dumps(validation).encode()
     validation_path.write_bytes(validation_bytes)
-    quality_path = root / "quality" / "quality-report.json"
-    quality = json.loads(quality_path.read_text(encoding="utf-8"))
-    quality["quality_artifact_hashes"]["validation-report.json"] = hashlib.sha256(
-        validation_bytes
-    ).hexdigest()
-    quality_path.write_text(json.dumps(quality), encoding="utf-8")
+    _set_candidate_report_hash(
+        root,
+        "validation-report.json",
+        hashlib.sha256(validation_bytes).hexdigest(),
+    )
     _install_replay(monkeypatch)
 
     with pytest.raises(
@@ -453,6 +491,21 @@ def test_issue_3_verifier_preserves_legacy_ocr_correction_reuse(
     fidelity = _write_artifact(root, ExtractionMode.OCR)
     _convert_to_legacy_correction_artifact(root, fidelity)
     assert (root / "quality" / "decision-report.json").exists()
+    _install_replay(monkeypatch)
+
+    result = verifier.verify_issue_3(root)
+
+    assert result["correction_count"] == 1
+    assert result["reused_page_count"] == 1
+
+
+def test_issue_3_verifier_uses_legacy_replay_for_shadow_corrections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "product"
+    fidelity = _write_artifact(root, ExtractionMode.OCR)
+    _convert_to_legacy_correction_artifact(root, fidelity, shadow=True)
     _install_replay(monkeypatch)
 
     result = verifier.verify_issue_3(root)

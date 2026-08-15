@@ -17,7 +17,7 @@ Verify Issue #3 semantic PDF artifacts based on fidelity and deterministic reuse
 
 ## Implementation
 
-Enforce both the reported extraction mode and the actual `.pdf` source in `verify_issue_3`. Validate quality-artifact hashes and the verified/publishable validation report before replay. Candidate artifacts use the independently configured packaged provider identity and must replay all model decisions as cache hits while provider methods fail closed. Legacy artifacts with applied OCR correction audits use a separate correction-planner replay path; candidate decisions and legacy correction audits are not mixed.
+Enforce both the reported extraction mode and the actual `.pdf` source in `verify_issue_3`. Validate quality-artifact hashes and use the hash-bound diagnostics manifest mode to distinguish candidate publication from shadow diagnostics. Candidate artifacts validate the verified/publishable report, use the independently configured packaged provider identity, and must replay all model decisions as cache hits while provider methods fail closed. Legacy and shadow artifacts with applied OCR correction audits use a separate correction-planner replay path; candidate decisions and legacy correction audits are not mixed.
 
 The quality report is an integrity-consistency anchor within the product, not an external signature. Authenticity still comes from the protected workflow and repository review boundary.
 

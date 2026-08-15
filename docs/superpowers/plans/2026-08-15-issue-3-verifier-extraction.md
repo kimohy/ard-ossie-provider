@@ -4,7 +4,7 @@
 
 **Goal:** Make the Issue #3 artifact verifier accept either validated PDF embedded-text extraction or OCR without weakening fidelity checks.
 
-**Architecture:** Keep `verify_issue_3` as the end-to-end artifact gate. It accepts the two PDF modes, binds all reports to the actual source and quality hashes, validates decisions against the packaged provider profile, and proves provider-free cache reuse. Legacy OCR correction artifacts use a separate correction replay path.
+**Architecture:** Keep `verify_issue_3` as the end-to-end artifact gate. It accepts the two PDF modes, binds all reports to the actual source and quality hashes, uses the hash-bound diagnostics manifest to distinguish candidate from shadow output, validates candidate decisions against the packaged provider profile, and proves provider-free cache reuse. Legacy and shadow OCR correction artifacts use a separate correction replay path.
 
 **Tech Stack:** Python 3.12, Pydantic models, pytest, Ruff, markdown-it-py
 

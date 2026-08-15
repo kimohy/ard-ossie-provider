@@ -661,10 +661,39 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
     provider = _ProviderMustNotRun(fidelity, provider=provider_name, model=model)
     quality_hashes = quality_report["quality_artifact_hashes"]
     _require(isinstance(quality_hashes, dict), "ISSUE_3_QUALITY_HASHES_MISSING")
-    is_candidate_artifact = "decision-report.json" in quality_hashes
+    manifest_mode: str | None = None
+    if "manifest.json" in quality_hashes:
+        manifest = json.loads(
+            _quality_artifact_bytes(root, quality_report, "manifest.json")
+        )
+        _require(isinstance(manifest, dict), "ISSUE_3_MANIFEST_INVALID")
+        manifest_mode = manifest.get("mode")
+        _require(
+            manifest_mode in {"legacy", "shadow", "candidate"},
+            "ISSUE_3_MANIFEST_INVALID",
+        )
+        _require(
+            manifest.get("source_hash") == source.sha256,
+            "ISSUE_3_SOURCE_HASH_MISMATCH",
+        )
+    else:
+        _require(
+            "decision-report.json" not in quality_hashes,
+            "ISSUE_3_MANIFEST_MISSING",
+        )
+    is_candidate_artifact = manifest_mode == "candidate"
     decision_report: DecisionReport | None = None
     validation: SemanticValidationReport | None = None
     if is_candidate_artifact:
+        manifest_reports = manifest.get("reports")
+        _require(isinstance(manifest_reports, dict), "ISSUE_3_MANIFEST_INVALID")
+        _require(
+            all(
+                manifest_reports.get(name) == quality_hashes.get(name)
+                for name in ("decision-report.json", "validation-report.json")
+            ),
+            "ISSUE_3_MANIFEST_REPORT_MISMATCH",
+        )
         validation = SemanticValidationReport.model_validate_json(
             _quality_artifact_bytes(root, quality_report, "validation-report.json")
         )
