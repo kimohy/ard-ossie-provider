@@ -1,0 +1,1074 @@
+{
+  "dialects": [
+    "ANSI_SQL"
+  ],
+  "semantic_model": [
+    {
+      "ai_context": {
+        "instructions": "# Semantics 문서\n\n# Marketing Insight Data Semantics\n\n| 항목 | 내용 |\n| --- | --- |\n| 도메인 | Marketing Insight |\n| 관련 키워드 | 가상 캠페인\\, 광고 소재\\, 집행 신호\\, 성과 신호\\, 합성 데이터 |\n| 작성일 | 2026\\-08\\-11 |\n| 작성자 | Synthetic Insights |\n| 버전 | v1\\.0 |\n\n## 1\\. 개요\n\n본 문서는 Marketing Insight 도메인의 AI\\-Ready Data Semantics 정의서이며\\, AI Agent가 합성 데이터를 실제 운영 데이터로 오해하지\\\n않도록 업무 맥락과 용어의 의미를 정의합니다\\.\n\n대상은 가상 캠페인\\, 광고 소재\\, 집행 집계\\, 성과 신호 데이터입니다\\. 모든 명칭· 수치· 코드· 규칙은 설명을 위해 임의 생성되었으며 실제 고객\\, 계정\\, 매체\\, 조직 또는 운영 정책을 나타내지 않습니다\\.\n\n## 2\\. 테이블 리스트\n\n| 테이블 명 | 설명 | Primary Key | Foreign Key |\n| --- | --- | --- | --- |\n| synthetic\\_workspace\\.marketing\\_campaign | 가상 캠페인 기획 및 상태 데이터 | campaign\\_id | \\- |\n| synthetic\\_workspace\\.marketing\\_creative | 가상 광고 소재 메타데이터 | creative\\_id | campaign\\_id |\n| synthetic\\_workspace\\.marketing\\_delivery | 일자·캠페인·소재별 가상 집행 데이터 | event\\_date\\, campaign\\_id\\, creative\\_id | campaign\\_id\\, creative\\_id |\n| synthetic\\_workspace\\.marketing\\_outcome | 일자·캠페인별 가상 성과 신호 데이터 | event\\_date\\, campaign\\_id | campaign\\_id |\n\n## 3\\. 핵심 업무 용어\n\n| 용어 | 정의 | 동의어 | 관련 테이블 |\n| --- | --- | --- | --- |\n| 캠페인 \\(Campaign\\) | 공통 목표와 기간을 갖는 가상 광고 기획 단위\\. campaign\\_id로 식별\\. | Initiative | marketing\\_campaign |\n| 광고 소재 \\(Creative\\) | 메시지와 형식을 가진 가상 광고 표현 단위\\. creative\\_id로 식별\\. | Variant | marketing\\_creative |\n| 목표 유형 \\(Objective Type\\) | Awareness\\, Interest\\, Action으로 구성한 추상 목표 분류\\. | Goal Group | marketing\\_campaign |\n| 채널 그룹 \\(Channel Group\\) | Search\\, Social\\, Video\\, Display로 구성한 추상 채널 그룹\\. | Media Group | marketing\\_campaign |\n| 가상 권역 \\(Market Zone\\) | North\\, South\\, East\\, West의 비현실적 분석 구분\\. | Zone | marketing\\_campaign |\n| 소재 형식 \\(Format Type\\) | Image\\, Short Video\\, Text Card의 가상 표현 형식\\. | Creative Format | marketing\\_creative |\n| 메시지 테마 \\(Message Theme\\) | Discovery\\, Benefit\\, Reminder의 가상 메시지 방향\\. | Theme | marketing\\_creative |\n| 집행 \\(Delivery\\) | 일자·캠페인·소재 조합으로 집계한 가상 노출·반응·비용\\. | Serving | marketing\\_delivery |\n\n## 3\\. 핵심 업무 용어 \\(계속\\)\n\n| 용어 | 정의 | 동의어 | 관련 테이블 |\n| --- | --- | --- | --- |\n| 노출 수 \\(Impression Count\\) | 가상 광고가 표시되었다고 가정한 합성 횟수\\. | Impressions | marketing\\_delivery |\n| 반응 수 \\(Engagement Count\\) | 가상 광고에 반응했다고 가정한 합성 횟수\\. | Engagements | marketing\\_delivery |\n| 관심 신호 \\(Interest Signal\\) | 콘텐츠 탐색을 모사한 비식별 합성 집계 신호\\. | Interest Event | marketing\\_outcome |\n| 행동 신호 \\(Action Signal\\) | 의도 행동을 모사한 비식별 합성 집계 신호\\. | Outcome Signal | marketing\\_outcome |\n| 가상 가치 \\(Modeled Value\\) | 성과 비교를 위해 임의 생성한 비화폐성 값\\. | Synthetic Value | marketing\\_outcome |\n| 관찰 창 \\(Attribution Window\\) | D1\\, D3\\, D7로 표현한 설명용 가상 관찰 기간\\. | Window | marketing\\_outcome |\n| 가상 군집 \\(Audience Cluster\\) | Aster\\, Breeze\\, Cobalt로 구성한 무의미한 군집 라벨\\. | Synthetic Cluster | marketing\\_delivery |\n\n## 4\\. 관계 및 집계 단위\n\n| 개체 | 데이터 단위 | 결합 기준 |\n| --- | --- | --- |\n| Campaign | campaign\\_id 당 1행 | campaign\\_id |\n| Creative | creative\\_id 당 1행 | campaign\\_id |\n| Delivery | event\\_date \\+ campaign\\_id \\+ creative\\_id 당 1행 | campaign\\_id\\, creative\\_id |\n| Outcome | event\\_date \\+ campaign\\_id 당 1행 | campaign\\_id |\n\n## 5\\. 업무 규칙 \\(비즈니스 로직\\)\n\n| 번호 | Rule | 내용 |\n| --- | --- | --- |\n| 1 | 캠페인 기간 | end\\_date는 start\\_date보다 같거나 늦어야 한다\\. |\n| 2 | 캠페인·소재 관계 | 하나의 캠페인에는 여러 소재가 연결될 수 있으며 소재는 하나의 캠페인을 참조한다\\. |\n| 3 | 집행 데이터 단위 | 집행 데이터는 event\\_date\\, campaign\\_id\\, creative\\_id 조합으로 유일해야 한다\\. |\n| 4 | 성과 데이터 단위 | 성과 신호는 event\\_date\\, campaign\\_id 수준으로 집계한다\\. |\n| 5 | 테이블 결합 | 집행을 캠페인 수준으로 먼저 집계한 후 성과와 결합하여 중복 집계를 방지한다\\. |\n| 6 | 수치 범위 | 노출\\, 반응\\, 관심\\, 행동\\, 비용 및 가치 단위는 0 이상이어야 한다\\. |\n| 7 | 비율 계산 | 분모가 0인 경우 비율은 0이 아닌 공란으로 처리한다\\. |\n| 8 | 합성 데이터 경계 | 개인 식별자\\, 실제 계정\\, 실제 매체명 및 실제 화폐 금액을 포함하지 않는다\\. |\n| 9 | 의사 결정 제한 | 합성 수치와 임계값은 실제 예산 ·성과 판단에 사용하지 않는다\\. |\n| 10 | 상태 코드 | 캠페인\\, 소재\\, 집행 상태는 정의된 가상 코드 집합만 사용한다\\. |\n\n## 6\\. 지표 정의서\n\n| 지표명 | 정의 | 집계 공식 | 단위 | 관련 테이블\\/컬럼 |\n| --- | --- | --- | --- | --- |\n| 캠페인 수 \\(Campaign Count\\) | 가상 캠페인의 수 | COUNT\\(DISTINCT campaign\\_id\\) | 건 | marketing\\_campaign\\.campaign\\_id |\n| 활성 캠페인 수 \\(Active Campaign Count\\) | Active 상태의 가상 캠페인 수 | COUNT\\(DISTINCT campaign\\_id\\) WHERE campaign\\_status \\= Active | 건 | marketing\\_campaign |\n| 소재 수 \\(Creative Count\\) | 가상 광고 소재 수 | COUNT\\(DISTINCT creative\\_id\\) | 건 | marketing\\_creative\\.creative\\_id |\n| 노출 수 \\(Impressions\\) | 가상 광고 노출 합계 | SUM\\(impression\\_count\\) | 회 | marketing\\_delivery\\.impression\\_count |\n| 반응 수 \\(Engagements\\) | 가상 광고 반응 합계 | SUM\\(engagement\\_count\\) | 회 | marketing\\_delivery\\.engagement\\_count |\n| 반응률 \\(Engagement Rate\\) | 노출 대비 반응 비율 | SUM\\(engagement\\_count\\) \\/ NULLIF\\(SUM\\(impression\\_count\\)\\,0\\) | \\% | marketing\\_delivery |\n\n## 6\\. 지표 정의서 \\(계속\\)\n\n| 지표명 | 정의 | 집계 공식 | 단위 | 관련 테이블\\/컬럼 |\n| --- | --- | --- | --- | --- |\n| 집행 비용 단위 \\(Spend Units\\) | 시뮬레이션 비용 합계 | SUM\\(spend\\_units\\) | unit | marketing\\_delivery\\.spend\\_units |\n| 반응당 비용 단위 \\(Cost per Engagement\\) | 반응 1 건당 시뮬레이션 비용 | SUM\\(spend\\_units\\) \\/ NULLIF\\(SUM\\(engagement\\_count\\)\\,0\\) | unit | marketing\\_delivery |\n| 관심 신호 수 \\(Interest Signals\\) | 가상 관심 신호 합계 | SUM\\(interest\\_signal\\_count\\) | 회 | marketing\\_outcome |\n| 행동 신호 수 \\(Action Signals\\) | 가상 행동 신호 합계 | SUM\\(action\\_signal\\_count\\) | 회 | marketing\\_outcome |\n| 행동 신호율 \\(Action Signal Rate\\) | 노출 대비 행동 신호 비율 | SUM\\(action\\_signal\\_count\\) \\/ NULLIF\\(SUM\\(impression\\_count\\)\\,0\\) | \\% | delivery \\+ outcome |\n| 가상 가치 단위 \\(Modeled Value Units\\) | 설명용 가상 가치 합계 | SUM\\(modeled\\_value\\_units\\) | unit | marketing\\_outcome |\n| 가상 효율 지수 \\(Modeled Efficiency\\) | 비용 단위 대비 가치 단위 | SUM\\(modeled\\_value\\_units\\) \\/ NULLIF\\(SUM\\(spend\\_units\\)\\,0\\) | index | delivery \\+ outcome |\n\n## 7\\. 활용 시 주의 사항\n\n| 구분 | 내용 |\n| --- | --- |\n| 보안 | 개인정보와 실제 운영 식별자를 포함하지 않습니다\\. |\n| 수치 | 모든 결과값과 임계값은 합성 예시입니다\\. |\n| 도메인 | 특정 광고 플랫폼의 공식 정의와 일치한다고 가정하지 않습니다\\. |\n| 의사 결정 | 예산 배분\\, 성과 평가\\, 외부 보고에 사용할 수 없습니다\\. |\n| 결합 | Delivery는 캠페인 수준으로 선집계한 뒤 Outcome과 결합합니다\\. |\n\n## 8\\. 품질 기준\n\n| 품질 차원 | 가상 기준 |\n| --- | --- |\n| 완전성 | 필수 키 100\\% 존재 |\n| 유일성 | 정의된 복합 키 100\\% 유일 |\n| 유효성 | 수치 0 이상\\, 날짜 범위 및 코드 집합 준수 |\n| 최신성 | 예시 적재 주기 24시간 이내 |\n| 개인정보 | 대상 컬럼 0 개 |\n"
+      },
+      "custom_extensions": [
+        {
+          "data": "{\"id\":\"prd_019ff10c-8be8-79d0-af07-21450abedf9e\",\"kind\":\"product\",\"namespace\":\"ai_ready_data\",\"version\":1}",
+          "vendor_name": "COMMON"
+        }
+      ],
+      "datasets": [
+        {
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"tbl_01a00503-408b-7024-b714-32244136a138\",\"kind\":\"table\",\"namespace\":\"ai_ready_data\",\"version\":1}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "일자, 캠페인, 소재별 가상 광고 노출·반응·비용 집계를 제공하는 합성 테이블",
+          "fields": [
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"DATE\",\"id\":\"col_01a00503-408b-75e4-8471-d272b665596a\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 성과 기준 일자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "event_date"
+                  }
+                ]
+              },
+              "name": "event_date"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7037-b254-fffb2cce15f8\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 캠페인 식별자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "campaign_id"
+                  }
+                ]
+              },
+              "name": "campaign_id"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7f6e-9ca4-972c6fd7f696\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 소재 식별자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "creative_id"
+                  }
+                ]
+              },
+              "name": "creative_id"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7695-9236-ebb7cdfc04ef\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Aster, Breeze, Cobalt의 무의미한 가상 군집 라벨",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "audience_cluster"
+                  }
+                ]
+              },
+              "name": "audience_cluster"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"INTEGER\",\"id\":\"col_01a00503-408c-7634-b5d9-e04b81d4cca2\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "시뮬레이션 광고 노출 수",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "impression_count"
+                  }
+                ]
+              },
+              "name": "impression_count"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"INTEGER\",\"id\":\"col_01a00503-408c-77e1-83cc-43a3392a6331\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "시뮬레이션 광고 반응 수",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "engagement_count"
+                  }
+                ]
+              },
+              "name": "engagement_count"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"NUMERIC\",\"id\":\"col_01a00503-408c-7780-9232-e24b900b7734\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "실제 화폐가 아닌 시뮬레이션 비용 단위",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "spend_units"
+                  }
+                ]
+              },
+              "name": "spend_units"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408c-7ebf-bc18-41086ea67860\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Ready, Served, Adjusted의 가상 집행 상태",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "delivery_status"
+                  }
+                ]
+              },
+              "name": "delivery_status"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"TIMESTAMP\",\"id\":\"col_01a00503-408c-7480-af9f-470aad6ec979\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "예시 테이블 적재 시각",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "loaded_at"
+                  }
+                ]
+              },
+              "name": "loaded_at"
+            }
+          ],
+          "name": "marketing_delivery",
+          "primary_key": [
+            "event_date",
+            "campaign_id",
+            "creative_id"
+          ],
+          "source": "synthetic_workspace.marketing_insight.marketing_delivery"
+        },
+        {
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"tbl_01a00503-408b-7166-8e91-08f59adbd27e\",\"kind\":\"table\",\"namespace\":\"ai_ready_data\",\"version\":1}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "가상 캠페인에 연결된 광고 소재의 형식과 메시지 속성을 제공하는 합성 테이블",
+          "fields": [
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7508-8bde-dd75fbcc74dc\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 광고 소재 식별자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "creative_id"
+                  }
+                ]
+              },
+              "name": "creative_id"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7f11-983e-d3c9a9163033\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "상위 가상 캠페인 식별자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "campaign_id"
+                  }
+                ]
+              },
+              "name": "campaign_id"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-74be-84dd-23db78768c9d\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Image, Short Video, Text Card의 가상 형식",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "format_type"
+                  }
+                ]
+              },
+              "name": "format_type"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-705a-9b99-c604f8e510b2\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Discovery, Benefit, Reminder의 가상 메시지 테마",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "message_theme"
+                  }
+                ]
+              },
+              "name": "message_theme"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7d49-9e60-3178da1b4bff\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "A, B, C로 구성한 가상 변형 코드",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "variant_code"
+                  }
+                ]
+              },
+              "name": "variant_code"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7fe8-b32f-04a134f9c1b7\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Ready, Hold, Retired의 가상 검토 상태",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "review_status"
+                  }
+                ]
+              },
+              "name": "review_status"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"TIMESTAMP\",\"id\":\"col_01a00503-408b-7f99-9e31-cae3758284c4\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "예시 테이블 적재 시각",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "loaded_at"
+                  }
+                ]
+              },
+              "name": "loaded_at"
+            }
+          ],
+          "name": "marketing_creative",
+          "primary_key": [
+            "creative_id"
+          ],
+          "source": "synthetic_workspace.marketing_insight.marketing_creative"
+        },
+        {
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"tbl_01a00503-408b-7d3f-be91-60064927870f\",\"kind\":\"table\",\"namespace\":\"ai_ready_data\",\"version\":1}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "가상 광고 캠페인의 기획, 기간, 예산 단위 및 집행 상태를 제공하는 합성 테이블",
+          "fields": [
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-74dc-b65c-1464947c823c\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 캠페인을 구분하는 합성 식별자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "campaign_id"
+                  }
+                ]
+              },
+              "name": "campaign_id"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7308-a2f1-4be21ef8a820\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "분석 예시를 위한 가상 캠페인 명칭",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "campaign_name"
+                  }
+                ]
+              },
+              "name": "campaign_name"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-747a-8b3e-abb1bb3c13a1\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Awareness, Interest, Action으로 구성한 가상 목표 구분",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "objective_type"
+                  }
+                ]
+              },
+              "name": "objective_type"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-72a1-afe8-8d98a4eeb6cd\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Search, Social, Video, Display의 추상 채널 그룹",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "channel_group"
+                  }
+                ]
+              },
+              "name": "channel_group"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-707d-bbc7-15db647466a3\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "North, South, East, West로 구성한 가상 분석 권역",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "market_zone"
+                  }
+                ]
+              },
+              "name": "market_zone"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"NUMERIC\",\"id\":\"col_01a00503-408b-7bfb-b07a-381755008995\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "실제 화폐가 아닌 시뮬레이션용 예산 단위",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "budget_units"
+                  }
+                ]
+              },
+              "name": "budget_units"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"DATE\",\"id\":\"col_01a00503-408b-7c88-9090-4027a7cfabb9\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 캠페인 시작 일자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "start_date"
+                  }
+                ]
+              },
+              "name": "start_date"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"DATE\",\"id\":\"col_01a00503-408b-7f8f-a446-706b53835a68\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 캠페인 종료 일자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "end_date"
+                  }
+                ]
+              },
+              "name": "end_date"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-725e-b237-8a34f10392f6\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Draft, Active, Paused, Closed 상태",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "campaign_status"
+                  }
+                ]
+              },
+              "name": "campaign_status"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408b-7778-90e2-3567183731a1\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "P1, P2, P3로 구성한 가상 우선순위",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "priority_band"
+                  }
+                ]
+              },
+              "name": "priority_band"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"INTEGER\",\"id\":\"col_01a00503-408b-7a95-82ca-a6bc05181ed6\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "시뮬레이션 목표 노출 규모",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "planned_reach"
+                  }
+                ]
+              },
+              "name": "planned_reach"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"INTEGER\",\"id\":\"col_01a00503-408b-7ce9-b1d0-dc47ef755975\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "시뮬레이션 목표 반응 규모",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "planned_response"
+                  }
+                ]
+              },
+              "name": "planned_response"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"BOOLEAN\",\"id\":\"col_01a00503-408b-7d32-97e7-6cdc55ead8a7\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 실험 적용 여부",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "experiment_flag"
+                  }
+                ]
+              },
+              "name": "experiment_flag"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"TIMESTAMP\",\"id\":\"col_01a00503-408b-72ed-a230-0ad8d9eedea1\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "합성 레코드 생성 시각",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "source_created_at"
+                  }
+                ]
+              },
+              "name": "source_created_at"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"TIMESTAMP\",\"id\":\"col_01a00503-408b-71e0-b0c2-a1055f79df0c\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "합성 레코드 갱신 시각",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "source_updated_at"
+                  }
+                ]
+              },
+              "name": "source_updated_at"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"TIMESTAMP\",\"id\":\"col_01a00503-408b-7ec4-aa38-f327d0eef24c\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "예시 테이블 적재 시각",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "loaded_at"
+                  }
+                ]
+              },
+              "name": "loaded_at"
+            }
+          ],
+          "name": "marketing_campaign",
+          "primary_key": [
+            "campaign_id"
+          ],
+          "source": "synthetic_workspace.marketing_insight.marketing_campaign"
+        },
+        {
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"tbl_01a00503-408c-7ab1-9bcb-d72dfbbe2ee5\",\"kind\":\"table\",\"namespace\":\"ai_ready_data\",\"version\":1}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "광고 반응 이후의 가상 관심·행동 신호를 캠페인 단위로 제공하는 합성 테이블",
+          "fields": [
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"DATE\",\"id\":\"col_01a00503-408c-77a3-9266-a0c51c442625\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 성과 기준 일자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "event_date"
+                  }
+                ]
+              },
+              "name": "event_date"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408c-7475-a9bb-25dcd77b40f1\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "가상 캠페인 식별자",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "campaign_id"
+                  }
+                ]
+              },
+              "name": "campaign_id"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"INTEGER\",\"id\":\"col_01a00503-408c-7dde-906c-bbf679981eb6\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "콘텐츠 탐색을 모사한 가상 관심 신호 수",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "interest_signal_count"
+                  }
+                ]
+              },
+              "name": "interest_signal_count"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"INTEGER\",\"id\":\"col_01a00503-408c-7582-835b-e943429a3120\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "의도 행동을 모사한 가상 행동 신호 수",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "action_signal_count"
+                  }
+                ]
+              },
+              "name": "action_signal_count"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"NUMERIC\",\"id\":\"col_01a00503-408c-7a8b-b850-342ba9d5fdbe\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "성과 비교를 위한 가상 가치 단위",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "modeled_value_units"
+                  }
+                ]
+              },
+              "name": "modeled_value_units"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408c-7801-9941-b598525a5a28\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "D1, D3, D7의 가상 관찰 창",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "attribution_window"
+                  }
+                ]
+              },
+              "name": "attribution_window"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"STRING\",\"id\":\"col_01a00503-408c-7a6c-8bdc-ac7730ce6acf\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":true}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "Normal, Review의 가상 품질 상태",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "quality_flag"
+                  }
+                ]
+              },
+              "name": "quality_flag"
+            },
+            {
+              "custom_extensions": [
+                {
+                  "data": "{\"data_type\":\"TIMESTAMP\",\"id\":\"col_01a00503-408c-7750-adde-97da65bbced1\",\"kind\":\"column\",\"namespace\":\"ai_ready_data\",\"nullable\":false}",
+                  "vendor_name": "COMMON"
+                }
+              ],
+              "description": "예시 테이블 적재 시각",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "loaded_at"
+                  }
+                ]
+              },
+              "name": "loaded_at"
+            }
+          ],
+          "name": "marketing_outcome",
+          "primary_key": [
+            "event_date",
+            "campaign_id"
+          ],
+          "source": "synthetic_workspace.marketing_insight.marketing_outcome"
+        }
+      ],
+      "description": "이 데이터는 가상 캠페인, 소재, 집행 및 성과 신호를 설명하기 위한 합성 데이터입니다. 실제 고객, 계정, 광고 플랫폼, 조직 또는 운영 수치를 포함하지 않으며, 상세 구조는 첨부된 Data Dictionary에서 확인할 수 있습니다.",
+      "metrics": [
+        {
+          "ai_context": {
+            "synonyms": [
+              "행동 신호 수",
+              "Action Signal"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-730b-a294-0a58ca170fb9\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Sum of synthetic action signals.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(marketing_outcome.action_signal_count)"
+              }
+            ]
+          },
+          "name": "Action Signals"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "가상 가치 단위",
+              "Synthetic Value"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-73c9-b1fe-8bfc809322f0\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Sum of non-monetary synthetic modeled value units.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(marketing_outcome.modeled_value_units)"
+              }
+            ]
+          },
+          "name": "Modeled Value Units"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "캠페인 수"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-76a3-bffb-24b81af1f6f7\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Count of distinct synthetic campaigns.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "COUNT(DISTINCT marketing_campaign.campaign_id)"
+              }
+            ]
+          },
+          "name": "Campaign Count"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "소재 수"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-77bd-bf62-82f2fbf13f94\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Count of distinct synthetic advertising creatives.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "COUNT(DISTINCT marketing_creative.creative_id)"
+              }
+            ]
+          },
+          "name": "Creative Count"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "관심 신호 수",
+              "Interest Signal"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-79b0-ba1c-65c4e3665444\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Sum of synthetic interest signals.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(marketing_outcome.interest_signal_count)"
+              }
+            ]
+          },
+          "name": "Interest Signals"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "활성 캠페인 수"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-7b3a-b95b-630ef4c7e6f9\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Count of distinct campaigns in Active status.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "COUNT(DISTINCT CASE WHEN marketing_campaign.campaign_status = 'Active' THEN marketing_campaign.campaign_id END)"
+              }
+            ]
+          },
+          "name": "Active Campaign Count"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "집행 비용 단위"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-7c42-a57f-f085518b278b\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Sum of simulated spend units.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(marketing_delivery.spend_units)"
+              }
+            ]
+          },
+          "name": "Spend Units"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "노출 수",
+              "Impression Count"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-7c75-b2b2-ab5f9c37bd24\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Sum of synthetic advertising impressions.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(marketing_delivery.impression_count)"
+              }
+            ]
+          },
+          "name": "Impressions"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "반응당 비용 단위"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-7e4d-8753-410062b10075\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Simulated spend units per engagement; returns NULL when engagements are zero.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(marketing_delivery.spend_units) / NULLIF(SUM(marketing_delivery.engagement_count), 0)"
+              }
+            ]
+          },
+          "name": "Cost per Engagement"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "반응률"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-7e9f-83cb-6a5ea0851238\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Ratio of engagements to impressions; returns NULL when impressions are zero.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "CAST(SUM(marketing_delivery.engagement_count) AS DECIMAL(38, 12)) / NULLIF(SUM(marketing_delivery.impression_count), 0)"
+              }
+            ]
+          },
+          "name": "Engagement Rate"
+        },
+        {
+          "ai_context": {
+            "synonyms": [
+              "반응 수",
+              "Engagement Count"
+            ]
+          },
+          "custom_extensions": [
+            {
+              "data": "{\"id\":\"met_01a00503-9a06-7f6f-816f-1448b43ab95b\",\"kind\":\"metric\",\"namespace\":\"ai_ready_data\"}",
+              "vendor_name": "COMMON"
+            }
+          ],
+          "description": "Sum of synthetic advertising engagements.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(marketing_delivery.engagement_count)"
+              }
+            ]
+          },
+          "name": "Engagements"
+        }
+      ],
+      "name": "500138301",
+      "relationships": []
+    }
+  ],
+  "vendors": [
+    "COMMON"
+  ],
+  "version": "0.1.1"
+}
