@@ -27,9 +27,7 @@ def _spacing_candidate(
     character_sequence = "".join(
         character for character in rendered_text if not character.isspace()
     )
-    atom_ids = tuple(
-        f"atom_{index + 1:016x}" for index in range(len(character_sequence))
-    )
+    atom_ids = tuple(f"atom_{index + 1:016x}" for index in range(len(character_sequence)))
     return make_spacing_candidate(
         region_id=REGION_ID,
         rendered_text=rendered_text,
@@ -81,10 +79,134 @@ def test_generated_candidate_rejects_whitespace_inside_protected_tokens(
         build_generated_candidate(anchor, damaged, confidence=0.91)
 
 
+@pytest.mark.parametrize(
+    ("source", "damaged"),
+    [
+        ("AB12CD and AB12CD", "AB12CD and AB12 CD"),
+        ("10kg and 10kg", "10kg and 10 kg"),
+    ],
+)
+def test_generated_candidate_rejects_one_split_occurrence_of_a_repeated_token(
+    source: str,
+    damaged: str,
+) -> None:
+    anchor = _spacing_candidate(source)
+
+    with pytest.raises(ValueError, match="SPACING_REPAIR_PROTECTED_TOKEN_SPLIT"):
+        build_generated_candidate(anchor, damaged, confidence=0.91)
+
+
+@pytest.mark.parametrize("source", ["AB12CD and AB12CD", "10kg and 10kg"])
+def test_generated_candidate_accepts_all_intact_occurrences_of_a_repeated_token(
+    source: str,
+) -> None:
+    anchor = _spacing_candidate(source)
+
+    generated = build_generated_candidate(anchor, source, confidence=0.91)
+
+    assert generated.rendered_text == source
+
+
+@pytest.mark.parametrize(
+    ("source", "damaged"),
+    [
+        ("AB12 XAB12Y", "AB 12 XAB12Y"),
+        ("10kg X10kgY", "10 kg X10kgY"),
+    ],
+)
+def test_generated_candidate_does_not_count_token_substrings_as_intact_occurrences(
+    source: str,
+    damaged: str,
+) -> None:
+    anchor = _spacing_candidate(source)
+
+    with pytest.raises(ValueError, match="SPACING_REPAIR_PROTECTED_TOKEN_SPLIT"):
+        build_generated_candidate(anchor, damaged, confidence=0.91)
+
+
 def test_protected_token_gap_is_a_deterministic_candidate_defect() -> None:
     candidate = _spacing_candidate("user@ example.com")
 
     assert "PROTECTED_TOKEN_WHITESPACE_SPLIT" in spacing_defect_codes(candidate)
+
+
+@pytest.mark.parametrize(
+    "rendered_text",
+    [
+        "email user@example.com now",
+        "visit https://example.com now",
+        "due 2026-08-15 today",
+        "code AB12CD status",
+        "limit 10kg total",
+        "period 2026 08 summary",
+        "status CODE AB12 pending",
+        "version X12 BETA",
+        "model AB12 PRO",
+        "code AB12 STATUS",
+        "invoice A1 PAID",
+        "measurement 10 kg total",
+    ],
+)
+def test_normal_context_whitespace_around_protected_tokens_is_not_a_defect(
+    rendered_text: str,
+) -> None:
+    candidate = _spacing_candidate(rendered_text)
+
+    assert "PROTECTED_TOKEN_WHITESPACE_SPLIT" not in spacing_defect_codes(candidate)
+
+
+@pytest.mark.parametrize(
+    ("source", "dense"),
+    [
+        ("email user@example.com now", "emailuser@example.comnow"),
+        ("visit https://example.com now", "visithttps://example.comnow"),
+        ("due 2026-08-15 today", "due2026-08-15today"),
+        ("code AB12CD status", "codeAB12CDstatus"),
+        ("limit 10kg total", "limit10kgtotal"),
+    ],
+)
+def test_fallback_preserves_valid_context_whitespace_around_protected_tokens(
+    source: str,
+    dense: str,
+) -> None:
+    source_candidate = _spacing_candidate(
+        source,
+        feature="source_spacing",
+        score=0.45,
+    )
+    dense_candidate = _spacing_candidate(dense, feature="dense", score=0.88)
+
+    fallback = fallback_spacing_candidate(_candidate_set(source_candidate, dense_candidate))
+
+    assert fallback.candidate_id == source_candidate.candidate_id
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "version X12 BETA",
+        "model AB12 PRO",
+        "code AB12 STATUS",
+        "invoice A1 PAID",
+    ],
+)
+def test_fallback_does_not_flatten_identifier_followed_by_uppercase_word(
+    source: str,
+) -> None:
+    source_candidate = _spacing_candidate(
+        source,
+        feature="source_spacing",
+        score=0.45,
+    )
+    dense_candidate = _spacing_candidate(
+        source.replace(" ", ""),
+        feature="dense",
+        score=0.88,
+    )
+
+    fallback = fallback_spacing_candidate(_candidate_set(source_candidate, dense_candidate))
+
+    assert fallback.candidate_id == source_candidate.candidate_id
 
 
 def test_generated_candidate_rejects_character_mutation() -> None:

@@ -48,6 +48,18 @@ _PROTECTED_TOKEN_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_LOOSE_PROTECTED_TOKEN_PATTERNS = (
+    re.compile(
+        r"[A-Za-z][A-Za-z0-9+.-]*\s*:\s*/\s*/\s*"
+        r"[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+"
+    ),
+    re.compile(
+        r"[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9-]+"
+        r"(?:\s*\.\s*[A-Za-z0-9-]+)+"
+    ),
+    re.compile(r"\d{4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}"),
+    re.compile(r"\d{1,2}\s*:\s*\d{2}(?:\s*:\s*\d{2})?"),
+)
 _SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+[%℃°,:;.!?)}\]]")
 _SPACE_AFTER_OPEN = re.compile(r"[({\[]\s+")
 
@@ -106,7 +118,7 @@ def spacing_defect_codes(candidate: SpacingCandidate) -> tuple[ValidationCode, .
     identifier_split = _IDENTIFIER_WHITESPACE.search(candidate.rendered_text) is not None
     if identifier_split:
         codes.append("IDENTIFIER_WHITESPACE_SPLIT")
-    elif _has_protected_token_split(candidate.rendered_text, candidate.character_sequence):
+    elif _has_protected_token_split(candidate.rendered_text):
         codes.append("PROTECTED_TOKEN_WHITESPACE_SPLIT")
     if _SPACE_BEFORE_PUNCTUATION.search(candidate.rendered_text):
         codes.append("PUNCTUATION_WHITESPACE_BEFORE")
@@ -126,7 +138,10 @@ def build_generated_candidate(
         raise ValueError("SPACING_REPAIR_CONTROL_SEPARATOR")
     if _IDENTIFIER_WHITESPACE.search(rendered_text):
         raise ValueError("SPACING_REPAIR_IDENTIFIER_SPLIT")
-    if _has_protected_token_split(rendered_text, anchor.character_sequence):
+    if _has_protected_token_split(
+        rendered_text,
+        expected_tokens=_protected_token_occurrences(anchor.rendered_text),
+    ):
         raise ValueError("SPACING_REPAIR_PROTECTED_TOKEN_SPLIT")
     generated = make_spacing_candidate(
         region_id=anchor.region_id,
@@ -202,7 +217,7 @@ def _generation_request(
         "candidate_set_id": candidate_set.candidate_set_id,
         "region_id": candidate_set.region_id,
         "exact_character_sequence": anchor.character_sequence,
-        "protected_identifiers": _protected_tokens(anchor.character_sequence),
+        "protected_identifiers": _protected_tokens(anchor.rendered_text),
         "hard_line_boundary_indexes": [
             index for index, state in enumerate(anchor_states) if state == "hard_break"
         ],
@@ -245,7 +260,7 @@ def _verification_request(
         "candidate_set_id": candidate_set.candidate_set_id,
         "region_id": candidate_set.region_id,
         "exact_character_sequence": generated.character_sequence,
-        "protected_identifiers": _protected_tokens(generated.character_sequence),
+        "protected_identifiers": _protected_tokens(generated.rendered_text),
         "generated_candidate_id": generated.candidate_id,
         "candidates": [
             {
@@ -286,21 +301,38 @@ def _without_whitespace(value: str) -> str:
     return "".join(character for character in value if not character.isspace())
 
 
-def _protected_tokens(character_sequence: str) -> list[str]:
+def _protected_tokens(rendered_text: str) -> list[str]:
     return sorted(
-        {
-            match.group(0)
-            for pattern in _PROTECTED_TOKEN_PATTERNS
-            for match in pattern.finditer(character_sequence)
-        },
+        set(_protected_token_occurrences(rendered_text)),
         key=lambda token: (-len(token), token),
     )
 
 
-def _has_protected_token_split(rendered_text: str, character_sequence: str) -> bool:
+def _protected_token_occurrences(rendered_text: str) -> list[str]:
+    matches = {
+        (match.start(), match.end(), match.group(0))
+        for pattern in _PROTECTED_TOKEN_PATTERNS
+        for match in pattern.finditer(rendered_text)
+    }
+    return [token for _, _, token in sorted(matches)]
+
+
+def _has_protected_token_split(
+    rendered_text: str,
+    *,
+    expected_tokens: list[str] | None = None,
+) -> bool:
+    if expected_tokens:
+        observed_tokens = _protected_token_occurrences(rendered_text)
+        if any(
+            observed_tokens.count(token) < expected_tokens.count(token)
+            for token in set(expected_tokens)
+        ):
+            return True
     return any(
-        rendered_text.count(token) < character_sequence.count(token)
-        for token in _protected_tokens(character_sequence)
+        any(character.isspace() for character in match.group(0))
+        for pattern in _LOOSE_PROTECTED_TOKEN_PATTERNS
+        for match in pattern.finditer(rendered_text)
     )
 
 
