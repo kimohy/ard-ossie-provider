@@ -197,6 +197,7 @@ Expected: README remains an entry point rather than duplicating full policy or o
 - Verify: `docs/github-actions-setup.md`
 - Verify: `docs/operations/semantic-pdf-rollout.md`
 - Verify: `docs/next-steps.md`
+- Verify: `docs/github-enterprise-migration.md` against GHES 3.18.12, with the available 3.18.13 security hotpatch as a production gate
 
 **Interfaces:**
 - Consumes: all documentation tasks.
@@ -229,3 +230,34 @@ Check for contradictory policy statements, stale links, secrets, raw source payl
 - [ ] **Step 5: Commit and publish**
 
 Stage only the approved Markdown files, commit with a documentation-specific message, push `docs/semantic-pipeline-refresh`, open a PR, request independent review, wait for repository checks, and merge only when the gate is clean.
+
+### Task 7: Add GitHub Enterprise migration and setup guidance
+
+**Files:**
+- Create: `docs/github-enterprise-migration.md` for GHES 3.18.12 compatibility and the 3.18.13 production security gate
+- Modify: `README.md`
+- Modify: `docs/github-actions-setup.md`
+
+**Interfaces:**
+- Consumes: current workflow Action pins, runner labels, GitHub adapter host behavior, and official GitHub Enterprise support documentation.
+- Produces: a new-repository-to-Actions manual with explicit Cloud/GHES compatibility gates.
+
+- [ ] **Step 1: Separate Enterprise products**
+
+Document GitHub Enterprise Cloud on `github.com`, Cloud with data residency on `ghe.com`, and GHES as distinct targets.
+
+- [ ] **Step 2: Document migration and repository recreation**
+
+Cover inventory, source freeze, trial migration, Git/LFS transfer, non-migrated settings and credentials, integrity checks, and source retirement.
+
+- [ ] **Step 3: Document GHES compatibility blockers**
+
+Record self-hosted runner requirements, current Action/runtime pins, artifact v3 compatibility, external Action supply, network/tool caches, and the `github.com`-only Issue attachment trust boundary.
+
+- [ ] **Step 4: Document staged Actions enablement**
+
+Cover bootstrap dry-run, Environment/Secret/Variable recreation, repository gate, LLM smoke, direct branch, Issue intake, release, linkage, and rollback boundaries.
+
+- [ ] **Step 5: Add version-specific guidance**
+
+Use official GitHub documentation to record the supported GHES release window, minimum runner versions, Node runtime constraints, API compatibility checks, and an upgrade smoke matrix.

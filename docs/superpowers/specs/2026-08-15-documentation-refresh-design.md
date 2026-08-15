@@ -18,7 +18,8 @@ Use a layered documentation set:
 4. `docs/github-actions-setup.md` remains the GitHub configuration and trust-boundary runbook.
 5. `docs/operations/semantic-pdf-rollout.md` remains the incident, rollback, and acceptance runbook.
 6. `docs/next-steps.md` records only unfinished work and clearly labels completed milestones.
-7. `docs/superpowers/specs/` and `docs/superpowers/plans/` remain historical decision and implementation records. They do not override current code or normative documentation.
+7. `docs/github-enterprise-migration.md` separates Enterprise Cloud and GHES setup, compatibility, migration, staged Actions enablement, and GHES 3.18.12-specific cautions with a 3.18.13 production security gate.
+8. `docs/superpowers/specs/` and `docs/superpowers/plans/` remain historical decision and implementation records. They do not override current code or normative documentation.
 
 ## Documentation authority
 
@@ -86,6 +87,7 @@ Detailed acceptance scripts and full environment matrices belong in linked docum
 - `docs/github-actions-setup.md` will document the candidate pipeline variable, protected LLM execution, non-blocking review debt, release tag identity, retry semantics, and the distinction between historical failed runs and converged release state.
 - `docs/operations/semantic-pdf-rollout.md` will replace stale assumptions that `review_required` always stops publication. It will define safe continuation, review-debt inspection, Issue #3 verification, and release recovery.
 - `docs/next-steps.md` will mark Issue #3 conversion, heading repair, whitespace recovery, optional metric isolation, and v1 release as completed. Remaining items will be limited to genuine operational or product backlog.
+- `docs/github-enterprise-migration.md` will document new-repository setup through staged Actions enablement for GHES 3.18.12, require the available 3.18.13 security hotpatch before production cutover, and mark the current runner, artifact, Action supply, deployment-permission, and attachment-host incompatibilities as explicit deployment gates.
 
 ## Validation
 
