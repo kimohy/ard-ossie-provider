@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ard_ossie.semantic.adjudication import CandidateAdjudicator
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
     ContinuationCandidate,
     ReadingOrderCandidate,
     RecognitionCandidate,
+    TableCandidate,
 )
 from ard_ossie.semantic.evidence import (
     EvidenceAtom,
@@ -33,6 +36,7 @@ from ard_ossie.semantic.structure_candidates import (
     build_continuation_candidate_sets,
     build_reading_order_candidate_set,
     build_recognition_candidate_sets,
+    build_table_candidate_set,
 )
 
 SOURCE_HASH = "d" * 64
@@ -129,6 +133,129 @@ def _embedded_fixture(
         order_edges=edges,
     )
     return evidence, layout
+
+
+def _spanning_table_fixture() -> tuple[
+    EvidenceDocument,
+    LayoutDocument,
+    StructureDocument,
+]:
+    cell_specs = (
+        ("항목", SourceBox(left=0.1, bottom=0.8, right=0.3, top=0.86)),
+        ("정의", SourceBox(left=0.55, bottom=0.8, right=0.75, top=0.86)),
+        ("creative_id", SourceBox(left=0.1, bottom=0.6, right=0.35, top=0.66)),
+        ("광고 소재", SourceBox(left=0.55, bottom=0.6, right=0.85, top=0.66)),
+    )
+    atoms: list[EvidenceAtom] = []
+    cell_atom_ids: list[tuple[str, ...]] = []
+    for source_object, (text, box) in enumerate(cell_specs):
+        atom_ids: list[str] = []
+        width = (box.right - box.left) / len(text)
+        for source_index, character in enumerate(text):
+            atom_id = f"atom_{len(atoms) + 1:016x}"
+            atom_ids.append(atom_id)
+            atoms.append(
+                EvidenceAtom(
+                    atom_id=atom_id,
+                    ordinal=len(atoms),
+                    page=1,
+                    bbox=SourceBox(
+                        left=box.left + source_index * width,
+                        bottom=box.bottom,
+                        right=box.left + (source_index + 1) * width,
+                        top=box.top,
+                    ),
+                    text=character,
+                    kind="whitespace" if character.isspace() else "character",
+                    authority="embedded",
+                    source_object=source_object,
+                    source_index=source_index,
+                )
+            )
+        cell_atom_ids.append(tuple(atom_ids))
+    region_id = "region_0000000000000101"
+    region_atom_ids = tuple(
+        atom_id for cell_ids in cell_atom_ids for atom_id in reversed(cell_ids)
+    )
+    evidence = EvidenceDocument(
+        source_hash=SOURCE_HASH,
+        extraction_mode=EvidenceExtractionMode.PDF_EMBEDDED,
+        page_count=1,
+        parser_versions={"fixture": "1"},
+        atoms=tuple(atoms),
+        regions=(
+            EvidenceRegion(
+                region_id="region_0000000000000001",
+                page=1,
+                bbox=SourceBox(left=0.08, bottom=0.58, right=0.87, top=0.88),
+                atom_ids=region_atom_ids,
+                authority="embedded",
+            ),
+        ),
+    )
+    lines = (
+        LayoutLine(
+            line_id="line_0000000000000001",
+            page=1,
+            bbox=SourceBox(left=0.1, bottom=0.8, right=0.75, top=0.86),
+            atom_ids=(*cell_atom_ids[0], *cell_atom_ids[1]),
+            evidence_region_ids=("region_0000000000000001",),
+            baseline=0.8,
+            median_height=0.06,
+        ),
+        LayoutLine(
+            line_id="line_0000000000000002",
+            page=1,
+            bbox=SourceBox(left=0.1, bottom=0.6, right=0.85, top=0.66),
+            atom_ids=(*cell_atom_ids[2], *cell_atom_ids[3]),
+            evidence_region_ids=("region_0000000000000001",),
+            baseline=0.6,
+            median_height=0.06,
+        ),
+    )
+    layout = LayoutDocument(
+        source_hash=SOURCE_HASH,
+        page_count=1,
+        lines=lines,
+        regions=(
+            LayoutRegion(
+                region_id=region_id,
+                page=1,
+                bbox=SourceBox(left=0.08, bottom=0.58, right=0.87, top=0.88),
+                line_ids=tuple(line.line_id for line in lines),
+                atom_ids=region_atom_ids,
+                evidence_region_ids=("region_0000000000000001",),
+                column=0,
+                hint="table",
+            ),
+        ),
+        order_edges=(),
+    )
+    cells = tuple(
+        StructureCell(
+            start_row=index // 2,
+            end_row=index // 2 + 1,
+            start_column=index % 2,
+            end_column=index % 2 + 1,
+            text_hint=text,
+            column_header=index < 2,
+            bbox=box,
+        )
+        for index, (text, box) in enumerate(cell_specs)
+    )
+    hints = StructureDocument(
+        blocks=(
+            StructureBlock(
+                kind="table",
+                order=0,
+                page=1,
+                bbox=SourceBox(left=0.08, bottom=0.58, right=0.87, top=0.88),
+                text_hint="항목 정의 creative_id 광고 소재",
+                table=StructureTable(row_count=2, column_count=2, cells=cells),
+            ),
+        )
+    )
+    return evidence, layout, hints
 
 
 def test_heading_candidate_uses_numbering_and_geometry_without_authoring_text() -> None:
@@ -228,6 +355,139 @@ def test_incidental_hint_overlap_does_not_create_table_candidate() -> None:
     )[0]
 
     assert not any(item.block_kind == "table" for item in candidate_set.candidates)
+
+
+def test_invariant_proven_table_preserves_exact_cell_text_when_lines_span_columns() -> None:
+    evidence, layout, hints = _spanning_table_fixture()
+
+    candidate_set = build_table_candidate_set(
+        layout.regions[0],
+        evidence,
+        layout,
+        hints,
+    )
+    proven = [
+        item
+        for item in candidate_set.candidates
+        if isinstance(item, TableCandidate)
+        and item.features.get("atom_bbox_cell_agreement") == 1.0
+        and item.features.get("cell_character_multiset") == 1.0
+        and item.features.get("structure_hint_text") == 1.0
+    ]
+
+    assert len(proven) == 1
+    assert [cell.rendered_text for cell in proven[0].cells] == [
+        "항목",
+        "정의",
+        "creative_id",
+        "광고 소재",
+    ]
+    assert set(proven[0].atom_ids) == set(layout.regions[0].atom_ids)
+    assert len(proven[0].atom_ids) == len(set(proven[0].atom_ids))
+    atom_catalog = {atom.atom_id: atom for atom in evidence.atoms}
+    assert all(
+        "".join(
+            atom_catalog[atom_id].text
+            for atom_id in cell.atom_ids
+            if not atom_catalog[atom_id].text.isspace()
+        )
+        == "".join(character for character in (cell.rendered_text or "") if not character.isspace())
+        for cell in proven[0].cells
+    )
+
+    decision = CandidateAdjudicator(None).decide(candidate_set)
+    assert decision.outcome == "selected"
+    assert decision.selected_candidate_id == proven[0].candidate_id
+
+
+def test_invariant_proof_is_retained_when_geometry_has_identical_cells() -> None:
+    evidence, layout, hints = _spanning_table_fixture()
+    hint_table = hints.blocks[0].table
+    assert hint_table is not None
+    lines = tuple(
+        LayoutLine(
+            line_id=f"line_{index + 10:016x}",
+            page=1,
+            bbox=cell.bbox,
+            atom_ids=tuple(
+                atom.atom_id
+                for atom in evidence.atoms
+                if atom.source_object == index
+            ),
+            evidence_region_ids=("region_0000000000000001",),
+            baseline=cell.bbox.bottom,
+            median_height=cell.bbox.top - cell.bbox.bottom,
+        )
+        for index, cell in enumerate(hint_table.cells)
+        if cell.bbox is not None
+    )
+    region = layout.regions[0].model_copy(
+        update={"line_ids": tuple(line.line_id for line in lines)}
+    )
+    layout = layout.model_copy(update={"lines": lines, "regions": (region,)})
+
+    candidate_set = build_table_candidate_set(region, evidence, layout, hints)
+
+    assert any(
+        isinstance(candidate, TableCandidate)
+        and candidate.features.get("atom_bbox_cell_agreement") == 1.0
+        and candidate.features.get("cell_character_multiset") == 1.0
+        and candidate.features.get("structure_hint_text") == 1.0
+        for candidate in candidate_set.candidates
+    )
+
+
+def test_invariant_table_assigns_whitespace_to_its_overlapping_cell() -> None:
+    evidence, layout, hints = _spanning_table_fixture()
+    whitespace_id = next(
+        atom.atom_id
+        for atom in evidence.atoms
+        if atom.source_object == 3 and atom.text.isspace()
+    )
+    region = layout.regions[0]
+    without_whitespace = tuple(
+        atom_id for atom_id in region.atom_ids if atom_id != whitespace_id
+    )
+    split = next(
+        index
+        for index, atom_id in enumerate(without_whitespace)
+        if next(atom for atom in evidence.atoms if atom.atom_id == atom_id).source_object == 3
+    )
+    reordered = (
+        *without_whitespace[:split],
+        whitespace_id,
+        *without_whitespace[split:],
+    )
+    region = region.model_copy(update={"atom_ids": reordered})
+    layout = layout.model_copy(update={"regions": (region,)})
+
+    candidate_set = build_table_candidate_set(region, evidence, layout, hints)
+    proven = next(
+        candidate
+        for candidate in candidate_set.candidates
+        if isinstance(candidate, TableCandidate)
+        and candidate.features.get("atom_bbox_cell_agreement") == 1.0
+    )
+
+    assert whitespace_id in proven.cells[3].atom_ids
+    assert whitespace_id not in proven.cells[2].atom_ids
+
+
+def test_fragmented_hangul_spacing_is_not_treated_as_fully_proven() -> None:
+    evidence, layout, hints = _spanning_table_fixture()
+    table = hints.blocks[0].table
+    assert table is not None
+    fragmented_cells = (*table.cells[:3], replace(table.cells[3], text_hint="광 고 소재"))
+    hints = StructureDocument(
+        blocks=(replace(hints.blocks[0], table=replace(table, cells=fragmented_cells)),)
+    )
+
+    candidate_set = build_table_candidate_set(layout.regions[0], evidence, layout, hints)
+    decision = CandidateAdjudicator(None).decide(candidate_set)
+
+    assert decision.outcome == "deferred_review"
+    assert decision.source == "fallback"
+    assert decision.selected_candidate_id is not None
 
 
 def test_list_depth_and_caption_candidates_are_bounded() -> None:

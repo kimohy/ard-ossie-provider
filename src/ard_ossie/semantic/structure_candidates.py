@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
 from statistics import median
 
@@ -33,7 +33,7 @@ from ard_ossie.semantic.layout import (
 )
 from ard_ossie.semantic.models import SourceBox
 from ard_ossie.semantic.spacing import KoreanSpacingScorer
-from ard_ossie.semantic.structure import StructureDocument, StructureTable
+from ard_ossie.semantic.structure import StructureCell, StructureDocument, StructureTable
 
 _HEADING_NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*)(?:[.)]|\s)")
 _ORDERED_LIST = re.compile(r"^(\s*)(?:\d+[.)]|[a-zA-Z][.)])\s+")
@@ -217,6 +217,13 @@ def build_table_candidate_set(
     table_hint = _matching_table_hint(region, hints)
     geometry = _geometry_table_candidate(region, lines, atom_catalog, table_hint)
     candidates = [geometry]
+    if table_hint is not None:
+        proven = _invariant_hint_table_candidate(region, table_hint, atom_catalog)
+        if proven is not None:
+            if proven.candidate_id == geometry.candidate_id:
+                candidates[0] = proven
+            else:
+                candidates.append(proven)
     language_spacing = _language_spacing_table_candidate(
         region,
         geometry,
@@ -229,6 +236,174 @@ def build_table_candidate_set(
         candidates.append(split)
     ordered = tuple(sorted(candidates, key=lambda item: (-item.score, item.candidate_id))[:5])
     return _candidate_set(layout.source_hash, region.region_id, "table", ordered)
+
+
+def _invariant_hint_table_candidate(
+    region: LayoutRegion,
+    table_hint: StructureTable,
+    atom_catalog: dict[str, EvidenceAtom],
+) -> TableCandidate | None:
+    """Build a hinted table only when geometry and every cell's characters agree."""
+    spacing_integrity = not any(
+        _has_obvious_spacing_fragmentation(cell.text_hint) for cell in table_hint.cells
+    )
+    assignments: list[int | None] = []
+    for atom_id in region.atom_ids:
+        atom = atom_catalog[atom_id]
+        cell_index = _best_hint_cell(atom, table_hint.cells)
+        if cell_index is None and not atom.text.isspace():
+            return None
+        assignments.append(cell_index)
+
+    for index, assignment in enumerate(assignments):
+        if assignment is not None:
+            continue
+        adjacent = _nearest_assigned_cell(assignments, index)
+        if adjacent is None:
+            return None
+        assignments[index] = adjacent
+
+    atom_ids_by_cell: dict[int, list[str]] = defaultdict(list)
+    for atom_id, cell_index in zip(region.atom_ids, assignments, strict=True):
+        assert cell_index is not None
+        atom_ids_by_cell[cell_index].append(atom_id)
+
+    specs: list[tuple[int, int, int, int, tuple[str, ...], bool]] = []
+    rendered_text_by_coordinates: dict[tuple[int, int, int, int], str] = {}
+    for index, cell in enumerate(table_hint.cells):
+        atom_ids = tuple(atom_ids_by_cell[index])
+        source_characters = Counter(
+            character
+            for atom_id in atom_ids
+            for character in atom_catalog[atom_id].text
+            if not character.isspace()
+        )
+        hinted_characters = Counter(
+            character for character in cell.text_hint if not character.isspace()
+        )
+        if source_characters != hinted_characters:
+            return None
+        ordered_atom_ids = _order_atom_ids_by_text_hint(
+            atom_ids,
+            cell.text_hint,
+            atom_catalog,
+        )
+        if ordered_atom_ids is None:
+            return None
+        coordinates = (
+            cell.start_row,
+            cell.end_row,
+            cell.start_column,
+            cell.end_column,
+        )
+        specs.append((*coordinates, ordered_atom_ids, cell.column_header))
+        rendered_text_by_coordinates[coordinates] = cell.text_hint
+
+    cells = tuple(
+        cell.model_copy(
+            update={
+                "rendered_text": rendered_text_by_coordinates.get(
+                    (
+                        cell.start_row,
+                        cell.end_row,
+                        cell.start_column,
+                        cell.end_column,
+                    )
+                )
+            }
+        )
+        for cell in _complete_cells(
+            region.region_id,
+            specs,
+            table_hint.row_count,
+            table_hint.column_count,
+        )
+    )
+    try:
+        return _make_table_candidate(
+            region,
+            row_count=table_hint.row_count,
+            column_count=table_hint.column_count,
+            cells=cells,
+            score=1.0 if spacing_integrity else 0.94,
+            features={
+                "atom_bbox_cell_agreement": 1.0,
+                "cell_character_multiset": 1.0,
+                "structure_hint_text": 1.0,
+                "cell_spacing_integrity": float(spacing_integrity),
+            },
+        )
+    except ValueError:
+        return None
+
+
+def _best_hint_cell(
+    atom: EvidenceAtom,
+    cells: tuple[StructureCell, ...],
+) -> int | None:
+    if atom.bbox is None:
+        return None
+    overlaps = [
+        _box_overlap_area(atom.bbox, cell.bbox)
+        for cell in cells
+    ]
+    if not overlaps or max(overlaps) <= 0:
+        return None
+    return max(range(len(cells)), key=lambda index: (overlaps[index], -index))
+
+
+def _order_atom_ids_by_text_hint(
+    atom_ids: tuple[str, ...],
+    text_hint: str,
+    atom_catalog: dict[str, EvidenceAtom],
+) -> tuple[str, ...] | None:
+    by_character: dict[str, deque[str]] = defaultdict(deque)
+    whitespace: list[str] = []
+    for atom_id in atom_ids:
+        text = atom_catalog[atom_id].text
+        if text.isspace():
+            whitespace.append(atom_id)
+        elif len(text) == 1:
+            by_character[text].append(atom_id)
+        else:
+            return None
+
+    ordered: list[str] = []
+    for character in text_hint:
+        if character.isspace():
+            continue
+        available = by_character[character]
+        if not available:
+            return None
+        ordered.append(available.popleft())
+    if any(available for available in by_character.values()):
+        return None
+    return (*ordered, *whitespace)
+
+
+def _nearest_assigned_cell(assignments: list[int | None], index: int) -> int | None:
+    for distance in range(1, len(assignments)):
+        before = index - distance
+        if before >= 0 and assignments[before] is not None:
+            return assignments[before]
+        after = index + distance
+        if after < len(assignments) and assignments[after] is not None:
+            return assignments[after]
+    return None
+
+
+def _has_obvious_spacing_fragmentation(value: str) -> bool:
+    hangul_fragments = re.finditer(
+        r"(?<![가-힣A-Za-z0-9_])([가-힣]+)\s+([가-힣]+)",
+        value,
+    )
+    if any(len(match.group(1)) == 1 or len(match.group(2)) == 1 for match in hangul_fragments):
+        return True
+    return re.search(
+        r"(?:\b[A-Za-z0-9]+\s+[A-Za-z0-9]*_[A-Za-z0-9_]*\b"
+        r"|\b[A-Za-z0-9_]*_[A-Za-z0-9_]*\s+[A-Za-z0-9]+\b)",
+        value,
+    ) is not None
 
 
 def _language_spacing_table_candidate(

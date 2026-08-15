@@ -53,6 +53,7 @@ _REQUIRED_QUALITY_ASSETS = (
 )
 _OPTIONAL_QUALITY_ASSETS = (
     "semantic-structure-repair.json",
+    "semantic-review.json",
     *DIAGNOSTIC_REPORT_NAMES,
 )
 

@@ -3,6 +3,7 @@
     "SemanticPipelineStatus": {
       "enum": [
         "verified",
+        "review_pending",
         "review_required",
         "failed"
       ],

@@ -1082,7 +1082,22 @@ def _completeness_findings(
 
 def _semantic_findings(document: ParsedDocument) -> list[QualityFinding]:
     if document.semantic_validation is not None:
-        return []
+        if document.semantic_validation.status is not SemanticPipelineStatus.REVIEW_PENDING:
+            return []
+        fidelity = document.semantic_fidelity
+        codes = (
+            fidelity.warning_codes
+            if fidelity is not None and fidelity.warning_codes
+            else ["SEMANTIC_REVIEW_PENDING"]
+        )
+        return [
+            QualityFinding(
+                code=code,
+                message="Semantic conversion continued with deferred human review debt",
+                path="quality.semantic-review.json",
+            )
+            for code in dict.fromkeys(codes)
+        ]
     fidelity = document.semantic_fidelity
     if fidelity is None:
         return []
@@ -1155,7 +1170,10 @@ def _semantic_hard_findings(
 ) -> list[QualityFinding]:
     validation = document.semantic_validation
     if validation is not None:
-        if validation.status is SemanticPipelineStatus.VERIFIED:
+        if validation.status in {
+            SemanticPipelineStatus.VERIFIED,
+            SemanticPipelineStatus.REVIEW_PENDING,
+        }:
             return []
         code = (
             "SEMANTIC_CANDIDATE_REVIEW_REQUIRED"
@@ -2071,6 +2089,7 @@ _QUALITY_DESTINATIONS = frozenset(
         "llm-suggestions.json",
         "semantic-fidelity.json",
         "semantic-structure-repair.json",
+        "semantic-review.json",
         *DIAGNOSTIC_REPORT_NAMES,
     }
 )
