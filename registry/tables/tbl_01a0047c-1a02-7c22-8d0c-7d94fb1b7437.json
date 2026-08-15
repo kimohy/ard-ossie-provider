@@ -1,0 +1,64 @@
+{
+  "aliases": [],
+  "canonical_hash": "dcac74d5424a6767b6b8f6a1d2063c04fbfbf9c03ca8768e3ba794ade6aaa8f9",
+  "columns": [
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-744a-982e-00ea1b2ef932",
+      "name": "event_date",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-7090-9fca-fd8f120f6f10",
+      "name": "campaign_id",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-77ab-bb80-32907c81c7ae",
+      "name": "interest_signal_count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-77fe-8592-40940ee37867",
+      "name": "action_signal_count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-7628-ab18-0ac3c4a967f8",
+      "name": "modeled_value_units",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-718c-b970-4be3a699655e",
+      "name": "attribution_window",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-7744-aa87-f404b5eefe8c",
+      "name": "quality_flag",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "column_id": "col_01a0047c-1a02-7683-9fe7-2df3185fa66e",
+      "name": "loaded_at",
+      "status": "active"
+    }
+  ],
+  "locator": {
+    "catalog": "synthetic_workspace",
+    "schema_name": "marketing_insight",
+    "source_system_id": "unspecified",
+    "table_name": "marketing_outcome"
+  },
+  "schema_hash": "d87118897e885fb180cacf8e40b7699f990019309ca25938a29575fd2f76a706",
+  "status": "active",
+  "table_id": "tbl_01a0047c-1a02-7c22-8d0c-7d94fb1b7437",
+  "version": 1
+}

@@ -1,0 +1,442 @@
+{
+  "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+  "product_version": 1,
+  "tables": [
+    {
+      "columns": [
+        {
+          "column_id": "col_01a0047c-1a01-7224-875f-91b88d5d7f41",
+          "data_type": "STRING",
+          "description": "가상 캠페인을 구분하는 합성 식별자",
+          "logical_name": null,
+          "name": "campaign_id",
+          "nullable": false,
+          "ordinal": 1,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_01a0047c-1a01-723e-8def-6f7dd153fc30",
+          "data_type": "STRING",
+          "description": "분석 예시를 위한 가상 캠페인 명칭",
+          "logical_name": null,
+          "name": "campaign_name",
+          "nullable": false,
+          "ordinal": 2,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-7591-be57-b084ef194257",
+          "data_type": "STRING",
+          "description": "Awareness, Interest, Action으로 구성한 가상 목표 구분",
+          "logical_name": null,
+          "name": "objective_type",
+          "nullable": true,
+          "ordinal": 3,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-7cb8-804b-410dd94ddddb",
+          "data_type": "STRING",
+          "description": "Search, Social, Video, Display의 추상 채널 그룹",
+          "logical_name": null,
+          "name": "channel_group",
+          "nullable": true,
+          "ordinal": 4,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-71ce-86bb-dc08dc6e28c8",
+          "data_type": "STRING",
+          "description": "North, South, East, West로 구성한 가상 분석 권역",
+          "logical_name": null,
+          "name": "market_zone",
+          "nullable": true,
+          "ordinal": 5,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-7761-98f4-39d72f14acef",
+          "data_type": "NUMERIC",
+          "description": "실제 화폐가 아닌 시뮬레이션용 예산 단위",
+          "logical_name": null,
+          "name": "budget_units",
+          "nullable": true,
+          "ordinal": 6,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-7b0a-aa5a-5c2021637d44",
+          "data_type": "DATE",
+          "description": "가상 캠페인 시작 일자",
+          "logical_name": null,
+          "name": "start_date",
+          "nullable": true,
+          "ordinal": 7,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-7ca8-8aff-02c25f1359b5",
+          "data_type": "DATE",
+          "description": "가상 캠페인 종료 일자",
+          "logical_name": null,
+          "name": "end_date",
+          "nullable": true,
+          "ordinal": 8,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-779b-8697-34a484ab56e0",
+          "data_type": "STRING",
+          "description": "Draft, Active, Paused, Closed 상태",
+          "logical_name": null,
+          "name": "campaign_status",
+          "nullable": true,
+          "ordinal": 9,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-71e4-b801-a0d4c13b28f6",
+          "data_type": "STRING",
+          "description": "P1, P2, P3로 구성한 가상 우선순위",
+          "logical_name": null,
+          "name": "priority_band",
+          "nullable": true,
+          "ordinal": 10,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-74f1-8676-7a2fa0dd5b90",
+          "data_type": "INTEGER",
+          "description": "시뮬레이션 목표 노출 규모",
+          "logical_name": null,
+          "name": "planned_reach",
+          "nullable": true,
+          "ordinal": 11,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-761c-8ae6-b49ff3b9769a",
+          "data_type": "INTEGER",
+          "description": "시뮬레이션 목표 반응 규모",
+          "logical_name": null,
+          "name": "planned_response",
+          "nullable": true,
+          "ordinal": 12,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-731d-b263-7dba5456fead",
+          "data_type": "BOOLEAN",
+          "description": "가상 실험 적용 여부",
+          "logical_name": null,
+          "name": "experiment_flag",
+          "nullable": true,
+          "ordinal": 13,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a01-7bff-b839-5a86d89d8ac5",
+          "data_type": "TIMESTAMP",
+          "description": "합성 레코드 생성 시각",
+          "logical_name": null,
+          "name": "source_created_at",
+          "nullable": true,
+          "ordinal": 14,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7f14-87f4-bb4b2ebe39b7",
+          "data_type": "TIMESTAMP",
+          "description": "합성 레코드 갱신 시각",
+          "logical_name": null,
+          "name": "source_updated_at",
+          "nullable": true,
+          "ordinal": 15,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7636-be69-ba562a875dab",
+          "data_type": "TIMESTAMP",
+          "description": "예시 테이블 적재 시각",
+          "logical_name": null,
+          "name": "loaded_at",
+          "nullable": false,
+          "ordinal": 16,
+          "primary_key": false
+        }
+      ],
+      "dataset_name": "marketing_campaign",
+      "description": "가상 광고 캠페인의 기획, 기간, 예산 단위 및 집행 상태를 제공하는 합성 테이블",
+      "source": "synthetic_workspace.marketing_insight.marketing_campaign",
+      "table_id": "tbl_01a0047c-1a01-727c-b1e4-a05e429d36a7",
+      "table_version": 1
+    },
+    {
+      "columns": [
+        {
+          "column_id": "col_01a0047c-1a02-7344-9d03-369093c2fc6b",
+          "data_type": "DATE",
+          "description": "가상 성과 기준 일자",
+          "logical_name": null,
+          "name": "event_date",
+          "nullable": false,
+          "ordinal": 1,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7c20-b4a7-2a23c1bd9c99",
+          "data_type": "STRING",
+          "description": "가상 캠페인 식별자",
+          "logical_name": null,
+          "name": "campaign_id",
+          "nullable": false,
+          "ordinal": 2,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7966-a1df-edb3dc571eab",
+          "data_type": "STRING",
+          "description": "가상 소재 식별자",
+          "logical_name": null,
+          "name": "creative_id",
+          "nullable": false,
+          "ordinal": 3,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_01a0047c-1a02-735a-8118-8dac57725e3e",
+          "data_type": "STRING",
+          "description": "Aster, Breeze, Cobalt의 무의미한 가상 군집 라벨",
+          "logical_name": null,
+          "name": "audience_cluster",
+          "nullable": true,
+          "ordinal": 4,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-709a-9f77-d999bab0d6b4",
+          "data_type": "INTEGER",
+          "description": "시뮬레이션 광고 노출 수",
+          "logical_name": null,
+          "name": "impression_count",
+          "nullable": true,
+          "ordinal": 5,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-73e1-b2f5-ab49205b8c1a",
+          "data_type": "INTEGER",
+          "description": "시뮬레이션 광고 반응 수",
+          "logical_name": null,
+          "name": "engagement_count",
+          "nullable": true,
+          "ordinal": 6,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-77d5-a006-4e0fc88ebfb7",
+          "data_type": "NUMERIC",
+          "description": "실제 화폐가 아닌 시뮬레이션 비용 단위",
+          "logical_name": null,
+          "name": "spend_units",
+          "nullable": true,
+          "ordinal": 7,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7320-8670-d7513cad4b84",
+          "data_type": "STRING",
+          "description": "Ready, Served, Adjusted의 가상 집행 상태",
+          "logical_name": null,
+          "name": "delivery_status",
+          "nullable": true,
+          "ordinal": 8,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7f62-832d-6d0e16f90c88",
+          "data_type": "TIMESTAMP",
+          "description": "예시 테이블 적재 시각",
+          "logical_name": null,
+          "name": "loaded_at",
+          "nullable": false,
+          "ordinal": 9,
+          "primary_key": false
+        }
+      ],
+      "dataset_name": "marketing_delivery",
+      "description": "일자, 캠페인, 소재별 가상 광고 노출·반응·비용 집계를 제공하는 합성 테이블",
+      "source": "synthetic_workspace.marketing_insight.marketing_delivery",
+      "table_id": "tbl_01a0047c-1a02-7246-8d5d-17fd9f636c7f",
+      "table_version": 1
+    },
+    {
+      "columns": [
+        {
+          "column_id": "col_01a0047c-1a02-744a-982e-00ea1b2ef932",
+          "data_type": "DATE",
+          "description": "가상 성과 기준 일자",
+          "logical_name": null,
+          "name": "event_date",
+          "nullable": false,
+          "ordinal": 1,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7090-9fca-fd8f120f6f10",
+          "data_type": "STRING",
+          "description": "가상 캠페인 식별자",
+          "logical_name": null,
+          "name": "campaign_id",
+          "nullable": false,
+          "ordinal": 2,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_01a0047c-1a02-77ab-bb80-32907c81c7ae",
+          "data_type": "INTEGER",
+          "description": "콘텐츠 탐색을 모사한 가상 관심 신호 수",
+          "logical_name": null,
+          "name": "interest_signal_count",
+          "nullable": true,
+          "ordinal": 3,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-77fe-8592-40940ee37867",
+          "data_type": "INTEGER",
+          "description": "의도 행동을 모사한 가상 행동 신호 수",
+          "logical_name": null,
+          "name": "action_signal_count",
+          "nullable": true,
+          "ordinal": 4,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7628-ab18-0ac3c4a967f8",
+          "data_type": "NUMERIC",
+          "description": "성과 비교를 위한 가상 가치 단위",
+          "logical_name": null,
+          "name": "modeled_value_units",
+          "nullable": true,
+          "ordinal": 5,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-718c-b970-4be3a699655e",
+          "data_type": "STRING",
+          "description": "D1, D3, D7의 가상 관찰 창",
+          "logical_name": null,
+          "name": "attribution_window",
+          "nullable": true,
+          "ordinal": 6,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7744-aa87-f404b5eefe8c",
+          "data_type": "STRING",
+          "description": "Normal, Review의 가상 품질 상태",
+          "logical_name": null,
+          "name": "quality_flag",
+          "nullable": true,
+          "ordinal": 7,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7683-9fe7-2df3185fa66e",
+          "data_type": "TIMESTAMP",
+          "description": "예시 테이블 적재 시각",
+          "logical_name": null,
+          "name": "loaded_at",
+          "nullable": false,
+          "ordinal": 8,
+          "primary_key": false
+        }
+      ],
+      "dataset_name": "marketing_outcome",
+      "description": "광고 반응 이후의 가상 관심·행동 신호를 캠페인 단위로 제공하는 합성 테이블",
+      "source": "synthetic_workspace.marketing_insight.marketing_outcome",
+      "table_id": "tbl_01a0047c-1a02-7c22-8d0c-7d94fb1b7437",
+      "table_version": 1
+    },
+    {
+      "columns": [
+        {
+          "column_id": "col_01a0047c-1a02-7069-b6ed-aa2da1c4eec6",
+          "data_type": "STRING",
+          "description": "가상 광고 소재 식별자",
+          "logical_name": null,
+          "name": "creative_id",
+          "nullable": false,
+          "ordinal": 1,
+          "primary_key": true
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7dba-8ef4-081240f02969",
+          "data_type": "STRING",
+          "description": "상위 가상 캠페인 식별자",
+          "logical_name": null,
+          "name": "campaign_id",
+          "nullable": false,
+          "ordinal": 2,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-74a7-a9e1-2f19fc12f7c2",
+          "data_type": "STRING",
+          "description": "Image, Short Video, Text Card의 가상 형식",
+          "logical_name": null,
+          "name": "format_type",
+          "nullable": true,
+          "ordinal": 3,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-79c7-9fec-b9aa2a9e466d",
+          "data_type": "STRING",
+          "description": "Discovery, Benefit, Reminder의 가상 메시지 테마",
+          "logical_name": null,
+          "name": "message_theme",
+          "nullable": true,
+          "ordinal": 4,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-7774-8412-d2fb4c8f6ab2",
+          "data_type": "STRING",
+          "description": "A, B, C로 구성한 가상 변형 코드",
+          "logical_name": null,
+          "name": "variant_code",
+          "nullable": true,
+          "ordinal": 5,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-78e2-aa6b-5fd5b0f5dfb1",
+          "data_type": "STRING",
+          "description": "Ready, Hold, Retired의 가상 검토 상태",
+          "logical_name": null,
+          "name": "review_status",
+          "nullable": true,
+          "ordinal": 6,
+          "primary_key": false
+        },
+        {
+          "column_id": "col_01a0047c-1a02-74b3-99de-188d0c2fa4b6",
+          "data_type": "TIMESTAMP",
+          "description": "예시 테이블 적재 시각",
+          "logical_name": null,
+          "name": "loaded_at",
+          "nullable": false,
+          "ordinal": 7,
+          "primary_key": false
+        }
+      ],
+      "dataset_name": "marketing_creative",
+      "description": "가상 캠페인에 연결된 광고 소재의 형식과 메시지 속성을 제공하는 합성 테이블",
+      "source": "synthetic_workspace.marketing_insight.marketing_creative",
+      "table_id": "tbl_01a0047c-1a02-7e70-808f-56e79c4e1209",
+      "table_version": 1
+    }
+  ]
+}
