@@ -697,6 +697,40 @@ def test_high_confidence_identifier_defect_is_replaced_by_verified_generation() 
     assert len(miss_provider.calls) == 3
 
 
+def test_valid_verification_sentinel_accepts_verified_generation() -> None:
+    candidate_set = _identifier_spacing_set()
+    damaged = candidate_set.candidates[0]
+    generated = build_generated_candidate(
+        damaged,
+        "marketing_campaign 캠페인",
+        confidence=0.98,
+    )
+    provider = RecordingProvider(
+        [
+            {"candidate_id": damaged.candidate_id, "confidence": 0.78},
+            {
+                "rendered_text": generated.rendered_text,
+                "confidence": 0.98,
+                "repair_reasons": ["identifier_integrity", "korean_morphology"],
+            },
+            {
+                "candidate_id": generated.candidate_id,
+                "confidence": 0.99,
+                "validation_codes": ["VALID"],
+            },
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "selected"
+    assert decision.source == "generated"
+    assert decision.selected_candidate_id == generated.candidate_id
+    assert decision.validation_codes == ("LLM_SPACING_REPAIR_APPLIED",)
+    assert decision.attempts[-1].status == "accepted"
+    assert decision.attempts[-1].validation_codes == ()
+
+
 def test_generated_snapshot_preserves_table_mutation_scope_for_cache_replay() -> None:
     candidate_set = _table_scoped_spacing_set()
     anchor, repaired = candidate_set.candidates
