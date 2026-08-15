@@ -330,7 +330,7 @@ def canonical_fidelity_report(
     elif validation.status in {
         SemanticPipelineStatus.REVIEW_REQUIRED,
         SemanticPipelineStatus.REVIEW_PENDING,
-    } or extraction_mode is ExtractionMode.OCR:
+    } or extraction_mode is ExtractionMode.OCR or warning_codes:
         status = "WARN"
     else:
         status = "PASS"
