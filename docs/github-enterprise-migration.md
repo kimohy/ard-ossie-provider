@@ -263,7 +263,7 @@ GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는
 - [ ] `ard-llm`과 `production-linkage` Secret은 Environment 승인 전 노출되지 않는다.
 - [ ] required status가 exact PR head에 게시되고 fork/untrusted code에 write token이 가지 않는다.
 - [ ] Issue intake를 켰다면 Enterprise 첨부/redirect allowlist의 양·음성 테스트가 통과한다.
-- [ ] direct branch의 PDF/DOCX/XLSX 변환이 `PASS` 또는 설명 가능한 `WARN`으로 완료된다.
+- [ ] direct branch의 PDF/DOCX/XLSX 변환은 hard error `0`이다. candidate PDF는 추가로 validation `status=verified`, `publishable=true`이며, `WARN`이라면 validation은 여전히 `verified`이고 review debt가 없다.
 - [ ] merge 뒤 immutable tag, Release, bundle SHA와 downstream dispatch가 일치한다.
 - [ ] source 저장소는 read-only 또는 archive 처리되고 게시 owner가 destination 하나로 수렴한다.
 

@@ -66,7 +66,7 @@ PR gate → merge → immutable Release → downstream dispatch
 2. 공개 가능 여부를 검토한 관리자가 `ard:approved`를 적용합니다.
 3. trusted workflow가 첨부와 권한을 검증하고 `ard/issue-<number>-<product-key>` Draft PR을 만듭니다.
 4. 같은 PR에 generated, quality, Registry 변경을 기록합니다.
-5. `ard/quality-gate`와 `ard/changeset`이 정확한 PR head에서 성공해야 병합할 수 있습니다.
+5. hard error가 0이고 `ard/quality-gate`와 `ard/changeset`이 정확한 PR head에서 성공해야 병합할 수 있습니다. candidate PDF라면 추가로 `validation-report.json`이 `status=verified`, `publishable=true`여야 하며, `WARN`은 validation이 계속 `verified`인 경우에만 병합할 수 있습니다.
 6. 제품 PR의 `Closes #N`이 병합되면 Issue가 닫히고 숫자 릴리스가 실행됩니다.
 
 처리 실패나 Draft PR 생성만으로 Issue를 닫지 않습니다. `ard:failed`를 해결해 같은 제품 PR이 검증을 통과하도록 재처리합니다.

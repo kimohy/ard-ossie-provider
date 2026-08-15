@@ -198,7 +198,7 @@ downstream은 `(product_id, version, tag, commit)`을 중복 제거 키로 사�
 3. 관리자가 `ard:approved`를 붙입니다.
 4. `ARD approved issue intake` workflow가 Draft PR을 만듭니다.
 5. 변환 결과와 보고서를 검토합니다. `deferred_review`가 있으면 적용된 fallback과 attempt audit를 확인하고 후속 개선 사항을 기록합니다.
-6. hard error가 0이고 두 required status가 성공한 뒤 병합합니다.
+6. hard error가 0이고 두 required status가 성공한 뒤 병합합니다. candidate PDF라면 추가로 `validation-report.json`이 `status=verified`, `publishable=true`여야 합니다. `WARN`은 validation이 계속 `verified`인 경우에만 허용하고 `review_pending`은 병합하지 않습니다.
 
 제품 PR 본문은 승인된 Issue를 `Closes #<issue-number>`로 연결합니다. Issue는 이 PR이 병합될 때만 정상 완료로 닫습니다. 처리 실패, `ard:failed`, Draft PR 생성만으로 Issue를 닫지 않습니다.
 
