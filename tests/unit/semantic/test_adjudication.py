@@ -18,6 +18,7 @@ from ard_ossie.semantic.adjudication import (
     AdjudicationPolicy,
     CandidateAdjudicator,
     DecisionRecord,
+    _decision_id,
     candidate_choice_schema,
 )
 from ard_ossie.semantic.candidates import (
@@ -302,6 +303,25 @@ def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> No
     assert len(evidence_miss_provider.calls) == 1
 
 
+def test_trusted_primary_audit_must_match_selected_summary() -> None:
+    candidate_set = _block_set(0.80, 0.75)
+    first, second = [candidate.candidate_id for candidate in candidate_set.candidates]
+    selected = CandidateAdjudicator(
+        RecordingProvider([{"candidate_id": first, "confidence": 0.91}])
+    ).decide(candidate_set)
+    contradictory_attempt = selected.attempts[0].model_copy(update={"candidate_id": second})
+    contradictory = selected.model_copy(update={"attempts": (contradictory_attempt,)})
+    contradictory = contradictory.model_copy(
+        update={"decision_id": _decision_id(contradictory)}
+    )
+    provider = RecordingProvider([{"candidate_id": first, "confidence": 0.93}])
+
+    fresh = CandidateAdjudicator(provider, trusted=(contradictory,)).decide(candidate_set)
+
+    assert fresh.source == "model"
+    assert len(provider.calls) == 1
+
+
 def test_trusted_recovered_decision_reuses_full_audit_without_provider_call() -> None:
     candidate_set = _block_set(0.80, 0.75)
     selected = candidate_set.candidates[0].candidate_id
@@ -392,6 +412,28 @@ def test_trusted_recovery_is_ignored_when_attempt_votes_contradict_consensus() -
     assert len(provider.calls) == 1
 
 
+def test_trusted_recovery_recomputes_each_attempt_request_hash() -> None:
+    candidate_set = _block_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    forged_attempt = recovered.attempts[1].model_copy(update={"request_hash": "9" * 64})
+    forged = recovered.model_copy(update={"attempts": (recovered.attempts[0], forged_attempt)})
+    forged = forged.model_copy(update={"decision_id": _decision_id(forged)})
+    provider = RecordingProvider([{"candidate_id": selected, "confidence": 0.93}])
+
+    fresh = CandidateAdjudicator(provider, trusted=(forged,)).decide(candidate_set)
+
+    assert fresh.source == "model"
+    assert len(provider.calls) == 1
+
+
 @pytest.mark.parametrize(
     "policy,response",
     [
@@ -477,6 +519,32 @@ def test_high_confidence_identifier_defect_is_replaced_by_verified_generation() 
     assert reused.source == "cache"
     assert reused.generated_candidate == generated
     assert reuse_provider.calls == []
+
+    forged_primary = decision.attempts[0].model_copy(
+        update={"confidence": 0.10, "status": "accepted"}
+    )
+    forged = decision.model_copy(
+        update={"attempts": (forged_primary, *decision.attempts[1:])}
+    )
+    forged = forged.model_copy(update={"decision_id": _decision_id(forged)})
+    miss_provider = RecordingProvider(
+        [
+            {"candidate_id": damaged.candidate_id, "confidence": 0.91},
+            {
+                "rendered_text": generated.rendered_text,
+                "confidence": 0.92,
+                "repair_reasons": ["identifier_integrity", "korean_morphology"],
+            },
+            {
+                "candidate_id": generated.candidate_id,
+                "confidence": 0.90,
+                "validation_codes": [],
+            },
+        ]
+    )
+    fresh = CandidateAdjudicator(miss_provider, trusted=(forged,)).decide(candidate_set)
+    assert fresh.source == "generated"
+    assert len(miss_provider.calls) == 3
 
 
 def test_low_confidence_spacing_repair_falls_back_with_deferred_review() -> None:

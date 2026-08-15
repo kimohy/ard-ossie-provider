@@ -250,10 +250,11 @@ class CandidateAdjudicator:
                     candidate_set=candidate_set,
                     request_hash=request_hash,
                     evidence_hash=resolved_evidence_hash,
-                    provider=provider_name,
-                    model=model,
-                    allowlist=allowlist,
-                    policy=self.policy,
+                        provider=provider_name,
+                        model=model,
+                        allowlist=allowlist,
+                        candidates=candidates,
+                        policy=self.policy,
                 )
             ),
             None,
@@ -1027,6 +1028,7 @@ def _trusted_decision_matches(
     provider: str,
     model: str,
     allowlist: set[CandidateId],
+    candidates: tuple[Candidate, ...],
     policy: AdjudicationPolicy,
 ) -> bool:
     generated_candidate = decision.generated_candidate
@@ -1054,15 +1056,28 @@ def _trusted_decision_matches(
         and selected_is_current
     ):
         return False
+    if not _attempt_request_hashes_match(
+        decision,
+        candidate_set=candidate_set,
+        candidates=candidates,
+        request_hash=request_hash,
+    ):
+        return False
     if decision.recovery_status == "generated":
         return _generated_audit_matches(
             decision,
+            allowlist=allowlist,
             policy=policy,
         ) and _decision_identity_matches(decision)
     if decision.recovery_status != "recovered":
         return (
             decision.consensus_method == "none"
             and decision.recovery_count == 0
+            and _primary_audit_matches(
+                decision,
+                allowlist=allowlist,
+                policy=policy,
+            )
             and _decision_identity_matches(decision)
         )
     if not (
@@ -1079,15 +1094,145 @@ def _trusted_decision_matches(
     ) and _decision_identity_matches(decision)
 
 
+def _attempt_request_hashes_match(
+    decision: DecisionRecord,
+    *,
+    candidate_set: CandidateSet,
+    candidates: tuple[Candidate, ...],
+    request_hash: Sha256,
+) -> bool:
+    if not decision.attempts:
+        return True
+    attempts = decision.attempts
+    if tuple(attempt.attempt_index for attempt in attempts) != tuple(
+        range(1, len(attempts) + 1)
+    ):
+        return False
+
+    prior: tuple[AdjudicationAttempt, ...] = ()
+    consumed = 0
+    for phase in ("primary", "recovery", "tiebreak"):
+        phase_attempts = tuple(attempt for attempt in attempts if attempt.phase == phase)
+        if not phase_attempts:
+            continue
+        if attempts[consumed : consumed + len(phase_attempts)] != phase_attempts:
+            return False
+        base_messages = _messages(
+            candidate_set,
+            candidates,
+            phase=phase,
+            prior_votes=prior,
+        )
+        correction_code: str | None = None
+        for attempt in phase_attempts:
+            active_messages = (
+                _corrective_messages(base_messages, correction_code)
+                if correction_code is not None
+                else base_messages
+            )
+            if attempt.request_hash != _attempt_request_hash(
+                request_hash,
+                phase=phase,
+                messages=active_messages,
+                attempt_index=attempt.attempt_index,
+            ):
+                return False
+            correction_code = (
+                attempt.validation_codes[-1]
+                if attempt.status == "candidate_unknown" and attempt.validation_codes
+                else None
+            )
+        consumed += len(phase_attempts)
+        prior = (*prior, *phase_attempts)
+
+    remaining = attempts[consumed:]
+    if not remaining:
+        return True
+    if candidate_set.decision_type != "spacing" or not all(
+        isinstance(candidate, SpacingCandidate) for candidate in candidates
+    ):
+        return False
+    primary_vote = next(
+        (
+            attempt
+            for attempt in reversed(prior)
+            if attempt.phase == "primary" and attempt.candidate_id is not None
+        ),
+        None,
+    )
+    if primary_vote is None:
+        return False
+    anchor = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.candidate_id == primary_vote.candidate_id
+            and isinstance(candidate, SpacingCandidate)
+        ),
+        None,
+    )
+    if anchor is None or remaining[0].phase != "generation":
+        return False
+    generation_messages = spacing_generation_messages(
+        candidate_set,
+        tuple(candidate for candidate in candidates if isinstance(candidate, SpacingCandidate)),
+        anchor,
+    )
+    generation = remaining[0]
+    if generation.request_hash != _attempt_request_hash(
+        request_hash,
+        phase="generation",
+        messages=generation_messages,
+        attempt_index=generation.attempt_index,
+    ):
+        return False
+    if len(remaining) == 1:
+        return True
+    generated = decision.generated_candidate
+    verification = remaining[1]
+    if generated is None or verification.phase != "verification" or len(remaining) != 2:
+        return False
+    verification_messages = spacing_verification_messages(
+        candidate_set,
+        tuple(candidate for candidate in candidates if isinstance(candidate, SpacingCandidate)),
+        generated,
+    )
+    return verification.request_hash == _attempt_request_hash(
+        request_hash,
+        phase="verification",
+        messages=verification_messages,
+        attempt_index=verification.attempt_index,
+    )
+
+
 def _generated_audit_matches(
     decision: DecisionRecord,
     *,
+    allowlist: set[CandidateId],
     policy: AdjudicationPolicy,
 ) -> bool:
     generated = decision.generated_candidate
     if generated is None or decision.source not in {"generated", "cache"}:
         return False
     if len(decision.attempts) < 3:
+        return False
+    primary_attempts = decision.attempts[:-2]
+    primary = primary_attempts[-1]
+    expected_primary_status = (
+        "accepted"
+        if primary.confidence >= policy.minimum_model_confidence
+        else "low_confidence"
+    )
+    expected_primary_codes = (
+        () if expected_primary_status == "accepted" else ("LLM_CONFIDENCE_TOO_LOW",)
+    )
+    if (
+        any(attempt.phase != "primary" for attempt in primary_attempts)
+        or any(attempt.status != "candidate_unknown" for attempt in primary_attempts[:-1])
+        or primary.candidate_id not in allowlist
+        or primary.status != expected_primary_status
+        or primary.validation_codes != expected_primary_codes
+    ):
         return False
     generation, verification = decision.attempts[-2:]
     if (
@@ -1106,6 +1251,34 @@ def _generated_audit_matches(
     return (
         decision.confidence == min(generation.confidence, verification.confidence)
         and decision.validation_codes == ("LLM_SPACING_REPAIR_APPLIED",)
+        and decision.retry_count
+        == sum(attempt.provider_retry_count for attempt in decision.attempts)
+        and decision.repair_count
+        == sum(attempt.provider_repair_count for attempt in decision.attempts)
+    )
+
+
+def _primary_audit_matches(
+    decision: DecisionRecord,
+    *,
+    allowlist: set[CandidateId],
+    policy: AdjudicationPolicy,
+) -> bool:
+    if decision.source not in {"model", "cache"} or not decision.attempts:
+        return False
+    if any(attempt.phase != "primary" for attempt in decision.attempts):
+        return False
+    terminal = decision.attempts[-1]
+    if any(attempt.status != "candidate_unknown" for attempt in decision.attempts[:-1]):
+        return False
+    return (
+        terminal.status == "accepted"
+        and terminal.candidate_id in allowlist
+        and terminal.candidate_id == decision.selected_candidate_id
+        and terminal.confidence >= policy.minimum_model_confidence
+        and terminal.confidence == decision.confidence
+        and not terminal.validation_codes
+        and not decision.validation_codes
         and decision.retry_count
         == sum(attempt.provider_retry_count for attempt in decision.attempts)
         and decision.repair_count
