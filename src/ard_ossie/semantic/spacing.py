@@ -9,11 +9,13 @@ from typing import Protocol
 from ard_ossie.semantic.candidates import (
     CandidateSet,
     SpacingCandidate,
+    TableCandidate,
     make_candidate_set_id,
     make_spacing_candidate,
 )
 from ard_ossie.semantic.evidence import AtomId, EvidenceAtom, EvidenceDocument
 from ard_ossie.semantic.layout import LayoutDocument, LayoutRegion
+from ard_ossie.semantic.spacing_repair import spacing_defect_codes
 
 DEFAULT_KOREAN_TECH_TERMS = (
     "데이터",
@@ -31,6 +33,10 @@ DEFAULT_KOREAN_TECH_TERMS = (
 _SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([%℃°,:;.!?)}\]])")
 _SPACE_AFTER_OPEN = re.compile(r"([({\[])\s+")
 _MULTIPLE_WHITESPACE = re.compile(r"[\t \f\v]+")
+_QUALIFIED_IDENTIFIER = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+"
+)
+_HANGUL_FRAGMENT = re.compile(r"(?<![가-힣A-Za-z0-9_])([가-힣]+)\s+([가-힣]+)")
 
 
 class KoreanSpacingScorer(Protocol):
@@ -128,6 +134,124 @@ def build_spacing_candidate_set(
     )
 
 
+def build_table_spacing_candidate_set(
+    *,
+    table: TableCandidate,
+    evidence: EvidenceDocument,
+    scorer: KoreanSpacingScorer,
+) -> CandidateSet | None:
+    catalog = {atom.atom_id: atom for atom in evidence.atoms}
+    if not set(table.atom_ids).issubset(catalog):
+        raise ValueError("TABLE_SPACING_ATOM_UNKNOWN")
+    unresolved_spacing = table.features.get("cell_spacing_integrity") != 1.0
+    ordered_cells = sorted(
+        table.cells,
+        key=lambda cell: (
+            cell.start_row,
+            cell.start_column,
+            cell.end_row,
+            cell.end_column,
+            cell.cell_id,
+        ),
+    )
+    source_parts: list[str] = []
+    repaired_parts: list[str] = []
+    atom_ids: list[str] = []
+    mutable_indexes: list[int] = []
+    used_language_repair = False
+    for cell in ordered_cells:
+        character_ids = tuple(
+            atom_id for atom_id in cell.atom_ids if not catalog[atom_id].text.isspace()
+        )
+        if not character_ids:
+            continue
+        character_sequence = "".join(catalog[atom_id].text for atom_id in character_ids)
+        current = (cell.rendered_text or "").strip()
+        if _without_whitespace(current) != character_sequence:
+            current = "".join(catalog[atom_id].text for atom_id in cell.atom_ids).strip()
+        if _without_whitespace(current) != character_sequence:
+            current = character_sequence
+
+        deterministic = _qualified_identifier_repair(current)
+        language = None
+        if deterministic is None and not _looks_like_formula(current):
+            language = next(
+                (
+                    normalized
+                    for proposal in scorer.propose(current, (current,))
+                    if (normalized := _canonicalize_whitespace(str(proposal)).strip())
+                    and normalized != current
+                    and _without_whitespace(normalized) == character_sequence
+                    and not _text_spacing_defects(
+                        table.region_id,
+                        normalized,
+                        character_sequence,
+                        character_ids,
+                    )
+                ),
+                None,
+            )
+        fragmented = _has_spacing_fragmentation(current)
+        suspicious = deterministic is not None or (
+            language is not None and (fragmented or unresolved_spacing)
+        )
+        replacement = deterministic or language if suspicious else None
+        repaired = replacement or current
+        start_index = len(atom_ids)
+        atom_ids.extend(character_ids)
+        if suspicious:
+            mutable_indexes.extend(range(start_index, start_index + len(character_ids) - 1))
+            used_language_repair = used_language_repair or deterministic is None
+        source_parts.append(current)
+        repaired_parts.append(repaired)
+
+    if not mutable_indexes or source_parts == repaired_parts:
+        return None
+    character_sequence = "".join(catalog[atom_id].text for atom_id in atom_ids)
+    source_whitespace = tuple(() for _ in range(max(0, len(atom_ids) - 1)))
+    mutable_boundary_indexes = tuple(mutable_indexes)
+    source = make_spacing_candidate(
+        region_id=table.region_id,
+        rendered_text="\n".join(source_parts),
+        character_sequence=character_sequence,
+        atom_ids=tuple(atom_ids),
+        source_whitespace=source_whitespace,
+        score=0.45,
+        features={"source_spacing": 0.45, "table_cell_composite": 1.0},
+        mutable_boundary_indexes=mutable_boundary_indexes,
+    )
+    repaired_score = 0.78 if used_language_repair else 0.95
+    repaired = make_spacing_candidate(
+        region_id=table.region_id,
+        rendered_text="\n".join(repaired_parts),
+        character_sequence=character_sequence,
+        atom_ids=tuple(atom_ids),
+        source_whitespace=source_whitespace,
+        score=repaired_score,
+        features={
+            "table_cell_composite": 1.0,
+            "table_cell_repair": repaired_score,
+        },
+        mutable_boundary_indexes=mutable_boundary_indexes,
+    )
+    if spacing_defect_codes(repaired):
+        return None
+    candidates = tuple(
+        sorted((source, repaired), key=lambda item: (-item.score, item.candidate_id))
+    )
+    return CandidateSet(
+        candidate_set_id=make_candidate_set_id(
+            evidence.source_hash,
+            table.region_id,
+            tuple(candidate.candidate_id for candidate in candidates),
+        ),
+        source_hash=evidence.source_hash,
+        region_id=table.region_id,
+        decision_type="spacing",
+        candidates=candidates,
+    )
+
+
 def _source_whitespace(
     ordered: list[EvidenceAtom],
     characters: list[EvidenceAtom],
@@ -141,6 +265,44 @@ def _source_whitespace(
         )
         for first, second in zip(characters, characters[1:], strict=False)
     )
+
+
+def _qualified_identifier_repair(value: str) -> str | None:
+    dense = _without_whitespace(value)
+    if dense != value and _QUALIFIED_IDENTIFIER.fullmatch(dense) is not None:
+        return dense
+    return None
+
+
+def _has_spacing_fragmentation(value: str) -> bool:
+    if _qualified_identifier_repair(value) is not None:
+        return True
+    return any(
+        len(match.group(1)) == 1 or len(match.group(2)) == 1
+        for match in _HANGUL_FRAGMENT.finditer(value)
+    )
+
+
+def _looks_like_formula(value: str) -> bool:
+    return any(character in value for character in "()=")
+
+
+def _text_spacing_defects(
+    region_id: str,
+    rendered_text: str,
+    character_sequence: str,
+    atom_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    candidate = make_spacing_candidate(
+        region_id=region_id,
+        rendered_text=rendered_text,
+        character_sequence=character_sequence,
+        atom_ids=atom_ids,
+        source_whitespace=tuple(() for _ in range(max(0, len(atom_ids) - 1))),
+        score=0.5,
+        features={"table_cell_probe": 1.0},
+    )
+    return spacing_defect_codes(candidate)
 
 
 def _geometry_text(

@@ -97,6 +97,22 @@ def test_identifier_gap_is_a_defect_even_when_characters_are_conserved() -> None
 
 
 @pytest.mark.parametrize(
+    "rendered_text",
+    [
+        "marketing_campaign.ca mpaign_id",
+        "marketing_creative.crea tive_id",
+        "marketing_delivery.spe nd_units",
+    ],
+)
+def test_qualified_identifier_fragment_is_a_deterministic_defect(
+    rendered_text: str,
+) -> None:
+    candidate = _spacing_candidate(rendered_text)
+
+    assert "QUALIFIED_IDENTIFIER_WHITESPACE_SPLIT" in spacing_defect_codes(candidate)
+
+
+@pytest.mark.parametrize(
     ("source", "damaged"),
     [
         ("user@example.com 안내", "user@ example.com 안내"),

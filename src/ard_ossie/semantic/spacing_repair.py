@@ -31,6 +31,9 @@ whether the selected rendering is correct, not whether its characters are conser
 
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+")
 _IDENTIFIER_WHITESPACE = re.compile(r"(?:\s_|_\s)")
+_QUALIFIED_IDENTIFIER = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+"
+)
 _PROTECTED_TOKEN_PATTERNS = (
     re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+"),
     re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}"),
@@ -118,6 +121,8 @@ def spacing_defect_codes(candidate: SpacingCandidate) -> tuple[ValidationCode, .
     identifier_split = _IDENTIFIER_WHITESPACE.search(candidate.rendered_text) is not None
     if identifier_split:
         codes.append("IDENTIFIER_WHITESPACE_SPLIT")
+    elif _has_qualified_identifier_split(candidate.rendered_text):
+        codes.append("QUALIFIED_IDENTIFIER_WHITESPACE_SPLIT")
     elif _has_protected_token_split(candidate.rendered_text):
         codes.append("PROTECTED_TOKEN_WHITESPACE_SPLIT")
     if _SPACE_BEFORE_PUNCTUATION.search(candidate.rendered_text):
@@ -325,6 +330,17 @@ def _protected_tokens(rendered_text: str) -> list[str]:
         set(_protected_token_occurrences(rendered_text)),
         key=lambda token: (-len(token), token),
     )
+
+
+def _has_qualified_identifier_split(rendered_text: str) -> bool:
+    for line in rendered_text.splitlines():
+        stripped = line.strip()
+        if not any(character.isspace() for character in stripped):
+            continue
+        dense = _without_whitespace(stripped)
+        if _QUALIFIED_IDENTIFIER.fullmatch(dense) is not None:
+            return True
+    return False
 
 
 def _protected_token_occurrences(rendered_text: str) -> list[str]:
