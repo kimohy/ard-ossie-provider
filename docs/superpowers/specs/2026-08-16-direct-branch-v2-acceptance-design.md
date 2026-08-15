@@ -96,8 +96,11 @@ The Draft PR may be marked ready and merged only after:
 After merge, `ARD numeric release` must create immutable product tag
 `product/prd_019ff10c-8be8-79d0-af07-21450abedf9e/v2`. No `v2` table tag is expected because
 the table contents do not change. The Release manifest and downloaded assets must agree by
-SHA-256. Protected production linkage must dispatch only after approval and must converge to a
-no-op when the same release input is retried.
+SHA-256. The `production-linkage` environment is currently restricted to `main` by branch
+policy but has no required-reviewer rule in the GitHub API read-back. This acceptance records
+that actual state, observes the resulting dispatch without claiming a manual approval gate, and
+requires the same release input to converge to a no-op when retried. Adding an environment
+reviewer is outside P1 and remains an operations-protection follow-up.
 
 ## 6. Failure Handling and Negative Acceptance
 
@@ -143,7 +146,7 @@ For the successful remote flow, record:
 - stable product, table, metric, and relationship IDs;
 - unchanged table versions and Registry hashes;
 - merge commit, product tag target, Release URL, asset names, manifest hash, and asset SHA-256;
-- protected linkage approval, dispatch result, and idempotent retry result.
+- `production-linkage` policy read-back, dispatch result, and idempotent retry result.
 
 After fetching the merged history and tags, run:
 
@@ -168,7 +171,8 @@ This work is complete when:
 1. The direct branch produces one trusted processor-managed PR for Marketing Insight `v2`.
 2. The product advances to `v2` while all four table identities and versions remain at `v1`.
 3. Required statuses succeed on the exact final PR head and the PR is merged.
-4. The immutable product `v2` tag, Release bundle, manifest hashes, and protected dispatch agree.
+4. The immutable product `v2` tag, Release bundle, manifest hashes, and main-only environment
+   dispatch agree.
 5. `ard history` and `ard diff` match Git and Registry history.
 6. Live stale-base and skipped-version probes fail closed without writeback.
 7. Fork secret/writeback isolation remains covered by repository-identity guards and automated
