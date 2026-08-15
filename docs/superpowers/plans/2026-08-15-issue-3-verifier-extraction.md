@@ -4,7 +4,7 @@
 
 **Goal:** Make the Issue #3 artifact verifier accept either validated PDF embedded-text extraction or OCR without weakening fidelity checks.
 
-**Architecture:** Keep `verify_issue_3` as the end-to-end artifact gate. It accepts the two PDF modes, rejects non-PDF modes, validates candidate decision provenance, and replays candidate mode with the recorded provider/model identity while keeping actual provider calls prohibited.
+**Architecture:** Keep `verify_issue_3` as the end-to-end artifact gate. It accepts the two PDF modes, binds all reports to the actual source and quality hashes, validates decisions against the packaged provider profile, and proves provider-free cache reuse. Legacy OCR correction artifacts use a separate correction replay path.
 
 **Tech Stack:** Python 3.12, Pydantic models, pytest, Ruff, markdown-it-py
 
@@ -12,6 +12,8 @@
 
 - Accept only `ExtractionMode.PDF_EMBEDDED` and `ExtractionMode.OCR`.
 - Preserve all existing fidelity, correction-audit, Markdown safety, and trusted-reuse checks.
+- Reject unresolved candidate decisions instead of silently publishing them.
+- Treat `quality-report.json` hashes as internal consistency checks, not external signatures.
 - Do not modify generated Issue #3 artifacts manually.
 
 ---
@@ -23,10 +25,10 @@
 - Create: `tests/unit/test_issue_3_verifier.py`
 
 **Interfaces:**
-- Consumes: `ExtractionMode`, `SemanticFidelityReport`, and `DecisionReport`
+- Consumes: `ExtractionMode`, `SemanticFidelityReport`, `SemanticValidationReport`, `DecisionReport`, and the packaged LLM profile registry
 - Produces: a provider-free `verify_issue_3(product_root: Path) -> dict[str, object]` result
 
-- [ ] **Step 1: Write the failing contract test**
+- [x] **Step 1: Write the failing contract test**
 
 ```python
 @pytest.mark.parametrize("mode", (ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR))
@@ -49,27 +51,30 @@ def test_issue_3_verifier_rejects_non_pdf_extraction_mode(tmp_path: Path) -> Non
         verify_issue_3(root)
 ```
 
-- [ ] **Step 2: Run the test and verify the embedded-text case fails**
+- [x] **Step 2: Run the test and verify the embedded-text case fails**
 
 Run: `uv run pytest -q tests/unit/test_issue_3_verifier.py`
 
 Expected: FAIL because `pdf_embedded` is rejected as `ISSUE_3_NOT_OCR` and candidate replay is not configured with the recorded provider identity.
 
-- [ ] **Step 3: Implement the minimal PDF-mode guard**
+- [x] **Step 3: Implement the PDF-mode and provenance guard**
 
 ```python
 _require(
     fidelity.extraction_mode in {ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR},
     "ISSUE_3_NOT_PDF",
 )
-decision_report = DecisionReport.model_validate_json(decision_path.read_bytes())
-identities = {(item.provider, item.model) for item in decision_report.decisions}
-_require(len(identities) == 1, "ISSUE_3_DECISION_PROVIDER_INVALID")
-provider_name, model = next(iter(identities))
+profile = LLMProfileRegistry.load_packaged().resolve("openai-compatible-default")
+decision_report = DecisionReport.model_validate_json(verified_decision_bytes)
+_require(
+    {(item.provider, item.model) for item in decision_report.decisions}
+    == {(profile.provider, profile.model)},
+    "ISSUE_3_DECISION_PROVIDER_INVALID",
+)
 provider = _ProviderMustNotRun(
     fidelity,
-    provider=provider_name,
-    model=model,
+    provider=profile.provider,
+    model=profile.model,
 )
 reused = DoclingParser(
     trusted_fidelity_report=fidelity,
@@ -81,7 +86,9 @@ reused = DoclingParser(
 
 Update the script description to say “semantic PDF artifact.” Keep `generate_structured` and `generate_multimodal_structured` fail-closed so a cache miss fails verification.
 
-- [ ] **Step 4: Run focused and full verification**
+Before replay, also validate the actual `.pdf` suffix, source hash, fidelity/validation/decision quality hashes, verified validation status, and selected decision outcomes. After replay, require the same extraction mode/source hash and an exact decision mapping, with non-deterministic decisions reported as `cache`.
+
+- [x] **Step 4: Run focused and full verification**
 
 Run:
 
@@ -93,7 +100,7 @@ uv run pytest -q
 
 Expected: all commands pass.
 
-- [ ] **Step 5: Commit the implementation**
+- [x] **Step 5: Commit the implementation**
 
 ```bash
 git add scripts/verify_issue_3_semantic.py tests/unit/test_issue_3_verifier.py
@@ -110,13 +117,13 @@ git commit -m "fix: accept embedded PDF issue verifier input"
 - Consumes: the regenerated PR #5 product tree
 - Produces: a passing Issue #3 verifier result and CommonMark rendering evidence
 
-- [ ] **Step 1: Run the artifact verifier**
+- [x] **Step 1: Run the artifact verifier**
 
 Run: `uv run python scripts/verify_issue_3_semantic.py --product-root products/500138301`
 
 Expected: JSON result with a non-failing status, `page_count` 5, and a stable Markdown SHA-256.
 
-- [ ] **Step 2: Parse the generated Markdown as CommonMark/GFM**
+- [x] **Step 2: Parse the generated Markdown as CommonMark/GFM**
 
 Run a read-only `MarkdownIt("commonmark").enable("table")` parse and assert heading levels `[1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]`, 10 tables, zero raw HTML tokens, zero literal backslashes in rendered HTML, and the corrected Korean terms.
 
