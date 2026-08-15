@@ -102,7 +102,7 @@ rollback은 PDF parser만 바꾸며 source attachment와 이미 병합된 commit
 gh variable set ARD_SEMANTIC_PDF_PIPELINE --body candidate
 ```
 
-실패한 run의 commit에 수정 코드가 없었다면 `gh run rerun`도 같은 옛 코드를 사용합니다. 이때는 수정 PR을 먼저 병합하고 아래 릴리스 복구 절차를 따릅니다.
+`gh run rerun`은 실패한 run의 exact commit과 workflow를 다시 사용합니다. 네트워크·권한·provider 같은 외부 원인을 해소한 재시도에는 적합하지만, 그 commit의 구현 결함을 고치지는 않습니다.
 
 ## 릴리스 복구
 
@@ -117,11 +117,11 @@ git ls-remote --tags origin 'product/*' 'table/*'
 gh release view 'product/PRODUCT_ID/vN'
 ```
 
-result envelope의 exit, finding, outputs, mutations를 읽습니다. tag나 Release가 일부 생겼으면 삭제하지 않습니다.
+result envelope의 exit, finding, `outputs.commit`, `outputs.artifact_sha256`, mutations를 읽습니다. product/table tag의 실제 peeled target과 Release asset을 대조합니다. tag나 Release가 일부 생겼으면 삭제하거나 이동하지 않습니다.
 
-### 2. 수정된 exact main에서 release 수렴
+### 2. 원격 immutable mutation이 없을 때
 
-보호된 maintainer 환경에서 최신 `main`을 clean checkout하고, source LFS 객체와 tag를 받은 뒤 실행합니다.
+tag, Release, dispatch status가 **모두 없다는 것이 확인된 경우에만** 수정된 최신 `main`에서 수동 release를 새로 시작할 수 있습니다. 보호된 maintainer 환경의 clean checkout에서 source LFS 객체와 tag를 받은 뒤 실행합니다.
 
 ```bash
 CURRENT="$(git rev-parse HEAD)"
@@ -135,7 +135,40 @@ uv run --frozen ard workflow release-product \
 
 CLI는 annotated tag를 만들기 전에 repository-local bot identity를 설정합니다. 같은 tag가 같은 commit이면 재사용하고, 다른 commit이면 이동하지 않고 `TAG_TARGET_CONFLICT`로 실패합니다.
 
-### 3. 성공 result만 dispatch
+### 3. tag 또는 Release가 일부 존재할 때
+
+이미 생성된 immutable mutation이 하나라도 있으면 최신 `main`으로 바꾸지 않습니다. result의 `outputs.commit`과 원격 tag target이 같은지 확인하고, 외부 원인을 해소한 뒤 원래 run을 재실행합니다.
+
+```bash
+ORIGINAL_COMMIT="$(jq -r '.outputs.commit' .ard/run/workflow.release-product-result.json)"
+RUN_HEAD="$(gh run view RUN_ID --json headSha --jq .headSha)"
+test "$ORIGINAL_COMMIT" = "$RUN_HEAD"
+git ls-remote --tags origin 'product/*' 'table/*'
+gh run rerun RUN_ID
+```
+
+출력된 existing tag 각각의 peeled target이 `ORIGINAL_COMMIT`과 같은지 확인합니다. 하나라도 다르면 재실행하지 않고 `TAG_TARGET_CONFLICT` incident로 전환합니다.
+
+원래 run이 없는 수동 복구라면 exact original commit을 detached checkout하고, 최초 run의 `TABLE_IDS` 입력을 그대로 재사용합니다. 값이나 version을 추정하지 않습니다.
+
+```bash
+git fetch origin main --tags
+git switch --detach "$ORIGINAL_COMMIT"
+git lfs pull
+CURRENT="$(git rev-parse HEAD)"
+test "$CURRENT" = "$ORIGINAL_COMMIT"
+
+uv run --frozen ard workflow release-product \
+  --product-key PRODUCT_KEY \
+  --current "$CURRENT" \
+  --table-ids "$ORIGINAL_TABLE_IDS_JSON" \
+  --output dist \
+  --repository-name OWNER/REPO
+```
+
+원래 commit의 release 구현 자체가 결함이면 이 경로로 수렴시킬 수 없습니다. tag를 이동·삭제하거나 수정 commit에서 같은 version을 재게시하지 말고 incident를 열어 원래 tag/asset 상태를 보존한 채 별도 복구 정책을 승인받습니다.
+
+### 4. 성공 result만 dispatch
 
 ```bash
 uv run --frozen ard workflow release-dispatch \

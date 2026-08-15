@@ -215,16 +215,23 @@ Enterprise Issue intake를 사용하려면 별도 코드 변경과 보안 검토
 7. required status `ard/quality-gate`, `ard/changeset`
 8. Actions default read permission과 workflow별 최소 권한
 
-먼저 host와 repository를 명시해 계획만 확인합니다.
+**현재 bootstrap CLI를 private Enterprise 저장소에 실행하지 않습니다.** `ard github bootstrap`은 public `main` 저장소만 허용하며, private 저장소에서는 read-only `--dry-run`도 `REPOSITORY_MISMATCH`로 즉시 종료합니다. 따라서 이 명령은 Enterprise readiness probe가 아닙니다.
+
+GHES 3.18.12에서는 위 desired state를 UI 또는 승인된 REST API로 만들고 각각 다시 읽어 실제 상태를 대조합니다. 먼저 mutation 없는 read로 host, private visibility, default branch, Actions permission, Environment, branch protection endpoint의 가용성을 확인합니다.
 
 ```bash
 export GH_HOST='github.example.com'
-uv run --frozen ard github bootstrap \
-  --repo ENTERPRISE_ORG/ard-ossie-provider \
-  --dry-run
+gh api --hostname "$GH_HOST" \
+  repos/ENTERPRISE_ORG/ard-ossie-provider
+gh api --hostname "$GH_HOST" \
+  repos/ENTERPRISE_ORG/ard-ossie-provider/actions/permissions
+gh api --hostname "$GH_HOST" \
+  repos/ENTERPRISE_ORG/ard-ossie-provider/environments
+gh api --hostname "$GH_HOST" \
+  repos/ENTERPRISE_ORG/ard-ossie-provider/branches/main/protection
 ```
 
-dry-run의 모든 API read가 성공하고 대상이 새 저장소임을 확인한 뒤에만 apply합니다. GHES 버전에 endpoint 또는 protection field가 없으면 bootstrap을 강행하지 말고, 지원되는 UI/API로 동일 desired state를 만든 뒤 차이를 기록합니다. Secret 값은 shell history, migration archive, Issue, log에 남기지 않습니다.
+endpoint 또는 protection field가 3.18에 없으면 강행하지 말고, 지원되는 UI/API로 동일 desired state를 만든 뒤 차이와 승인자를 기록합니다. bootstrap이 private destination과 해당 GHES API를 명시적으로 지원하도록 수정·검증된 이후에만 `--dry-run`과 apply 경로를 다시 도입합니다. Secret 값은 shell history, migration archive, Issue, log에 남기지 않습니다.
 
 GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는 Environment job이 성공하려면 `GITHUB_TOKEN`에 명시적 deployment write/admin 권한이 필요합니다. 이 저장소에서는 넓은 repository 기본 권한을 열지 않고 해당 job의 `permissions`에 `deployments: write`만 추가한 뒤, 기존 `contents`, `pull-requests`, `statuses`, `issues` 권한과 함께 최소 권한을 재검토합니다.
 
@@ -232,7 +239,7 @@ GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는
 
 한 번에 모든 workflow를 활성화하지 않습니다.
 
-1. **호환성 branch:** runner label, Node 20 Action SHA, artifact 왕복, Environment job의 deployment 권한을 수정하고 `actionlint`와 unit/integration test를 실행합니다.
+1. **호환성 branch:** private bootstrap 정책, runner label, Node 20 Action SHA, artifact 왕복, Environment job의 deployment 권한을 수정하고 `actionlint`와 unit/integration test를 실행합니다.
 2. **읽기 전용 gate:** `ARD repository change gate`만 허용해 clean checkout에서 전체 test, Ruff, actionlint가 통과하는지 확인합니다.
 3. **LLM smoke:** `ard-llm` Environment 승인을 거쳐 실제 provider text/structured 요청을 수행합니다. raw 응답이나 Secret이 artifact/log에 없는지 확인합니다.
 4. **direct branch 처리:** 테스트 제품 하나를 Git LFS로 올려 candidate 변환, Draft PR, 두 required status를 확인합니다.
@@ -248,6 +255,7 @@ GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는
 - [ ] 모든 LFS object가 destination에서 checkout되고 `git lfs fsck`가 통과한다.
 - [ ] Enterprise 제품과 정확한 버전, runner version, Action 공급 방식을 기록했다.
 - [ ] 3.18.12 appliance를 3.18.13으로 hotpatch하고 보안·알려진 문제를 재확인했다.
+- [ ] private destination의 설정은 UI/API read-back으로 확인했고 현재 public-only bootstrap CLI를 실행하지 않았다.
 - [ ] Actions, artifact/cache storage, runner group과 outbound allowlist가 준비됐다.
 - [ ] air-gapped 환경이면 actionlint, uv, Python package, OCR/문서 처리 dependency의 내부 mirror 경로가 실제 gate에서 검증됐다.
 - [ ] 모든 workflow의 runner label이 실제 online runner와 일치한다.
