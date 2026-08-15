@@ -210,6 +210,33 @@ def test_canonical_fidelity_maps_verified_atom_coverage() -> None:
     assert fidelity.paragraph_count == 1
 
 
+def test_canonical_fidelity_warns_for_verified_decision_audit_codes() -> None:
+    result = parse_semantic_pdf_v2(
+        SourceFile(
+            path=Path("semantic.pdf"),
+            relative_path="sources/semantic.pdf",
+            role=SourceRole.SEMANTIC_DOCUMENT,
+            sha256=SOURCE_HASH,
+            size_bytes=7,
+            snapshot=b"fixture",
+        ),
+        hints=StructureDocument(blocks=()),
+        mode="candidate",
+        legacy_markdown="legacy\n",
+        extracted_evidence=_extracted(),
+        spacing_scorer=StableSpacingScorer(),
+    )
+    decision = result.canonical.decisions[0].model_copy(
+        update={"validation_codes": ("LLM_SPACING_REPAIR_APPLIED",)}
+    )
+    canonical = result.canonical.model_copy(update={"decisions": (decision,)})
+
+    fidelity = canonical_fidelity_report(result.evidence, canonical, result.validation)
+
+    assert fidelity.status == "WARN"
+    assert fidelity.warning_codes == ["LLM_SPACING_REPAIR_APPLIED"]
+
+
 class ExplodingPlanner:
     def __init__(self) -> None:
         self.calls = 0
