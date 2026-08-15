@@ -31,6 +31,16 @@
     "시뮬레이션 비용 합계",
     "유효성"
   ],
+  "recovered_candidates": {
+    "candidate_set_78620dc093a748fe": {
+      "candidate_id": "candidate_e6954a2fd1fdfe6f",
+      "rendering": "항목 내용\n도메인 Marketing Insight\n관련 키워드 가상 캠페인, 광고소재, 집행 신호, 성과 신호, 합성 데이터\n작성일 2026-08-11\n작성자 Synthetic Insights\n버전 v1.0"
+    },
+    "candidate_set_6d08c750276170e3": {
+      "candidate_id": "candidate_2eefa1840c448a35",
+      "rendering": "결합 기준\n개체 데이터 단위 id 당 1행 id\nCampaign campaigncampaign__id 당 1행 id\nCreative creativecampaign__id 당 1행 Delivery date id id, creativeid\ncampaign creativecampaignevent++_____id 당 1행 date id campaigncampaignOutcome event+___"
+    }
+  },
   "forbidden_strings": [
     "Semantics 是州",
     "号h",

@@ -204,16 +204,10 @@ def assemble_canonical(
 
         spacing_set = sets_by_scope.get((region_id, "spacing"))
         spacing = (
-            _selected_candidate(spacing_set, decisions_by_set)
-            if spacing_set is not None
-            else None
+            _selected_candidate(spacing_set, decisions_by_set) if spacing_set is not None else None
         )
         block_set = sets_by_scope.get((region_id, "block"))
-        block = (
-            _selected_candidate(block_set, decisions_by_set)
-            if block_set is not None
-            else None
-        )
+        block = _selected_candidate(block_set, decisions_by_set) if block_set is not None else None
         spacing_candidate = spacing if isinstance(spacing, SpacingCandidate) else None
         block_candidate = block if isinstance(block, BlockCandidate) else None
         text = (
@@ -387,13 +381,11 @@ def validate_canonical(
         )
 
     character_mismatch = any(
-        _non_whitespace(block.text)
-        != _atom_text_sequence(block.atom_ids, atom_catalog)
+        _non_whitespace(block.text) != _atom_text_sequence(block.atom_ids, atom_catalog)
         or (
             block.kind == "table"
             and any(
-                _non_whitespace(cell.text)
-                != _atom_text_sequence(cell.atom_ids, atom_catalog)
+                _non_whitespace(cell.text) != _atom_text_sequence(cell.atom_ids, atom_catalog)
                 for cell in block.cells
             )
         )
@@ -479,12 +471,21 @@ def validate_canonical(
         missing_atom_count=len(missing_ids),
         duplicate_atom_count=duplicate_count,
         degraded_block_count=len(
-            {
-                decision.region_id for decision in review_decisions if decision.region_id
-            }
+            {decision.region_id for decision in review_decisions if decision.region_id}
         ),
-        model_call_count=sum(item.source in {"model", "provider"} for item in document.decisions),
+        model_call_count=sum(_current_model_call_count(item) for item in document.decisions),
     )
+
+
+def _current_model_call_count(decision: DecisionRecord) -> int:
+    if decision.source == "cache":
+        return 0
+    if decision.attempts:
+        return sum(
+            1 + attempt.provider_retry_count + attempt.provider_repair_count
+            for attempt in decision.attempts
+        )
+    return int(decision.source in {"model", "provider", "recovered"})
 
 
 def _non_whitespace(value: str) -> str:
@@ -552,9 +553,7 @@ def _canonical_cells(
                 if cell.rendered_text is not None
                 else _project_cell_spacing(cell.atom_ids, atom_catalog, spacing)
             ),
-            atom_ids=tuple(
-                item for item in cell.atom_ids if not atom_catalog[item].text.isspace()
-            ),
+            atom_ids=tuple(item for item in cell.atom_ids if not atom_catalog[item].text.isspace()),
             column_header=cell.column_header,
         )
         for cell in table.cells
@@ -607,11 +606,15 @@ def _whitespace_dispositions(
     decision: DecisionRecord | None,
 ) -> tuple[WhitespaceDisposition, ...]:
     decision_id = decision.decision_id if decision else "decision_0000000000000000"
-    boundary_by_atom = {
-        atom_id: boundary
-        for boundary in spacing.boundaries
-        for atom_id in boundary.source_whitespace_atom_ids
-    } if spacing is not None else {}
+    boundary_by_atom = (
+        {
+            atom_id: boundary
+            for boundary in spacing.boundaries
+            for atom_id in boundary.source_whitespace_atom_ids
+        }
+        if spacing is not None
+        else {}
+    )
     result: list[WhitespaceDisposition] = []
     for atom_id in region.atom_ids:
         atom = atom_catalog[atom_id]
@@ -673,9 +676,7 @@ def _valid_table(block: CanonicalBlock) -> bool:
     if block.row_count * block.column_count > MAX_TABLE_GRID_AREA:
         return False
     cell_atom_ids = [atom_id for cell in block.cells for atom_id in cell.atom_ids]
-    if len(cell_atom_ids) != len(set(cell_atom_ids)) or set(cell_atom_ids) != set(
-        block.atom_ids
-    ):
+    if len(cell_atom_ids) != len(set(cell_atom_ids)) or set(cell_atom_ids) != set(block.atom_ids):
         return False
     occupied: set[tuple[int, int]] = set()
     for cell in block.cells:
@@ -688,9 +689,7 @@ def _valid_table(block: CanonicalBlock) -> bool:
                     return False
                 occupied.add(coordinate)
     return occupied == {
-        (row, column)
-        for row in range(block.row_count)
-        for column in range(block.column_count)
+        (row, column) for row in range(block.row_count) for column in range(block.column_count)
     }
 
 
@@ -716,17 +715,13 @@ def _valid_continuation(
         return False
     overlap = max(
         0.0,
-        min(previous.bbox.right, current.bbox.right)
-        - max(previous.bbox.left, current.bbox.left),
+        min(previous.bbox.right, current.bbox.right) - max(previous.bbox.left, current.bbox.left),
     )
     minimum_width = min(
         previous.bbox.right - previous.bbox.left,
         current.bbox.right - current.bbox.left,
     )
-    return bool(
-        minimum_width > 0
-        and overlap / minimum_width >= 0.75
-    )
+    return bool(minimum_width > 0 and overlap / minimum_width >= 0.75)
 
 
 def _valid_exclusions(

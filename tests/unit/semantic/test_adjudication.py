@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from ard_ossie.llm.contracts import (
     LLMImagePart,
@@ -13,7 +14,10 @@ from ard_ossie.llm.contracts import (
     ProviderFailureKind,
 )
 from ard_ossie.semantic.adjudication import (
+    AdjudicationAttempt,
+    AdjudicationPolicy,
     CandidateAdjudicator,
+    DecisionRecord,
     candidate_choice_schema,
 )
 from ard_ossie.semantic.candidates import (
@@ -79,29 +83,23 @@ class RecordingProvider:
         )
 
 
-def _spacing_set(first_score: float, second_score: float) -> CandidateSet:
+def _spacing_set(*scores: float) -> CandidateSet:
     characters = "데이터시맨틱"
     atom_ids = tuple(f"atom_{index:016x}" for index in range(1, len(characters) + 1))
     source_whitespace = tuple(() for _ in range(len(atom_ids) - 1))
-    candidates = (
+    renderings = ("데이터 시맨틱", "데이터시맨틱", "데이터 시맨 틱")
+    feature_names = ("kiwi", "source_spacing", "alternate")
+    candidates = tuple(
         make_spacing_candidate(
             region_id="region_0000000000000001",
-            rendered_text="데이터 시맨틱",
+            rendered_text=renderings[index],
             character_sequence=characters,
             atom_ids=atom_ids,
             source_whitespace=source_whitespace,
-            score=first_score,
-            features={"kiwi": first_score},
-        ),
-        make_spacing_candidate(
-            region_id="region_0000000000000001",
-            rendered_text="데이터시맨틱",
-            character_sequence=characters,
-            atom_ids=atom_ids,
-            source_whitespace=source_whitespace,
-            score=second_score,
-            features={"source_spacing": second_score},
-        ),
+            score=score,
+            features={feature_names[index]: score},
+        )
+        for index, score in enumerate(scores)
     )
     return CandidateSet(
         candidate_set_id=make_candidate_set_id(
@@ -114,6 +112,55 @@ def _spacing_set(first_score: float, second_score: float) -> CandidateSet:
         decision_type="spacing",
         candidates=candidates,
     )
+
+
+def _legacy_decision_payload() -> dict[str, object]:
+    return {
+        "decision_id": "decision_0000000000000001",
+        "request_hash": "1" * 64,
+        "source_hash": SOURCE_HASH,
+        "evidence_hash": "2" * 64,
+        "candidate_set_id": "candidate_set_0000000000000001",
+        "region_id": "region_0000000000000001",
+        "decision_type": "spacing",
+        "selected_candidate_id": "candidate_0000000000000001",
+        "outcome": "selected",
+        "source": "model",
+        "confidence": 0.91,
+        "provider": "openai_compatible",
+        "model": "semantic-judge",
+        "validation_codes": [],
+        "retry_count": 0,
+        "repair_count": 0,
+    }
+
+
+def test_decision_record_loads_legacy_payload_with_recovery_defaults() -> None:
+    decision = DecisionRecord.model_validate(_legacy_decision_payload())
+
+    assert decision.recovery_status == "not_needed"
+    assert decision.attempts == ()
+    assert decision.consensus_method == "none"
+    assert decision.consensus_candidate_id is None
+    assert decision.recovery_count == 0
+
+
+def test_adjudication_attempt_is_closed_bounded_and_content_addressed() -> None:
+    attempt = AdjudicationAttempt(
+        attempt_index=1,
+        phase="primary",
+        request_hash="1" * 64,
+        candidate_id="candidate_0000000000000001",
+        confidence=0.70,
+        status="low_confidence",
+        validation_codes=("LLM_CONFIDENCE_TOO_LOW",),
+        provider_retry_count=0,
+        provider_repair_count=0,
+    )
+
+    assert attempt.model_dump(mode="json")["phase"] == "primary"
+    with pytest.raises(ValidationError):
+        AdjudicationAttempt.model_validate({**attempt.model_dump(mode="json"), "attempt_index": 7})
 
 
 def test_clear_score_margin_selects_without_provider_call() -> None:
@@ -162,9 +209,7 @@ def test_unknown_candidate_is_retried_once_then_requires_review() -> None:
 def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> None:
     candidate_set = _spacing_set(0.80, 0.75)
     selected_id = candidate_set.candidates[0].candidate_id
-    first_provider = RecordingProvider(
-        [{"candidate_id": selected_id, "confidence": 0.91}]
-    )
+    first_provider = RecordingProvider([{"candidate_id": selected_id, "confidence": 0.91}])
     first = CandidateAdjudicator(first_provider).decide(candidate_set)
     reuse_provider = RecordingProvider()
 
@@ -175,17 +220,13 @@ def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> No
     assert reuse_provider.calls == []
 
     mismatched = first.model_copy(update={"request_hash": "0" * 64})
-    miss_provider = RecordingProvider(
-        [{"candidate_id": selected_id, "confidence": 0.92}]
-    )
+    miss_provider = RecordingProvider([{"candidate_id": selected_id, "confidence": 0.92}])
     missed = CandidateAdjudicator(miss_provider, trusted=(mismatched,)).decide(candidate_set)
     assert missed.source == "model"
     assert len(miss_provider.calls) == 1
 
     mismatched_evidence = first.model_copy(update={"evidence_hash": "1" * 64})
-    evidence_miss_provider = RecordingProvider(
-        [{"candidate_id": selected_id, "confidence": 0.93}]
-    )
+    evidence_miss_provider = RecordingProvider([{"candidate_id": selected_id, "confidence": 0.93}])
     evidence_miss = CandidateAdjudicator(
         evidence_miss_provider,
         trusted=(mismatched_evidence,),
@@ -194,24 +235,273 @@ def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> No
     assert len(evidence_miss_provider.calls) == 1
 
 
-def test_unavailable_provider_and_low_confidence_response_require_review() -> None:
+def test_trusted_recovered_decision_reuses_full_audit_without_provider_call() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    first_provider = RecordingProvider(
+        [
+            {"candidate_id": selected, "confidence": 0.70},
+            {"candidate_id": selected, "confidence": 0.92},
+        ]
+    )
+    recovered = CandidateAdjudicator(first_provider).decide(candidate_set)
+    reuse_provider = RecordingProvider()
+
+    reused = CandidateAdjudicator(reuse_provider, trusted=(recovered,)).decide(candidate_set)
+
+    assert reused.source == "cache"
+    assert reused.selected_candidate_id == selected
+    assert reused.recovery_status == "recovered"
+    assert reused.consensus_method == "same_candidate"
+    assert reused.consensus_candidate_id == selected
+    assert reused.attempts == recovered.attempts
+    assert reused.recovery_count == 1
+    assert reuse_provider.calls == []
+
+
+def test_cached_recovery_can_be_reused_again_without_provider_call() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    cached = CandidateAdjudicator(RecordingProvider(), trusted=(recovered,)).decide(
+        candidate_set
+    )
+    provider = RecordingProvider()
+
+    reused = CandidateAdjudicator(provider, trusted=(cached,)).decide(candidate_set)
+
+    assert reused.source == "cache"
+    assert reused.attempts == recovered.attempts
+    assert provider.calls == []
+
+
+def test_invalid_trusted_consensus_is_ignored() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    invalid = recovered.model_copy(update={"consensus_candidate_id": "candidate_ffffffffffffffff"})
+    provider = RecordingProvider([{"candidate_id": selected, "confidence": 0.93}])
+
+    fresh = CandidateAdjudicator(provider, trusted=(invalid,)).decide(candidate_set)
+
+    assert fresh.source != "cache"
+    assert len(provider.calls) == 1
+
+
+def test_trusted_recovery_is_ignored_when_attempt_votes_contradict_consensus() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    first, second = [candidate.candidate_id for candidate in candidate_set.candidates]
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": first, "confidence": 0.70},
+                {"candidate_id": first, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    contradictory_recovery = recovered.attempts[1].model_copy(update={"candidate_id": second})
+    contradictory = recovered.model_copy(
+        update={"attempts": (recovered.attempts[0], contradictory_recovery)}
+    )
+    provider = RecordingProvider([{"candidate_id": first, "confidence": 0.93}])
+
+    fresh = CandidateAdjudicator(provider, trusted=(contradictory,)).decide(candidate_set)
+
+    assert fresh.source == "model"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "policy,response",
+    [
+        (
+            AdjudicationPolicy(minimum_model_confidence=0.95),
+            {"confidence": 0.96},
+        ),
+        (
+            AdjudicationPolicy(max_confidence_recovery_attempts=0),
+            {"confidence": 0.70},
+        ),
+    ],
+)
+def test_trusted_recovery_is_ignored_when_active_policy_changes(
+    policy: AdjudicationPolicy,
+    response: dict[str, float],
+) -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    recovered = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    provider = RecordingProvider([{"candidate_id": selected, **response}])
+
+    fresh = CandidateAdjudicator(provider, policy=policy, trusted=(recovered,)).decide(
+        candidate_set
+    )
+
+    assert fresh.source != "cache"
+    assert len(provider.calls) == 1
+
+
+def test_unavailable_provider_requires_review() -> None:
     unavailable = CandidateAdjudicator(None).decide(_spacing_set(0.80, 0.75))
     assert unavailable.outcome == "review_required"
     assert unavailable.validation_codes == ("LLM_PROVIDER_UNAVAILABLE",)
 
+
+def test_low_confidence_is_recovered_when_second_vote_matches() -> None:
     candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
     provider = RecordingProvider(
         [
-            {
-                "candidate_id": candidate_set.candidates[0].candidate_id,
-                "confidence": 0.40,
-            }
+            {"candidate_id": selected, "confidence": 0.70},
+            {"candidate_id": selected, "confidence": 0.92},
         ]
     )
-    uncertain = CandidateAdjudicator(provider).decide(candidate_set)
-    assert uncertain.outcome == "review_required"
-    assert uncertain.validation_codes == ("LLM_CONFIDENCE_TOO_LOW",)
-    assert len(provider.calls) == 1
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "selected"
+    assert decision.source == "recovered"
+    assert decision.selected_candidate_id == selected
+    assert decision.recovery_status == "recovered"
+    assert decision.consensus_method == "same_candidate"
+    assert decision.recovery_count == 1
+    assert [attempt.phase for attempt in decision.attempts] == ["primary", "recovery"]
+    assert [attempt.confidence for attempt in decision.attempts] == [0.70, 0.92]
+    assert decision.validation_codes == ("LLM_LOW_CONFIDENCE_RECOVERED",)
+    assert len(provider.calls) == 2
+
+
+def test_recovered_decision_id_changes_when_attempt_audit_changes() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+
+    first = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.92},
+            ]
+        )
+    ).decide(candidate_set)
+    second = CandidateAdjudicator(
+        RecordingProvider(
+            [
+                {"candidate_id": selected, "confidence": 0.70},
+                {"candidate_id": selected, "confidence": 0.99},
+            ]
+        )
+    ).decide(candidate_set)
+
+    assert first.attempts[1].request_hash == second.attempts[1].request_hash
+    assert first.decision_id != second.decision_id
+
+
+def test_recovered_decision_aggregates_provider_counts_across_vote_phases() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    transient = ProviderExecutionError(
+        "LLM_PROVIDER_TIMEOUT",
+        kind=ProviderFailureKind.TRANSIENT,
+    )
+    provider = RecordingProvider(
+        [
+            transient,
+            {"candidate_id": selected, "confidence": 0.70},
+            "invalid repairable output",
+            {"candidate_id": selected, "confidence": 0.92},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(candidate_set)
+
+    assert decision.source == "recovered"
+    assert [attempt.provider_retry_count for attempt in decision.attempts] == [1, 0]
+    assert [attempt.provider_repair_count for attempt in decision.attempts] == [0, 1]
+    assert decision.retry_count == 1
+    assert decision.repair_count == 1
+
+
+def test_disagreement_uses_high_confidence_two_of_three_tiebreak() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    first, second = [item.candidate_id for item in candidate_set.candidates]
+    provider = RecordingProvider(
+        [
+            {"candidate_id": first, "confidence": 0.70},
+            {"candidate_id": second, "confidence": 0.91},
+            {"candidate_id": first, "confidence": 0.93},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "selected"
+    assert decision.selected_candidate_id == first
+    assert decision.consensus_method == "two_of_three"
+    assert decision.consensus_candidate_id == first
+    assert decision.recovery_count == 2
+    assert [item.phase for item in decision.attempts] == [
+        "primary",
+        "recovery",
+        "tiebreak",
+    ]
+
+
+def test_second_low_confidence_vote_exhausts_recovery_without_tiebreak() -> None:
+    candidate_set = _spacing_set(0.80, 0.75)
+    selected = candidate_set.candidates[0].candidate_id
+    provider = RecordingProvider(
+        [
+            {"candidate_id": selected, "confidence": 0.70},
+            {"candidate_id": selected, "confidence": 0.74},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "review_required"
+    assert decision.selected_candidate_id is None
+    assert decision.recovery_status == "review_required"
+    assert decision.validation_codes == ("LLM_CONFIDENCE_RECOVERY_EXHAUSTED",)
+    assert len(provider.calls) == 2
+
+
+def test_tiebreak_without_majority_requires_review() -> None:
+    candidate_set = _spacing_set(0.80, 0.75, 0.74)
+    first, second, third = [item.candidate_id for item in candidate_set.candidates]
+    provider = RecordingProvider(
+        [
+            {"candidate_id": first, "confidence": 0.70},
+            {"candidate_id": second, "confidence": 0.91},
+            {"candidate_id": third, "confidence": 0.94},
+        ]
+    )
+
+    decision = CandidateAdjudicator(provider).decide(candidate_set)
+
+    assert decision.outcome == "review_required"
+    assert decision.validation_codes == ("LLM_CONSENSUS_NOT_REACHED",)
+    assert len(provider.calls) == 3
 
 
 def test_transient_provider_failure_propagates() -> None:
@@ -222,9 +512,7 @@ def test_transient_provider_failure_propagates() -> None:
     provider = RecordingProvider([failure, failure, failure])
 
     with pytest.raises(ProviderExecutionError, match="LLM_PROVIDER_TIMEOUT"):
-        CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(
-            _spacing_set(0.80, 0.75)
-        )
+        CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(_spacing_set(0.80, 0.75))
 
     assert len(provider.calls) == 3
 
@@ -237,6 +525,9 @@ def test_schema_invalid_free_text_is_never_accepted() -> None:
     assert decision.outcome == "review_required"
     assert decision.selected_candidate_id is None
     assert decision.validation_codes == ("LLM_INVALID_JSON",)
+    assert len(provider.calls) == 3
+    assert decision.attempts[0].provider_repair_count == 2
+    assert decision.repair_count == 2
 
 
 def test_optional_crop_uses_exactly_one_multimodal_image() -> None:
@@ -256,10 +547,7 @@ def test_optional_crop_uses_exactly_one_multimodal_image() -> None:
     kind, messages = provider.calls[0]
     assert kind == "multimodal"
     images = [
-        part
-        for message in messages
-        for part in message.content
-        if isinstance(part, LLMImagePart)
+        part for message in messages for part in message.content if isinstance(part, LLMImagePart)
     ]
     assert len(images) == 1
 

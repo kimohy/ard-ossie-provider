@@ -114,7 +114,11 @@ class LLMService:
                     or repairs >= _MAX_REPAIRS
                     or attempt == _MAX_TOTAL_ATTEMPTS - 1
                 ):
-                    raise
+                    raise _with_attempt_counts(
+                        error,
+                        retries=retries,
+                        repairs=repairs,
+                    ) from None
                 repairs += 1
                 repair_codes.append(error.code)
                 active_messages = repair(messages, schema, error.code)
@@ -127,7 +131,11 @@ class LLMService:
                     or repairs >= _MAX_REPAIRS
                     or attempt == _MAX_TOTAL_ATTEMPTS - 1
                 ):
-                    raise
+                    raise _with_attempt_counts(
+                        error,
+                        retries=retries,
+                        repairs=repairs,
+                    ) from None
                 repairs += 1
                 repair_codes.append(error.code)
                 active_messages = repair(messages, schema, error.code)
@@ -184,6 +192,21 @@ def _validate_result(
     except JsonSchemaValidationError:
         raise _output_error("LLM_SCHEMA_VIOLATION") from None
     return candidate
+
+
+def _with_attempt_counts(
+    error: ProviderExecutionError,
+    *,
+    retries: int,
+    repairs: int,
+) -> ProviderExecutionError:
+    return ProviderExecutionError(
+        error.code,
+        kind=error.kind,
+        rejected_result=error.rejected_result,
+        retry_count=retries,
+        repair_count=repairs,
+    )
 
 
 def _strip_json_fence(content: str) -> str:

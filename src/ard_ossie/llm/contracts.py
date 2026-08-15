@@ -31,13 +31,19 @@ class ProviderExecutionError(RuntimeError):
         *,
         kind: ProviderFailureKind,
         rejected_result: object | None = None,
+        retry_count: int = 0,
+        repair_count: int = 0,
     ) -> None:
         if _ERROR_CODE.fullmatch(code) is None:
             raise ValueError("INVALID_PROVIDER_ERROR_CODE")
+        if not 0 <= retry_count <= 2 or not 0 <= repair_count <= 2:
+            raise ValueError("INVALID_PROVIDER_ATTEMPT_COUNT")
         super().__init__(code)
         self.code = code
         self.kind = kind
         self.rejected_result = rejected_result
+        self.retry_count = retry_count
+        self.repair_count = repair_count
 
 
 class LLMMetadata(StrictModel):
