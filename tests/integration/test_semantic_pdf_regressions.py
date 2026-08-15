@@ -18,6 +18,11 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
         Path("tests/fixtures/semantic/issue-3-golden.json").read_text(encoding="utf-8")
     )
     headings = [block.text for block in result.canonical.blocks if block.kind == "heading"]
+    heading_levels = [
+        block.heading_level
+        for block in result.canonical.blocks
+        if block.kind == "heading"
+    ]
     table_dimensions = [
         [block.row_count, block.column_count]
         for block in result.canonical.blocks
@@ -35,6 +40,7 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
     assert result.validation.duplicate_atom_count == 0
     assert result.validation.degraded_block_count == 0
     assert headings == golden["headings"]
+    assert heading_levels == golden["heading_levels"]
     assert table_dimensions == golden["table_dimensions"]
     assert all(phrase in plain_text for phrase in golden["required_phrases"])
     cell_texts = [cell.text for block in result.canonical.blocks for cell in block.cells]
