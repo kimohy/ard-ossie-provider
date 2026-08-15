@@ -161,8 +161,10 @@ bounded candidate set
 their ordered attempts. A new `application-report.json` records whether each recovered decision
 was included in a canonical document that passed global validation. Each application entry
 contains the decision ID, candidate-set and selected-candidate IDs, canonical hash, validation
-status, application outcome (`applied` or `rejected_by_invariant`) and invariant finding codes.
-This keeps model consensus separate from the later document-wide publication decision.
+status, application outcome (`applied`, `not_published`, or `rejected_by_invariant`) and invariant
+finding codes. `not_published` means the recovered decision was valid but another decision kept the
+document in `review_required`; it must not be mislabeled as an invariant failure. This keeps model
+consensus separate from the later document-wide publication decision.
 
 `failure-report.json` continues to list terminal validation codes. Recovered decisions add
 `LLM_LOW_CONFIDENCE_RECOVERED` to their decision audit but not to failure codes, because recovery
@@ -210,11 +212,11 @@ Unit tests cover:
 
 Diagnostics tests prove raw prompts, raw responses, unmasked source text and page images are not
 written by default. They also prove `application-report.json` distinguishes an applied recovered
-decision from consensus that was later rejected by a canonical invariant. Integration tests prove
-a recovered spacing decision can produce a globally `verified` canonical document, while failed
-consensus remains non-publishable. The Issue #3 replay provider must exercise the recovery path
-with the observed `0.70` and `0.74` primary confidence pattern rather than returning only `0.99`
-happy-path responses.
+decision, a valid decision held back by unrelated review, and consensus that was later rejected by
+a canonical invariant. Integration tests prove a recovered spacing decision can produce a
+globally `verified` canonical document, while failed consensus remains non-publishable. The Issue
+#3 replay provider must exercise the recovery path with the observed `0.70` and `0.74` primary
+confidence pattern rather than returning only `0.99` happy-path responses.
 
 ## 11. Rollout and success criteria
 
