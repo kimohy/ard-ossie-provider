@@ -287,22 +287,15 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "EVIDENCE_REPLAY_FORBIDDEN_STRING",
     )
     _require("<pre" not in result.markdown, "EVIDENCE_REPLAY_RAW_HTML")
-    candidate_sets = {item.candidate_set_id: item for item in result.candidate_sets}
-    decisions = {item.candidate_set_id: item for item in result.decisions.decisions}
-    for candidate_set_id, expected in golden["recovered_candidates"].items():
-        decision = decisions[candidate_set_id]
-        selected = next(
-            candidate
-            for candidate in candidate_sets[candidate_set_id].candidates
-            if candidate.candidate_id == decision.selected_candidate_id
-        )
+    for region_id, expected_rows in golden["exact_tables"].items():
         _require(
-            decision.selected_candidate_id == expected["candidate_id"],
-            "EVIDENCE_REPLAY_RECOVERED_CANDIDATE",
+            _canonical_table_rows(result, region_id) == expected_rows,
+            "EVIDENCE_REPLAY_EXACT_TABLE",
         )
+        block = next(item for item in result.canonical.blocks if item.region_id == region_id)
         _require(
-            selected.rendered_text == expected["rendering"],
-            "EVIDENCE_REPLAY_RECOVERED_RENDERING",
+            block.text == "\n".join("\t".join(row) for row in expected_rows),
+            "EVIDENCE_REPLAY_EXACT_TABLE_TEXT",
         )
     _require(
         result.validation.canonical_hash == repeated.validation.canonical_hash,
@@ -320,8 +313,20 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         ),
         "recovery_model_calls": provider.recovery_calls,
         "cache_model_calls": repeated_provider.calls,
+        "exact_table_count": len(golden["exact_tables"]),
         "max_candidate_count": provider.max_candidate_count,
     }
+
+
+def _canonical_table_rows(
+    result: SemanticPipelineResult,
+    region_id: str,
+) -> list[list[str]]:
+    block = next(item for item in result.canonical.blocks if item.region_id == region_id)
+    rows = [["" for _ in range(block.column_count or 0)] for _ in range(block.row_count or 0)]
+    for cell in block.cells:
+        rows[cell.start_row][cell.start_column] = cell.text
+    return rows
 
 
 def _structure_block_payload(block: StructureBlock) -> dict[str, object]:

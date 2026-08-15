@@ -31,15 +31,25 @@
     "시뮬레이션 비용 합계",
     "유효성"
   ],
-  "recovered_candidates": {
-    "candidate_set_78620dc093a748fe": {
-      "candidate_id": "candidate_e6954a2fd1fdfe6f",
-      "rendering": "항목 내용\n도메인 Marketing Insight\n관련 키워드 가상 캠페인, 광고소재, 집행 신호, 성과 신호, 합성 데이터\n작성일 2026-08-11\n작성자 Synthetic Insights\n버전 v1.0"
-    },
-    "candidate_set_6d08c750276170e3": {
-      "candidate_id": "candidate_2eefa1840c448a35",
-      "rendering": "결합 기준\n개체 데이터 단위 id 당 1행 id\nCampaign campaigncampaign__id 당 1행 id\nCreative creativecampaign__id 당 1행 Delivery date id id, creativeid\ncampaign creativecampaignevent++_____id 당 1행 date id campaigncampaignOutcome event+___"
-    }
+  "exact_tables": {
+    "region_05d599dd01a206bb": [
+      ["용어", "정의", "동의어", "관련 테이블"],
+      ["캠페인 (Campaign)", "공통 목표와 기간을 갖는 가상 광고 기획 단위. campaign_id로 식별.", "Initiative", "marketing_campaign"],
+      ["광고 소재 (Creative)", "메시지와 형식을 가진 가상 광고 표현 단위. creative_id로 식별.", "Variant", "marketing_creative"],
+      ["목표 유형 (Objective Type)", "Awareness, Interest, Action으로 구성한 추상 목표 분류.", "Goal Group", "marketing_campaign"],
+      ["채널 그룹 (Channel Group)", "Search, Social, Video, Display로 구성한 추상 채널 그룹.", "Media Group", "marketing_campaign"],
+      ["가상 권역 (Market Zone)", "North, South, East, West의 비현실적 분석 구분.", "Zone", "marketing_campaign"],
+      ["소재 형식 (Format Type)", "Image, Short Video, Text Card의 가상 표현 형식.", "Creative Format", "marketing_creative"],
+      ["메시지 테마 (Message Theme)", "Discovery, Benefit, Reminder의 가상 메시지 방향.", "Theme", "marketing_creative"],
+      ["집행 (Delivery)", "일자·캠페인·소재 조합으로 집계한 가상 노출·반응·비용.", "Serving", "marketing_delivery"]
+    ],
+    "region_373d0a6138b7bdcb": [
+      ["개체", "데이터 단위", "결합 기준"],
+      ["Campaign", "campaign_id 당 1행", "campaign_id"],
+      ["Creative", "creative_id 당 1행", "campaign_id"],
+      ["Delivery", "event_date + campaign_id + creative_id 당 1행", "campaign_id, creative_id"],
+      ["Outcome", "event_date + campaign_id 당 1행", "campaign_id"]
+    ]
   },
   "forbidden_strings": [
     "Semantics 是州",
