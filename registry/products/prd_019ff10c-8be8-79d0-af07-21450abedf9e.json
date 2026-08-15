@@ -1,0 +1,78 @@
+{
+  "aliases": [],
+  "canonical_hash": "910d4a87ed6a6eb078f4286dc5e7c924bbf311d133bb11530b2f7d56ebb143d3",
+  "display_name": "Marketing Insight",
+  "metrics": [
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-7426-8aeb-418b176216c6",
+      "name": "Impressions",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-7513-adc6-0adc1b0d43a4",
+      "name": "Cost per Engagement",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-7657-888b-dabd7a9ddb2d",
+      "name": "Campaign Count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-768a-b340-5471926a5548",
+      "name": "Engagement Rate",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-7be0-b9fd-b1114c29bebc",
+      "name": "Spend Units",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-7e4c-a3cd-b42bb56a00c0",
+      "name": "Engagements",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-7e62-9b75-c85cfe800e65",
+      "name": "Creative Count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffdd-7ec9-acab-31c4240e3562",
+      "name": "Active Campaign Count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffde-7614-a432-c9f1fa53b26b",
+      "name": "Action Signals",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffde-7b55-979e-00063510f858",
+      "name": "Interest Signals",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00585-ffde-7c25-b8fd-60194c5ffcd1",
+      "name": "Modeled Value Units",
+      "status": "active"
+    }
+  ],
+  "product_id": "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+  "product_key": "500138301",
+  "relationships": [],
+  "status": "active",
+  "version": 1
+}
