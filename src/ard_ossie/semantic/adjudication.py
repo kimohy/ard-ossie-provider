@@ -95,6 +95,7 @@ class GeneratedSpacingSnapshot(ImmutableStrictModel):
     region_id: RegionId
     atom_ids: tuple[str, ...] = Field(min_length=1)
     boundaries: tuple[SpacingBoundary, ...]
+    mutable_boundary_indexes: tuple[int, ...] | None = None
     score: float = Field(ge=0, le=1)
     features: dict[str, float]
     rendered_text_hash: Sha256
@@ -215,21 +216,24 @@ class CandidateAdjudicator:
         proven_tables = tuple(
             candidate for candidate in candidates if is_invariant_proven_table(candidate)
         )
-        if len(proven_tables) > 1:
-            raise ValueError("ADJUDICATION_MULTIPLE_INVARIANT_PROOFS")
         if proven_tables:
-            proven = proven_tables[0]
-            return _record(
-                candidate_set,
-                request_hash=request_hash,
-                evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=proven.candidate_id,
-                outcome="selected",
-                source="deterministic",
-                confidence=1.0,
-                provider=provider_name,
-                model=model,
-            )
+            signatures = {_table_structure_signature(candidate) for candidate in proven_tables}
+            if len(signatures) == 1:
+                proven = max(
+                    proven_tables,
+                    key=lambda candidate: (candidate.score, candidate.candidate_id),
+                )
+                return _record(
+                    candidate_set,
+                    request_hash=request_hash,
+                    evidence_hash=resolved_evidence_hash,
+                    selected_candidate_id=proven.candidate_id,
+                    outcome="selected",
+                    source="deterministic",
+                    confidence=1.0,
+                    provider=provider_name,
+                    model=model,
+                )
 
         best = candidates[0]
         runner_score = candidates[1].score if len(candidates) > 1 else 0.0
@@ -1031,6 +1035,8 @@ def _trusted_decision_matches(
         and all(
             isinstance(candidate, SpacingCandidate)
             and candidate.character_sequence == generated_candidate.character_sequence
+            and candidate.mutable_boundary_indexes
+            == generated_candidate.mutable_boundary_indexes
             for candidate in candidate_set.candidates
         )
         and not spacing_defect_codes(generated_candidate)
@@ -1533,6 +1539,26 @@ def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _table_structure_signature(candidate: TableCandidate) -> str:
+    return canonical_hash(
+        {
+            "row_count": candidate.row_count,
+            "column_count": candidate.column_count,
+            "cells": [
+                {
+                    "start_row": cell.start_row,
+                    "end_row": cell.end_row,
+                    "start_column": cell.start_column,
+                    "end_column": cell.end_column,
+                    "atom_ids": cell.atom_ids,
+                    "column_header": cell.column_header,
+                }
+                for cell in candidate.cells
+            ],
+        }
+    )
+
+
 def diagnostic_decision_record(decision: DecisionRecord) -> DecisionRecord:
     generated = decision.generated_candidate
     if not isinstance(generated, SpacingCandidate):
@@ -1542,6 +1568,7 @@ def diagnostic_decision_record(decision: DecisionRecord) -> DecisionRecord:
         region_id=generated.region_id,
         atom_ids=generated.atom_ids,
         boundaries=generated.boundaries,
+        mutable_boundary_indexes=generated.mutable_boundary_indexes,
         score=generated.score,
         features=generated.features,
         rendered_text_hash=_text_hash(generated.rendered_text),
@@ -1588,6 +1615,7 @@ def _materialize_generated_candidate(
             ),
             score=generated.score,
             features=generated.features,
+            mutable_boundary_indexes=generated.mutable_boundary_indexes,
         )
     except ValueError:
         return None
@@ -1612,6 +1640,7 @@ def _generated_candidate_identity_payload(
         "region_id": generated.region_id,
         "atom_ids": generated.atom_ids,
         "boundaries": [item.model_dump(mode="json") for item in generated.boundaries],
+        "mutable_boundary_indexes": generated.mutable_boundary_indexes,
         "score": generated.score,
         "features": generated.features,
         "rendered_text_hash": rendered_text_hash,

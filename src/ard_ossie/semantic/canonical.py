@@ -592,9 +592,11 @@ def _canonical_cells(
             start_column=cell.start_column,
             end_column=cell.end_column,
             text=(
-                cell.rendered_text
+                _project_cell_spacing(cell.atom_ids, atom_catalog, spacing)
+                if spacing is not None
+                else cell.rendered_text
                 if cell.rendered_text is not None
-                else _project_cell_spacing(cell.atom_ids, atom_catalog, spacing)
+                else _project_cell_spacing(cell.atom_ids, atom_catalog, None)
             ),
             atom_ids=tuple(item for item in cell.atom_ids if not atom_catalog[item].text.isspace()),
             column_header=cell.column_header,

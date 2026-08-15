@@ -53,10 +53,63 @@ def _candidate_set(*candidates: SpacingCandidate) -> CandidateSet:
     )
 
 
+def _table_scoped_candidate(
+    *,
+    mutable_boundary_indexes: tuple[int, ...] = (2,),
+) -> SpacingCandidate:
+    return make_spacing_candidate(
+        region_id=REGION_ID,
+        rendered_text="AB\n가 나",
+        character_sequence="AB가나",
+        atom_ids=tuple(f"atom_{index + 1:016x}" for index in range(4)),
+        source_whitespace=((), (), ()),
+        score=0.70,
+        features={"table_cell_composite": 1.0},
+        mutable_boundary_indexes=mutable_boundary_indexes,
+    )
+
+
+def test_generated_table_spacing_changes_only_allowlisted_cell_boundaries() -> None:
+    anchor = _table_scoped_candidate()
+
+    generated = build_generated_candidate(anchor, "AB\n가나", confidence=0.92)
+
+    assert generated.rendered_text == "AB\n가나"
+    assert generated.mutable_boundary_indexes == (2,)
+    with pytest.raises(ValueError, match="SPACING_REPAIR_IMMUTABLE_BOUNDARY_MISMATCH"):
+        build_generated_candidate(anchor, "A B\n가나", confidence=0.92)
+    with pytest.raises(ValueError, match="SPACING_REPAIR_HARD_LINE_BOUNDARY_MISMATCH"):
+        build_generated_candidate(anchor, "AB 가나", confidence=0.92)
+
+
+@pytest.mark.parametrize("indexes", [(-1,), (3,), (2, 2), (2, 1), (1,)])
+def test_table_spacing_mutable_boundary_allowlist_is_bounded(
+    indexes: tuple[int, ...],
+) -> None:
+    with pytest.raises(ValueError, match="CANDIDATE_MUTABLE"):
+        _table_scoped_candidate(mutable_boundary_indexes=indexes)
+
+
 def test_identifier_gap_is_a_defect_even_when_characters_are_conserved() -> None:
     candidate = _spacing_candidate("marketing _campaign")
 
     assert spacing_defect_codes(candidate) == ("IDENTIFIER_WHITESPACE_SPLIT",)
+
+
+@pytest.mark.parametrize(
+    "rendered_text",
+    [
+        "marketing_campaign.ca mpaign_id",
+        "marketing_creative.crea tive_id",
+        "marketing_delivery.spe nd_units",
+    ],
+)
+def test_qualified_identifier_fragment_is_a_deterministic_defect(
+    rendered_text: str,
+) -> None:
+    candidate = _spacing_candidate(rendered_text)
+
+    assert "QUALIFIED_IDENTIFIER_WHITESPACE_SPLIT" in spacing_defect_codes(candidate)
 
 
 @pytest.mark.parametrize(
@@ -128,6 +181,12 @@ def test_protected_token_gap_is_a_deterministic_candidate_defect() -> None:
     candidate = _spacing_candidate("user@ example.com")
 
     assert "PROTECTED_TOKEN_WHITESPACE_SPLIT" in spacing_defect_codes(candidate)
+
+
+def test_hard_cell_boundary_before_punctuation_is_not_a_spacing_defect() -> None:
+    candidate = _spacing_candidate("SUM(value)\n%")
+
+    assert "PUNCTUATION_WHITESPACE_BEFORE" not in spacing_defect_codes(candidate)
 
 
 @pytest.mark.parametrize(
