@@ -285,6 +285,11 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         trusted_decisions=result.decisions.decisions,
     )
     headings = [block.text for block in result.canonical.blocks if block.kind == "heading"]
+    heading_levels = [
+        block.heading_level
+        for block in result.canonical.blocks
+        if block.kind == "heading"
+    ]
     tables = [
         [block.row_count, block.column_count]
         for block in result.canonical.blocks
@@ -307,6 +312,10 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
     _require(result.validation.degraded_block_count == 0, "EVIDENCE_REPLAY_DEGRADED")
     _require(result.evidence.source_hash == golden["source_hash"], "EVIDENCE_REPLAY_SOURCE")
     _require(headings == golden["headings"], "EVIDENCE_REPLAY_HEADINGS")
+    _require(
+        heading_levels == golden["heading_levels"],
+        "EVIDENCE_REPLAY_HEADING_LEVELS",
+    )
     _require(tables == golden["table_dimensions"], "EVIDENCE_REPLAY_TABLES")
     _require(
         all(value in plain_text for value in golden["required_phrases"]),
@@ -336,6 +345,7 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "status": result.validation.status,
         "canonical_hash": result.validation.canonical_hash,
         "heading_count": len(headings),
+        "heading_levels": heading_levels,
         "table_count": len(tables),
         "model_calls": provider.calls,
         "recovered_decision_count": sum(
