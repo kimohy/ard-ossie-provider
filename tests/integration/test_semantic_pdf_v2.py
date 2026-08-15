@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 import ard_ossie.semantic.parser as semantic_parser
 from ard_ossie.docling_parser import DoclingParser, ParsedDocument
 from ard_ossie.ingestion import SourceFile, SourceRole
+from ard_ossie.llm.contracts import LLMMetadata, LLMResult
 from ard_ossie.pipeline import _semantic_hard_findings
 from ard_ossie.semantic.evidence import (
     EvidenceAtom,
@@ -55,8 +57,9 @@ def _source(tmp_path: Path) -> SourceFile:
     )
 
 
-def _extracted() -> ExtractedEvidence:
-    text = "이 문장은 충분히 긴 일반 본문 문장으로 구성되어 있으며 안정적으로 처리된다."
+def _extracted(
+    text: str = "이 문장은 충분히 긴 일반 본문 문장으로 구성되어 있으며 안정적으로 처리된다.",
+) -> ExtractedEvidence:
     atoms = tuple(
         EvidenceAtom(
             atom_id=f"atom_{index + 1:016x}",
@@ -95,6 +98,48 @@ def _extracted() -> ExtractedEvidence:
     )
 
 
+class DeferredSpacingProvider:
+    def capabilities(self) -> dict[str, object]:
+        return {"provider": "openai_compatible", "model": "semantic-fixture"}
+
+    def generate_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[dict[str, str]],
+    ) -> LLMResult:
+        del schema
+        request = json.loads(messages[-1]["content"])
+        task = request.get("task")
+        if task == "generate_whitespace_repair":
+            structured = {
+                "rendered_text": "marketing_campaign 캠페인",
+                "confidence": 0.72,
+                "repair_reasons": ["identifier_integrity", "korean_morphology"],
+            }
+        elif task == "verify_whitespace_repair":
+            structured = {
+                "candidate_id": request["generated_candidate_id"],
+                "confidence": 0.74,
+                "validation_codes": ["LLM_CONFIDENCE_TOO_LOW"],
+            }
+        else:
+            candidates = request["candidates"]
+            selected = max(candidates, key=lambda candidate: candidate["score"])
+            structured = {
+                "candidate_id": selected["candidate_id"],
+                "confidence": 0.70 if "rendering" in selected else 0.99,
+            }
+        return LLMResult(
+            text=json.dumps(structured),
+            structured=structured,
+            metadata=LLMMetadata(
+                profile="semantic-fixture",
+                provider="openai_compatible",
+                model="semantic-fixture",
+                elapsed_ms=0,
+            ),
+        )
 @pytest.mark.parametrize(
     ("mode", "expected_markdown"),
     [
@@ -297,3 +342,38 @@ def test_review_required_candidate_report_is_rejected_by_hard_quality_gate(
 
     assert result.validation.status == "review_required"
     assert [item.code for item in findings] == ["SEMANTIC_CANDIDATE_REVIEW_REQUIRED"]
+
+
+def test_deferred_spacing_review_keeps_candidate_markdown_publishable(
+    tmp_path: Path,
+) -> None:
+    result = parse_semantic_pdf_v2(
+        _source(tmp_path),
+        hints=StructureDocument(blocks=()),
+        mode="candidate",
+        extracted_evidence=_extracted("marketing _campaign 캠페인"),
+        spacing_scorer=AmbiguousSpacingScorer(),
+        provider=DeferredSpacingProvider(),
+    )
+
+    deferred = [
+        decision
+        for decision in result.decisions.decisions
+        if decision.outcome == "deferred_review"
+    ]
+    assert result.validation.status == "review_pending"
+    assert result.validation.publishable is True
+    assert "marketing_campaign" in result.canonical.blocks[0].text
+    assert result.markdown
+    assert len(deferred) == 1
+    assert deferred[0].validation_codes == ("LLM_SPACING_REPAIR_DEFERRED",)
+    fidelity = canonical_fidelity_report(result.evidence, result.canonical, result.validation)
+    parsed = ParsedDocument(
+        role=SourceRole.SEMANTIC_DOCUMENT,
+        source_hash=SOURCE_HASH,
+        markdown=result.markdown,
+        semantic_fidelity=fidelity,
+        semantic_validation=result.validation,
+    )
+    assert fidelity.status == "WARN"
+    assert _semantic_hard_findings(parsed) == []

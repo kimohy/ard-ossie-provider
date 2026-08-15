@@ -68,10 +68,32 @@ def _recovered_decision() -> DecisionRecord:
     )
 
 
+def _deferred_decision() -> DecisionRecord:
+    return DecisionRecord(
+        decision_id="decision_0000000000000002",
+        request_hash="6" * 64,
+        source_hash=SOURCE_HASH,
+        evidence_hash="2" * 64,
+        candidate_set_id="candidate_set_0000000000000001",
+        region_id="region_0000000000000001",
+        decision_type="spacing",
+        selected_candidate_id="candidate_0000000000000002",
+        outcome="deferred_review",
+        source="fallback",
+        confidence=0.45,
+        provider="test",
+        model="test",
+        validation_codes=("LLM_SPACING_REPAIR_DEFERRED",),
+        recovery_status="deferred_review",
+    )
+
+
 def _diagnostics(
     secret_text: str = "민감한 원문 데이터 시맨틱 모델",
     *,
-    publication_status: Literal["verified", "review_required", "failed"] = "failed",
+    publication_status: Literal[
+        "verified", "review_pending", "review_required", "failed"
+    ] = "failed",
     decisions: tuple[DecisionRecord, ...] = (),
 ) -> SemanticDiagnostics:
     findings = (
@@ -105,7 +127,7 @@ def _diagnostics(
         decisions=DecisionReport(source_hash=SOURCE_HASH, decisions=decisions),
         validation={
             "status": publication_status,
-            "publishable": publication_status == "verified",
+            "publishable": publication_status in {"verified", "review_pending"},
             "source_hash": SOURCE_HASH,
             "canonical_hash": "5" * 64,
             "findings": findings,
@@ -163,7 +185,7 @@ def test_application_report_records_recovered_decision_as_applied(tmp_path: Path
             "canonical_hash": "5" * 64,
             "decision_id": "decision_0000000000000001",
             "invariant_codes": [],
-            "outcome": "applied",
+            "outcome": "applied_existing_candidate",
             "selected_candidate_id": "candidate_0000000000000001",
             "validation_status": "verified",
         }
@@ -210,6 +232,41 @@ def test_application_report_contains_no_raw_prompt_or_response(tmp_path: Path) -
     assert "민감한 원문 데이터 시맨틱 모델" not in payload
     assert '"prompt"' not in payload
     assert '"response"' not in payload
+
+
+def test_review_pending_writes_durable_bounded_review_debt(tmp_path: Path) -> None:
+    write_semantic_diagnostics(
+        tmp_path,
+        _diagnostics(
+            publication_status="review_pending",
+            decisions=(_deferred_decision(),),
+        ),
+    )
+
+    review = json.loads((tmp_path / "semantic-review.json").read_text())
+    application = json.loads((tmp_path / "application-report.json").read_text())
+
+    assert review["schema_version"] == "semantic-review-v1"
+    assert review["entries"] == [
+        {
+            "candidate_set_id": "candidate_set_0000000000000001",
+            "confidence": 0.45,
+            "decision_id": "decision_0000000000000002",
+            "fallback_candidate_id": "candidate_0000000000000002",
+            "region_id": "region_0000000000000001",
+            "replay_identity": {
+                "evidence_hash": "2" * 64,
+                "model": "test",
+                "provider": "test",
+                "request_hash": "6" * 64,
+            },
+            "validation_codes": ["LLM_SPACING_REPAIR_DEFERRED"],
+        }
+    ]
+    assert application["applications"][0]["outcome"] == (
+        "applied_fallback_pending_review"
+    )
+    assert "민감한 원문" not in (tmp_path / "semantic-review.json").read_text()
 
 
 def test_masked_preview_is_bounded_and_short_values_are_disabled() -> None:

@@ -151,7 +151,7 @@ def replace_quality_sibling(product_root: Path, name: str, value: object) -> Non
 def add_candidate_diagnostics(product_root: Path, *, status: str) -> None:
     validation = {
         "status": status,
-        "publishable": status == "verified",
+        "publishable": status in {"verified", "review_pending"},
         "source_hash": "a" * 64,
         "canonical_hash": "b" * 64,
         "findings": [],
@@ -204,6 +204,17 @@ def test_candidate_release_requires_verified_semantic_validation(tmp_path: Path)
     add_candidate_diagnostics(product_root, status="review_required")
 
     with pytest.raises(ReleaseBlocked, match="SEMANTIC_VALIDATION_NOT_VERIFIED"):
+        build_release_bundle(product_root, tmp_path / "candidate.zip")
+
+
+def test_review_pending_candidate_remains_blocked_from_release(tmp_path: Path) -> None:
+    product_root = release_product_root(tmp_path)
+    add_candidate_diagnostics(product_root, status="review_pending")
+
+    with pytest.raises(
+        ReleaseBlocked,
+        match="SEMANTIC_VALIDATION_NOT_VERIFIED: review_pending",
+    ):
         build_release_bundle(product_root, tmp_path / "candidate.zip")
 
 

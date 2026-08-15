@@ -239,7 +239,9 @@ def canonical_fidelity_report(
     region_atoms = {region.region_id: region.atom_ids for region in evidence.regions}
     atom_catalog = {atom.atom_id: atom for atom in evidence.atoms}
     for order, decision in enumerate(
-        item for item in document.decisions if item.outcome == "review_required"
+        item
+        for item in document.decisions
+        if item.outcome in {"review_required", "deferred_review"}
     ):
         atom_ids = region_atoms.get(decision.region_id, ())
         if not atom_ids:
@@ -277,9 +279,10 @@ def canonical_fidelity_report(
     )
     if validation.status is SemanticPipelineStatus.FAILED:
         status = "FAIL"
-    elif validation.status is SemanticPipelineStatus.REVIEW_REQUIRED or (
-        extraction_mode is ExtractionMode.OCR
-    ):
+    elif validation.status in {
+        SemanticPipelineStatus.REVIEW_REQUIRED,
+        SemanticPipelineStatus.REVIEW_PENDING,
+    } or extraction_mode is ExtractionMode.OCR:
         status = "WARN"
     else:
         status = "PASS"

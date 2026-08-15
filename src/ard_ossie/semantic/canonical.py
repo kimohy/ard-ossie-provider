@@ -39,6 +39,7 @@ FindingCode = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]{0,127}$
 
 class SemanticPipelineStatus(StrEnum):
     VERIFIED = "verified"
+    REVIEW_PENDING = "review_pending"
     REVIEW_REQUIRED = "review_required"
     FAILED = "failed"
 
@@ -463,6 +464,9 @@ def validate_canonical(
         )
 
     review_decisions = [item for item in document.decisions if item.outcome == "review_required"]
+    deferred_decisions = [
+        item for item in document.decisions if item.outcome == "deferred_review"
+    ]
     from ard_ossie.semantic.render import render_canonical_markdown
 
     rendered = render_canonical_markdown(document)
@@ -477,6 +481,8 @@ def validate_canonical(
         if failed
         else SemanticPipelineStatus.REVIEW_REQUIRED
         if review_decisions
+        else SemanticPipelineStatus.REVIEW_PENDING
+        if deferred_decisions
         else SemanticPipelineStatus.VERIFIED
     )
     preserved = len(set(source_non_whitespace) & set(all_references))
@@ -484,7 +490,8 @@ def validate_canonical(
     document_hash = canonical_hash(_canonical_content_payload(document))
     return SemanticValidationReport(
         status=status,
-        publishable=status is SemanticPipelineStatus.VERIFIED,
+        publishable=status
+        in {SemanticPipelineStatus.VERIFIED, SemanticPipelineStatus.REVIEW_PENDING},
         source_hash=evidence.source_hash,
         canonical_hash=document_hash,
         findings=findings,
@@ -492,7 +499,11 @@ def validate_canonical(
         missing_atom_count=len(missing_ids),
         duplicate_atom_count=duplicate_count,
         degraded_block_count=len(
-            {decision.region_id for decision in review_decisions if decision.region_id}
+            {
+                decision.region_id
+                for decision in (*review_decisions, *deferred_decisions)
+                if decision.region_id
+            }
         ),
         model_call_count=sum(_current_model_call_count(item) for item in document.decisions),
     )
@@ -543,6 +554,14 @@ def _selected_candidate(
     decisions: dict[str, DecisionRecord],
 ) -> Candidate:
     decision = decisions.get(candidate_set.candidate_set_id)
+    if decision is not None and decision.generated_candidate is not None:
+        generated = decision.generated_candidate
+        if (
+            generated.candidate_id == decision.selected_candidate_id
+            and generated.region_id == candidate_set.region_id
+            and candidate_set.decision_type == "spacing"
+        ):
+            return generated
     if decision is not None and decision.selected_candidate_id is not None:
         selected = next(
             (

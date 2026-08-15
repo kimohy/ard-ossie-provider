@@ -135,8 +135,8 @@ def fallback_spacing_candidate(candidate_set: CandidateSet) -> SpacingCandidate:
         key=lambda candidate: (
             not spacing_defect_codes(candidate)
             and "source_spacing" in candidate.features,
-            "source_spacing" in candidate.features,
             not spacing_defect_codes(candidate),
+            "source_spacing" in candidate.features,
             candidate.score,
             candidate.candidate_id,
         ),

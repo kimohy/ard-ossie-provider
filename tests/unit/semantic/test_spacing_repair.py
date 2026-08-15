@@ -84,3 +84,16 @@ def test_fallback_prefers_valid_source_spacing() -> None:
 
     assert fallback.candidate_id == source.candidate_id
     assert fallback.features["source_spacing"] == 0.45
+
+
+def test_fallback_rejects_defective_source_when_a_valid_candidate_exists() -> None:
+    source = _spacing_candidate(
+        "marketing _campaign",
+        feature="source_spacing",
+        score=0.45,
+    )
+    dense = _spacing_candidate("marketing_campaign", feature="dense", score=0.20)
+
+    fallback = fallback_spacing_candidate(_candidate_set(source, dense))
+
+    assert fallback.candidate_id == dense.candidate_id
