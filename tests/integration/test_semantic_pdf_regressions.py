@@ -39,13 +39,24 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
     assert all(phrase in plain_text for phrase in golden["required_phrases"])
     assert all(value not in result.markdown for value in golden["forbidden_strings"])
     assert "<pre" not in result.markdown
+    table_decisions = [
+        decision for decision in result.decisions.decisions if decision.decision_type == "table"
+    ]
+    assert table_decisions
+    assert all(decision.source == "deterministic" for decision in table_decisions)
     table_region_ids = {
         block.region_id for block in result.canonical.blocks if block.kind == "table"
     }
-    assert not any(
-        candidate_set.decision_type == "spacing"
-        and candidate_set.region_id in table_region_ids
+    table_spacing_sets = [
+        candidate_set
         for candidate_set in result.candidate_sets
+        if candidate_set.decision_type == "spacing"
+        and candidate_set.region_id in table_region_ids
+    ]
+    assert table_spacing_sets
+    assert all(
+        all("table_cell_composite" in candidate.features for candidate in candidate_set.candidates)
+        for candidate_set in table_spacing_sets
     )
     for region_id, expected_rows in golden["exact_tables"].items():
         assert _table_rows(result, region_id) == expected_rows

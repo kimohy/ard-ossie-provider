@@ -18,6 +18,7 @@ from ard_ossie.semantic.candidates import (
     BlockCandidate,
     CandidateSet,
     RecognitionCandidate,
+    TableCandidate,
 )
 from ard_ossie.semantic.canonical import (
     CanonicalSemanticDocument,
@@ -48,6 +49,7 @@ from ard_ossie.semantic.spacing import (
     KiwiSpacingScorer,
     KoreanSpacingScorer,
     build_spacing_candidate_set,
+    build_table_spacing_candidate_set,
 )
 from ard_ossie.semantic.structure import StructureDocument
 from ard_ossie.semantic.structure_candidates import (
@@ -157,8 +159,29 @@ def parse_semantic_pdf_v2(
                 )
             )
 
+    table_decisions = tuple(
+        adjudicator.decide(candidate_set, evidence_hash=evidence_hash)
+        for candidate_set in table_sets
+    )
+    selected_tables = tuple(
+        selected
+        for candidate_set, decision in zip(table_sets, table_decisions, strict=True)
+        if (selected := _selected_table_candidate(candidate_set, decision)) is not None
+    )
+    table_spacing_sets = tuple(
+        candidate_set
+        for table in selected_tables
+        if (
+            candidate_set := build_table_spacing_candidate_set(
+                table=table,
+                evidence=evidence,
+                scorer=scorer,
+            )
+        )
+        is not None
+    )
     table_regions = {candidate_set.region_id for candidate_set in table_sets}
-    spacing_sets = tuple(
+    region_spacing_sets = tuple(
         build_spacing_candidate_set(
             region=region,
             evidence=evidence,
@@ -170,7 +193,21 @@ def parse_semantic_pdf_v2(
         and any(not _atom_text(evidence, atom_id).isspace() for atom_id in region.atom_ids)
         and not region.repeated_edge
     )
+    spacing_sets = (*region_spacing_sets, *table_spacing_sets)
 
+    post_table_sets = (
+        *spacing_sets,
+        *block_sets,
+        reading_set,
+        *continuation_sets,
+    )
+    post_table_decisions = tuple(
+        adjudicator.decide(
+            candidate_set,
+            evidence_hash=evidence_hash,
+        )
+        for candidate_set in post_table_sets
+    )
     remaining_sets = (
         *spacing_sets,
         *block_sets,
@@ -178,13 +215,7 @@ def parse_semantic_pdf_v2(
         reading_set,
         *continuation_sets,
     )
-    remaining_decisions = tuple(
-        adjudicator.decide(
-            candidate_set,
-            evidence_hash=canonical_hash(evidence.model_dump(mode="json")),
-        )
-        for candidate_set in remaining_sets
-    )
+    remaining_decisions = (*post_table_decisions, *table_decisions)
     candidate_sets = (*recognition_sets, *remaining_sets)
     decisions = (*recognition_decisions, *remaining_decisions)
     canonical, validation = assemble_canonical(
@@ -213,6 +244,23 @@ def parse_semantic_pdf_v2(
             legacy_hash=hashlib.sha256(legacy_markdown.encode()).hexdigest(),
             canonical_hash=hashlib.sha256(canonical_markdown.encode()).hexdigest(),
         ),
+    )
+
+
+def _selected_table_candidate(
+    candidate_set: CandidateSet,
+    decision: DecisionRecord,
+) -> TableCandidate | None:
+    if decision.selected_candidate_id is None:
+        return None
+    return next(
+        (
+            candidate
+            for candidate in candidate_set.candidates
+            if isinstance(candidate, TableCandidate)
+            and candidate.candidate_id == decision.selected_candidate_id
+        ),
+        None,
     )
 
 

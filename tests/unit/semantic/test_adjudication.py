@@ -25,6 +25,8 @@ from ard_ossie.semantic.adjudication import (
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
     CandidateSet,
+    TableCandidate,
+    TableCellCandidate,
     make_candidate_id,
     make_candidate_set_id,
     make_spacing_candidate,
@@ -274,6 +276,59 @@ def test_clear_score_margin_selects_without_provider_call() -> None:
     assert decision.outcome == "selected"
     assert decision.selected_candidate_id == candidate_set.candidates[0].candidate_id
     assert provider.calls == []
+
+
+def test_table_structure_proof_does_not_require_spacing_integrity() -> None:
+    region_id = "region_0000000000000001"
+    atom_ids = ("atom_0000000000000001",)
+    cell = TableCellCandidate(
+        cell_id="cell_0000000000000001",
+        start_row=0,
+        end_row=1,
+        start_column=0,
+        end_column=1,
+        atom_ids=atom_ids,
+        rendered_text="참 조",
+    )
+    proven = TableCandidate(
+        candidate_id=make_candidate_id("table", region_id, "proven-unresolved-spacing"),
+        region_id=region_id,
+        row_count=1,
+        column_count=1,
+        cells=(cell,),
+        atom_ids=atom_ids,
+        score=0.70,
+        features={
+            "atom_bbox_cell_agreement": 1.0,
+            "cell_character_multiset": 1.0,
+            "structure_hint_text": 1.0,
+            "cell_spacing_integrity": 0.0,
+        },
+    )
+    alternate = proven.model_copy(
+        update={
+            "candidate_id": make_candidate_id("table", region_id, "unproven"),
+            "score": 0.69,
+            "features": {"geometry_grid": 0.69},
+        }
+    )
+    candidate_set = CandidateSet(
+        candidate_set_id=make_candidate_set_id(
+            SOURCE_HASH,
+            region_id,
+            (proven.candidate_id, alternate.candidate_id),
+        ),
+        source_hash=SOURCE_HASH,
+        region_id=region_id,
+        decision_type="table",
+        candidates=(proven, alternate),
+    )
+
+    decision = CandidateAdjudicator(RecordingProvider()).decide(candidate_set)
+
+    assert decision.source == "deterministic"
+    assert decision.outcome == "selected"
+    assert decision.selected_candidate_id == proven.candidate_id
 
 
 def test_ambiguous_request_contains_bounded_candidate_text_but_no_raw_catalog() -> None:

@@ -113,21 +113,22 @@ def spacing_verification_schema(candidate_ids: tuple[CandidateId, ...]) -> dict[
 
 def spacing_defect_codes(candidate: SpacingCandidate) -> tuple[ValidationCode, ...]:
     codes: list[str] = []
+    lines = candidate.rendered_text.splitlines() or [candidate.rendered_text]
     if any(
         character.isspace() and character not in {" ", "\n"}
         for character in candidate.rendered_text
     ):
         codes.append("CONTROL_WHITESPACE_SEPARATOR")
-    identifier_split = _IDENTIFIER_WHITESPACE.search(candidate.rendered_text) is not None
+    identifier_split = any(_IDENTIFIER_WHITESPACE.search(line) is not None for line in lines)
     if identifier_split:
         codes.append("IDENTIFIER_WHITESPACE_SPLIT")
     elif _has_qualified_identifier_split(candidate.rendered_text):
         codes.append("QUALIFIED_IDENTIFIER_WHITESPACE_SPLIT")
-    elif _has_protected_token_split(candidate.rendered_text):
+    elif any(_has_protected_token_split(line) for line in lines):
         codes.append("PROTECTED_TOKEN_WHITESPACE_SPLIT")
-    if _SPACE_BEFORE_PUNCTUATION.search(candidate.rendered_text):
+    if any(_SPACE_BEFORE_PUNCTUATION.search(line) is not None for line in lines):
         codes.append("PUNCTUATION_WHITESPACE_BEFORE")
-    if _SPACE_AFTER_OPEN.search(candidate.rendered_text):
+    if any(_SPACE_AFTER_OPEN.search(line) is not None for line in lines):
         codes.append("PUNCTUATION_WHITESPACE_AFTER_OPEN")
     return tuple(codes)
 

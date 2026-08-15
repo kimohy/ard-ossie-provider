@@ -216,7 +216,6 @@ INVARIANT_PROVEN_TABLE_FEATURES = (
     "atom_bbox_cell_agreement",
     "cell_character_multiset",
     "structure_hint_text",
-    "cell_spacing_integrity",
 )
 
 

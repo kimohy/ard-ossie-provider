@@ -183,6 +183,12 @@ def test_protected_token_gap_is_a_deterministic_candidate_defect() -> None:
     assert "PROTECTED_TOKEN_WHITESPACE_SPLIT" in spacing_defect_codes(candidate)
 
 
+def test_hard_cell_boundary_before_punctuation_is_not_a_spacing_defect() -> None:
+    candidate = _spacing_candidate("SUM(value)\n%")
+
+    assert "PUNCTUATION_WHITESPACE_BEFORE" not in spacing_defect_codes(candidate)
+
+
 @pytest.mark.parametrize(
     "rendered_text",
     [

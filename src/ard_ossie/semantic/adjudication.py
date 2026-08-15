@@ -216,21 +216,24 @@ class CandidateAdjudicator:
         proven_tables = tuple(
             candidate for candidate in candidates if is_invariant_proven_table(candidate)
         )
-        if len(proven_tables) > 1:
-            raise ValueError("ADJUDICATION_MULTIPLE_INVARIANT_PROOFS")
         if proven_tables:
-            proven = proven_tables[0]
-            return _record(
-                candidate_set,
-                request_hash=request_hash,
-                evidence_hash=resolved_evidence_hash,
-                selected_candidate_id=proven.candidate_id,
-                outcome="selected",
-                source="deterministic",
-                confidence=1.0,
-                provider=provider_name,
-                model=model,
-            )
+            signatures = {_table_structure_signature(candidate) for candidate in proven_tables}
+            if len(signatures) == 1:
+                proven = max(
+                    proven_tables,
+                    key=lambda candidate: (candidate.score, candidate.candidate_id),
+                )
+                return _record(
+                    candidate_set,
+                    request_hash=request_hash,
+                    evidence_hash=resolved_evidence_hash,
+                    selected_candidate_id=proven.candidate_id,
+                    outcome="selected",
+                    source="deterministic",
+                    confidence=1.0,
+                    provider=provider_name,
+                    model=model,
+                )
 
         best = candidates[0]
         runner_score = candidates[1].score if len(candidates) > 1 else 0.0
@@ -1534,6 +1537,26 @@ def _deferred_candidate_record(
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _table_structure_signature(candidate: TableCandidate) -> str:
+    return canonical_hash(
+        {
+            "row_count": candidate.row_count,
+            "column_count": candidate.column_count,
+            "cells": [
+                {
+                    "start_row": cell.start_row,
+                    "end_row": cell.end_row,
+                    "start_column": cell.start_column,
+                    "end_column": cell.end_column,
+                    "atom_ids": cell.atom_ids,
+                    "column_header": cell.column_header,
+                }
+                for cell in candidate.cells
+            ],
+        }
+    )
 
 
 def diagnostic_decision_record(decision: DecisionRecord) -> DecisionRecord:
