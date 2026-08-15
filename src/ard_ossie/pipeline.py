@@ -172,6 +172,7 @@ class SuggestionBatch(StrictModel):
 
 class _PreparedMetrics(StrictModel):
     suggestions: list[MetricSuggestion]
+    audit_suggestions: list[MetricSuggestion]
     findings: list[QualityFinding]
     excluded_names: list[str]
 
@@ -246,6 +247,7 @@ def process_product(
     suggestion_batch = SuggestionBatch(suggestions=[], metrics=[], product_facts=[])
     prepared_metrics = _PreparedMetrics(
         suggestions=[],
+        audit_suggestions=[],
         findings=[],
         excluded_names=[],
     )
@@ -268,6 +270,9 @@ def process_product(
             prepared_metrics = _prepare_metrics(
                 suggestion_batch.metrics,
                 table_drafts,
+            )
+            suggestion_batch = suggestion_batch.model_copy(
+                update={"metrics": prepared_metrics.audit_suggestions}
             )
             _validate_metric_name_collisions(
                 prepared_metrics.suggestions,
@@ -1667,9 +1672,10 @@ def _prepare_metrics(
 ) -> _PreparedMetrics:
     catalog = _metric_dataset_catalog(drafts)
     prepared: list[MetricSuggestion] = []
+    audit_suggestions: list[MetricSuggestion] = []
     findings: list[QualityFinding] = []
     excluded_names: list[str] = []
-    for suggestion in suggestions:
+    for index, suggestion in enumerate(suggestions):
         expression = suggestion.expression.strip()
         if not suggestion.name.strip() or not expression:
             raise ValueError("LLM_METRIC_NAME_OR_EXPRESSION_EMPTY")
@@ -1680,7 +1686,19 @@ def _prepare_metrics(
             raise ValueError("LLM_METRIC_DATASET_DUPLICATE")
         if any(name not in catalog for name in dataset_keys):
             raise ValueError("LLM_METRIC_DATASET_UNKNOWN")
-        normalized = _parse_metric_scalar(expression)
+        try:
+            normalized = _parse_metric_scalar(expression)
+        except ValueError as error:
+            if str(error) != "LLM_METRIC_SQL_UNSAFE":
+                raise
+            findings.append(
+                QualityFinding(
+                    code="LLM_METRIC_SQL_UNSAFE",
+                    path=f"metrics.provider_suggestion[{index}]",
+                    message="Unsafe optional LLM metric suggestion was excluded",
+                )
+            )
+            continue
         if any(column.db or column.catalog for column in normalized.find_all(exp.Column)):
             raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
         if len(dataset_keys) > 1:
@@ -1694,6 +1712,7 @@ def _prepare_metrics(
                         raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
                 elif not any(column_key in catalog[name][1] for name in dataset_keys):
                     raise ValueError("LLM_METRIC_REFERENCE_UNKNOWN")
+            audit_suggestions.append(suggestion)
             findings.append(
                 QualityFinding(
                     code="METRIC_MULTI_DATASET_UNSUPPORTED",
@@ -1731,6 +1750,7 @@ def _prepare_metrics(
                     source=source_table,
                 ),
             )
+        audit_suggestions.append(suggestion)
         dataset_draft = next(
             draft for draft in drafts if draft.locator.table_name.casefold() == dataset_key
         )
@@ -1749,6 +1769,7 @@ def _prepare_metrics(
     )
     return _PreparedMetrics(
         suggestions=prepared,
+        audit_suggestions=audit_suggestions,
         findings=findings,
         excluded_names=excluded_names,
     )
