@@ -96,8 +96,8 @@ This catches a full-pipeline regression even when heading text and Markdown rend
 Run both behavioral tests:
 
 ```bash
-pytest -q tests/unit/semantic/test_structure_candidates.py::test_numbered_heading_level_follows_hierarchy_depth
-pytest -q tests/integration/test_semantic_pdf_regressions.py::test_issue_3_replay_is_verified_without_korean_corruption
+.venv/bin/pytest -q tests/unit/semantic/test_structure_candidates.py::test_numbered_heading_level_follows_hierarchy_depth
+.venv/bin/pytest -q tests/integration/test_semantic_pdf_regressions.py::test_issue_3_replay_is_verified_without_korean_corruption
 ```
 
 Expected: FAIL because `1. 개요` receives level 1, `6. 지표 정의서` receives level 6, `3.1 세부 정의` receives level 2, and Issue #3 has actual levels `[1, 1, 1, 2, 3, 3, 4, 5, 6, 6, 6, 6]`.
@@ -119,8 +119,8 @@ def _heading_level(number: str | None) -> int:
 Run:
 
 ```bash
-pytest -q tests/unit/semantic/test_structure_candidates.py
-pytest -q tests/integration/test_semantic_pdf_regressions.py::test_issue_3_replay_is_verified_without_korean_corruption
+.venv/bin/pytest -q tests/unit/semantic/test_structure_candidates.py
+.venv/bin/pytest -q tests/integration/test_semantic_pdf_regressions.py::test_issue_3_replay_is_verified_without_korean_corruption
 ```
 
 Expected: all tests pass with no warnings.
@@ -167,8 +167,8 @@ Include `heading_levels` in the verifier's returned summary so action diagnostic
 Run:
 
 ```bash
-pytest -q tests/integration/test_semantic_pdf_regressions.py tests/unit/semantic/test_structure_candidates.py
-python scripts/verify_issue_3_semantic.py \
+.venv/bin/pytest -q tests/integration/test_semantic_pdf_regressions.py tests/unit/semantic/test_structure_candidates.py
+.venv/bin/python scripts/verify_issue_3_semantic.py \
   --evidence tests/fixtures/semantic/issue-3-evidence.json \
   --golden tests/fixtures/semantic/issue-3-golden.json
 ```
@@ -180,9 +180,8 @@ Expected: pytest passes; the verifier returns `"status": "verified"` with twelve
 Run the repository's configured lint/type gates followed by the full pytest suite:
 
 ```bash
-ruff check .
-ruff format --check .
-pytest -q
+.venv/bin/ruff check .
+.venv/bin/pytest -q
 ```
 
 Expected: all checks pass with no new warnings or failures.

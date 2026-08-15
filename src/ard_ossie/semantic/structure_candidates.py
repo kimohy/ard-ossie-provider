@@ -568,10 +568,8 @@ def _block_candidates(
 def _heading_level(number: str | None) -> int:
     if number is None:
         return 1
-    segments = number.split(".")
-    if len(segments) > 1:
-        return min(6, len(segments))
-    return min(6, max(1, int(segments[0])))
+    segment_count = sum(bool(segment) for segment in number.split("."))
+    return min(6, segment_count + 1)
 
 
 def _matching_table_hint(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from ard_ossie.semantic.adjudication import CandidateAdjudicator
 from ard_ossie.semantic.candidates import (
     BlockCandidate,
@@ -258,19 +260,36 @@ def _spanning_table_fixture() -> tuple[
     return evidence, layout, hints
 
 
-def test_heading_candidate_uses_numbering_and_geometry_without_authoring_text() -> None:
-    evidence, layout = _embedded_fixture(((1, "2. 범용 설계", BOX, None),))
+@pytest.mark.parametrize(
+    ("text", "expected_level"),
+    (
+        ("1. 개요", 2),
+        ("2. 테이블 리스트", 2),
+        ("6. 지표 정의서", 2),
+        ("8. 품질 기준", 2),
+        ("3.1 세부 정의", 3),
+        ("3.1.2 계산 규칙", 4),
+        ("1.2.3.4.5.6 깊은 절", 6),
+        ("3. 핵심 업무 용어 (계속)", 2),
+    ),
+)
+def test_numbered_heading_level_follows_hierarchy_depth(
+    text: str,
+    expected_level: int,
+) -> None:
+    evidence, layout = _embedded_fixture(((1, text, BOX, None),))
 
     candidate_set = build_block_candidate_sets(
         evidence=evidence,
         layout=layout,
         hints=StructureDocument(blocks=()),
     )[0]
-    heading = max(candidate_set.candidates, key=lambda item: item.score)
+    heading = next(
+        item for item in candidate_set.candidates if item.block_kind == "heading"
+    )
 
     assert isinstance(heading, BlockCandidate)
-    assert heading.block_kind == "heading"
-    assert heading.heading_level == 2
+    assert heading.heading_level == expected_level
     assert heading.atom_ids == layout.regions[0].atom_ids
 
 
