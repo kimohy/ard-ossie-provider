@@ -953,25 +953,76 @@ def test_pipeline_qualifies_single_dataset_metric_and_excludes_cross_dataset_met
     ]
 
 
-def test_pipeline_rejects_unsafe_metric_before_confidence_filter_or_promotion(
+def test_pipeline_excludes_unsafe_optional_metric_and_promotes_safe_artifacts(
     tmp_path: Path,
 ) -> None:
     product = create_product_fixture(tmp_path)
     configure_metric_safety_fixture(product)
     registry = tmp_path / "registry"
 
-    with pytest.raises(ProviderExecutionError) as captured:
-        process_product(
-            product,
-            registry_root=registry,
-            provider=UnsafeMetricProvider(),
-        )
+    result = process_product(
+        product,
+        registry_root=registry,
+        provider=UnsafeMetricProvider(),
+    )
 
-    assert captured.value.code == "LLM_METRIC_SQL_UNSAFE"
-    assert captured.value.kind is ProviderFailureKind.OUTPUT
-    assert "DELETE" not in str(captured.value)
-    assert not (product / "generated").exists()
-    assert not registry.exists()
+    assert result.quality_report.status == "WARN"
+    assert {
+        (finding.code, finding.path)
+        for finding in result.quality_report.warnings
+        if finding.code
+        in {"LLM_METRIC_SQL_UNSAFE", "METRIC_MULTI_DATASET_UNSUPPORTED"}
+    } == {
+        ("LLM_METRIC_SQL_UNSAFE", "metrics.provider_suggestion[0]"),
+        ("METRIC_MULTI_DATASET_UNSUPPORTED", "metrics.Modeled Efficiency"),
+    }
+    assert (product / "generated" / "ossie-model.json").is_file()
+    assert registry.is_dir()
+    audit = json.loads(
+        (product / "quality" / "llm-suggestions.json").read_text(encoding="utf-8")
+    )
+    assert [metric["name"] for metric in audit["metrics"]] == ["Modeled Efficiency"]
+    assert "DELETE" not in json.dumps(audit)
+
+
+def test_reprocessing_ignores_unsafe_metric_without_retiring_existing_record(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    configure_metric_safety_fixture(product)
+    registry = tmp_path / "registry"
+    process_product(
+        product,
+        registry_root=registry,
+        provider=DatasetSafetyProvider(),
+    )
+    record_path = registry / "products" / f"{PRODUCT_ID}.json"
+    initial_record = json.loads(record_path.read_text(encoding="utf-8"))
+    initial_metric = initial_record["metrics"][0]
+
+    config_path = product / "product.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["operation"] = "update"
+    config["base_version"] = 1
+    config["version"] = 2
+    config["description"] = "Updated campaign and sales performance product."
+    config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = process_product(
+        product,
+        registry_root=registry,
+        provider=UnsafeMetricProvider(),
+    )
+
+    updated_record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert updated_record["metrics"] == [initial_metric]
+    assert any(
+        finding.code == "LLM_METRIC_SQL_UNSAFE"
+        for finding in result.quality_report.warnings
+    )
 
 
 def test_pipeline_classifies_duplicate_metric_names_as_provider_output(
