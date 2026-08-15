@@ -4,7 +4,7 @@
 
 **Goal:** Make the Issue #3 artifact verifier accept either validated PDF embedded-text extraction or OCR without weakening fidelity checks.
 
-**Architecture:** Keep `verify_issue_3` as the end-to-end artifact gate and isolate its extraction-mode contract in one guard. The guard accepts the two PDF modes and rejects non-PDF modes before any artifact reuse checks run.
+**Architecture:** Keep `verify_issue_3` as the end-to-end artifact gate. It accepts the two PDF modes, rejects non-PDF modes, validates candidate decision provenance, and replays candidate mode with the recorded provider/model identity while keeping actual provider calls prohibited.
 
 **Tech Stack:** Python 3.12, Pydantic models, pytest, Ruff, markdown-it-py
 
@@ -23,42 +23,63 @@
 - Create: `tests/unit/test_issue_3_verifier.py`
 
 **Interfaces:**
-- Consumes: `ExtractionMode` and `SemanticFidelityReport.extraction_mode`
-- Produces: `_require_issue_3_pdf_mode(mode: ExtractionMode) -> None`
+- Consumes: `ExtractionMode`, `SemanticFidelityReport`, and `DecisionReport`
+- Produces: a provider-free `verify_issue_3(product_root: Path) -> dict[str, object]` result
 
 - [ ] **Step 1: Write the failing contract test**
 
 ```python
-@pytest.mark.parametrize(
-    "mode",
-    (ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR),
-)
-def test_issue_3_verifier_accepts_pdf_extraction_modes(mode: ExtractionMode) -> None:
-    _require_issue_3_pdf_mode(mode)
+@pytest.mark.parametrize("mode", (ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR))
+def test_issue_3_verifier_accepts_pdf_extraction_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: ExtractionMode,
+) -> None:
+    root = write_candidate_artifact(tmp_path, mode)
+    install_provider_free_candidate_parser(monkeypatch)
+
+    result = verify_issue_3(root)
+
+    assert result["page_count"] == 5
 
 
-def test_issue_3_verifier_rejects_non_pdf_extraction_mode() -> None:
+def test_issue_3_verifier_rejects_non_pdf_extraction_mode(tmp_path: Path) -> None:
+    root = write_candidate_artifact(tmp_path, ExtractionMode.DOCX_XML)
     with pytest.raises(Issue3VerificationError, match="ISSUE_3_NOT_PDF"):
-        _require_issue_3_pdf_mode(ExtractionMode.DOCX_XML)
+        verify_issue_3(root)
 ```
 
 - [ ] **Step 2: Run the test and verify the embedded-text case fails**
 
 Run: `uv run pytest -q tests/unit/test_issue_3_verifier.py`
 
-Expected: FAIL because `_require_issue_3_pdf_mode` does not yet exist.
+Expected: FAIL because `pdf_embedded` is rejected as `ISSUE_3_NOT_OCR` and candidate replay is not configured with the recorded provider identity.
 
 - [ ] **Step 3: Implement the minimal PDF-mode guard**
 
 ```python
-def _require_issue_3_pdf_mode(mode: ExtractionMode) -> None:
-    _require(
-        mode in {ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR},
-        "ISSUE_3_NOT_PDF",
-    )
+_require(
+    fidelity.extraction_mode in {ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR},
+    "ISSUE_3_NOT_PDF",
+)
+decision_report = DecisionReport.model_validate_json(decision_path.read_bytes())
+identities = {(item.provider, item.model) for item in decision_report.decisions}
+_require(len(identities) == 1, "ISSUE_3_DECISION_PROVIDER_INVALID")
+provider_name, model = next(iter(identities))
+provider = _ProviderMustNotRun(
+    fidelity,
+    provider=provider_name,
+    model=model,
+)
+reused = DoclingParser(
+    trusted_fidelity_report=fidelity,
+    semantic_pipeline_mode="candidate",
+    candidate_provider=provider,
+    trusted_candidate_decisions=decision_report.decisions,
+).parse(source)
 ```
 
-Call the guard from `verify_issue_3` in place of the OCR-only assertion and update the script description to say “semantic PDF artifact.”
+Update the script description to say “semantic PDF artifact.” Keep `generate_structured` and `generate_multimodal_structured` fail-closed so a cache miss fails verification.
 
 - [ ] **Step 4: Run focused and full verification**
 
@@ -102,4 +123,3 @@ Run a read-only `MarkdownIt("commonmark").enable("table")` parse and assert head
 - [ ] **Step 3: Confirm GitHub state**
 
 Confirm PR #5 quality checks pass and Issue #3 remains open until PR #5 is merged.
-

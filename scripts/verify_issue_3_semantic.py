@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the real Issue #3 OCR artifact without exposing source content."""
+"""Verify the real Issue #3 semantic PDF artifact without exposing source content."""
 
 from __future__ import annotations
 
@@ -19,8 +19,7 @@ from ard_ossie.ingestion import (
     snapshot_source_file,
 )
 from ard_ossie.llm.contracts import LLMMetadata, LLMResult
-from ard_ossie.semantic.adjudication import DecisionRecord
-from ard_ossie.semantic.correction import OcrCorrectionPlanner
+from ard_ossie.semantic.adjudication import DecisionRecord, DecisionReport
 from ard_ossie.semantic.evidence import ExtractedEvidence
 from ard_ossie.semantic.evidence_sources import extract_pdf_evidence
 from ard_ossie.semantic.models import ExtractionMode, SemanticFidelityReport
@@ -41,7 +40,13 @@ class Issue3VerificationError(RuntimeError):
 
 
 class _ProviderMustNotRun:
-    def __init__(self, fidelity: SemanticFidelityReport) -> None:
+    def __init__(
+        self,
+        fidelity: SemanticFidelityReport,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> None:
         reusable = next(
             (
                 page
@@ -50,8 +55,11 @@ class _ProviderMustNotRun:
             ),
             None,
         )
-        self.provider = reusable.provider if reusable is not None else "acceptance-stub"
-        self.model = reusable.model if reusable is not None else "acceptance-stub"
+        self.provider = (
+            provider
+            or (reusable.provider if reusable is not None else "acceptance-stub")
+        )
+        self.model = model or (reusable.model if reusable is not None else "acceptance-stub")
 
     def capabilities(self) -> dict[str, object]:
         return {"provider": self.provider, "model": self.model, "vision": True}
@@ -541,7 +549,10 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
     markdown = markdown_bytes.decode("utf-8", errors="strict")
     fidelity = SemanticFidelityReport.model_validate_json(fidelity_path.read_bytes())
 
-    _require(fidelity.extraction_mode is ExtractionMode.OCR, "ISSUE_3_NOT_OCR")
+    _require(
+        fidelity.extraction_mode in {ExtractionMode.PDF_EMBEDDED, ExtractionMode.OCR},
+        "ISSUE_3_NOT_PDF",
+    )
     _require(fidelity.page_count == 5, "ISSUE_3_PAGE_COUNT_INVALID")
     _require(fidelity.unmatched_span_count == 0, "ISSUE_3_UNMATCHED_SPANS")
     _require(fidelity.duplicated_span_count == 0, "ISSUE_3_DUPLICATED_SPANS")
@@ -561,10 +572,31 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
     )
 
     source = scan_sources(root / "sources").by_role(SourceRole.SEMANTIC_DOCUMENT)
-    provider = _ProviderMustNotRun(fidelity)
+    decision_report = DecisionReport.model_validate_json(
+        (root / "quality" / "decision-report.json").read_bytes()
+    )
+    _require(
+        decision_report.source_hash == fidelity.source_hash,
+        "ISSUE_3_DECISION_SOURCE_MISMATCH",
+    )
+    _require(
+        all(
+            decision.source_hash == fidelity.source_hash
+            for decision in decision_report.decisions
+        ),
+        "ISSUE_3_DECISION_SOURCE_MISMATCH",
+    )
+    provider_identities = {
+        (decision.provider, decision.model) for decision in decision_report.decisions
+    }
+    _require(len(provider_identities) == 1, "ISSUE_3_DECISION_PROVIDER_INVALID")
+    provider_name, model = next(iter(provider_identities))
+    provider = _ProviderMustNotRun(fidelity, provider=provider_name, model=model)
     reused = DoclingParser(
-        ocr_correction_planner=OcrCorrectionPlanner(provider),
         trusted_fidelity_report=fidelity,
+        semantic_pipeline_mode="candidate",
+        candidate_provider=provider,
+        trusted_candidate_decisions=decision_report.decisions,
     ).parse(source)
     reused_fidelity = reused.semantic_fidelity
     _require(reused_fidelity is not None, "ISSUE_3_REUSED_FIDELITY_MISSING")

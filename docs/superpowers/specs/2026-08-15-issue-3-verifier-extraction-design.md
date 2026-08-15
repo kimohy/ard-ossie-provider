@@ -14,7 +14,7 @@ Verify Issue #3 semantic PDF artifacts based on fidelity and deterministic reuse
 
 ## Implementation
 
-Add one focused verifier guard that enforces the accepted PDF modes. Use it from `verify_issue_3` and rename the script description from OCR-specific to semantic-PDF-specific wording. Add a small contract test covering both accepted PDF modes and rejection of `docx_xml`.
+Enforce the accepted PDF modes in `verify_issue_3` and rename the script description from OCR-specific to semantic-PDF-specific wording. Load the candidate decision report, require its source hash and provider/model identity to be internally consistent, and replay candidate mode with that identity while retaining provider methods that fail if called. Add a behavioral contract test covering both accepted PDF modes, trusted candidate replay, and rejection of `docx_xml`.
 
 ## Validation
 
@@ -22,4 +22,3 @@ Add one focused verifier guard that enforces the accepted PDF modes. Use it from
 - The full repository test suite and Ruff must pass.
 - The regenerated Issue #3 product verifier must pass against `products/500138301`.
 - CommonMark parsing of the generated Markdown must retain 12 headings at levels `[1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]`, 10 tables, no raw HTML, no literal rendered escape characters, and the expected corrected Korean terms.
-
