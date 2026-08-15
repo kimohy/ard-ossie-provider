@@ -13,7 +13,7 @@ from ard_ossie.semantic.evidence import (
     EvidenceRegion,
 )
 from ard_ossie.semantic.models import SourceBox
-from ard_ossie.semantic.spacing import build_table_spacing_candidate_set
+from ard_ossie.semantic.spacing import KiwiSpacingScorer, build_table_spacing_candidate_set
 
 SOURCE_HASH = "c" * 64
 REGION_ID = "region_7000000000000001"
@@ -25,6 +25,9 @@ class FixedScorer:
         del line_chunks
         replacements = {
             "시 뮬레 이 션 비용": "시뮬레이션 비용",
+            "시 뮬레": "시뮬레",
+            "뮬레 이": "뮬레이",
+            "이 션": "이션",
             "정상 셀": "정상 셀",
         }
         return (replacements.get(text, text),)
@@ -40,6 +43,17 @@ class DenseScorer:
     def propose(self, text: str, line_chunks: tuple[str, ...]) -> tuple[str, ...]:
         del line_chunks
         return ("".join(character for character in text if not character.isspace()),)
+
+
+class CompoundWordSplittingScorer:
+    def propose(self, text: str, line_chunks: tuple[str, ...]) -> tuple[str, ...]:
+        del line_chunks
+        replacements = {
+            "지표명": "지표 명",
+            "작성일": "작성 일",
+            "가상 집행 데이터": "가 상 집행 데이터",
+        }
+        return (replacements.get(text, text),)
 
 
 def _table_fixture(
@@ -184,3 +198,133 @@ def test_formula_cell_is_not_densified_by_language_scorer() -> None:
     )
 
     assert candidate_set is None
+
+
+def test_korean_spacing_repair_preserves_inline_identifiers() -> None:
+    source = "성과 신호는 event_date, campaign_id 수 준 으로 집계한다."
+    table, evidence, _cell_ids = _table_fixture((source,))
+
+    candidate_set = build_table_spacing_candidate_set(
+        table=table,
+        evidence=evidence,
+        scorer=KiwiSpacingScorer(),
+    )
+
+    assert candidate_set is not None
+    repaired = next(
+        item for item in candidate_set.candidates if "table_cell_repair" in item.features
+    )
+    assert repaired.rendered_text == (
+        "성과 신호는 event_date, campaign_id 수준으로 집계한다."
+    )
+
+
+def test_table_spacing_does_not_split_clean_korean_compound_words() -> None:
+    table, evidence, _cell_ids = _table_fixture(
+        ("지표명", "작성일", "가상 집행 데이터")
+    )
+
+    candidate_set = build_table_spacing_candidate_set(
+        table=table,
+        evidence=evidence,
+        scorer=CompoundWordSplittingScorer(),
+    )
+
+    assert candidate_set is None
+
+
+def test_korean_fragment_clusters_preserve_real_word_boundaries() -> None:
+    table, evidence, _cell_ids = _table_fixture(("예 시 적재 주 기 24시간 이내",))
+
+    candidate_set = build_table_spacing_candidate_set(
+        table=table,
+        evidence=evidence,
+        scorer=KiwiSpacingScorer(),
+    )
+
+    assert candidate_set is not None
+    repaired = next(
+        item for item in candidate_set.candidates if "table_cell_repair" in item.features
+    )
+    assert repaired.rendered_text == "예시 적재 주기 24시간 이내"
+
+
+def test_korean_registered_term_is_reassembled_across_short_fragments() -> None:
+    table, evidence, _cell_ids = _table_fixture(
+        ("시 뮬레 이 션 비용 합계", "모든 결 과값과 임계값은 합성 예 시입니다.")
+    )
+
+    candidate_set = build_table_spacing_candidate_set(
+        table=table,
+        evidence=evidence,
+        scorer=KiwiSpacingScorer(),
+    )
+
+    assert candidate_set is not None
+    repaired = next(
+        item for item in candidate_set.candidates if "table_cell_repair" in item.features
+    )
+    assert repaired.rendered_text == (
+        "시뮬레이션 비용 합계\n모든 결과값과 임계값은 합성 예시입니다."
+    )
+
+
+def test_korean_noun_hada_join_preserves_auxiliary_predicate_boundary() -> None:
+    table, evidence, _cell_ids = _table_fixture(
+        ("개인정보를 포함 하지 않는다.", "결과를 처리 한다.", "준비를 해야 한다.")
+    )
+
+    candidate_set = build_table_spacing_candidate_set(
+        table=table,
+        evidence=evidence,
+        scorer=KiwiSpacingScorer(),
+    )
+
+    assert candidate_set is not None
+    repaired = next(
+        item for item in candidate_set.candidates if "table_cell_repair" in item.features
+    )
+    assert repaired.rendered_text == (
+        "개인정보를 포함하지 않는다.\n결과를 처리한다.\n준비를 해야 한다."
+    )
+
+
+def test_parenthetical_labels_are_repaired_without_changing_english_text() -> None:
+    table, evidence, _cell_ids = _table_fixture(
+        (
+            "활 성 캠페인 수 (Active Campaign Count)",
+            "반응 률 (Engagement Rate)",
+        )
+    )
+
+    candidate_set = build_table_spacing_candidate_set(
+        table=table,
+        evidence=evidence,
+        scorer=KiwiSpacingScorer(),
+    )
+
+    assert candidate_set is not None
+    repaired = next(
+        item for item in candidate_set.candidates if "table_cell_repair" in item.features
+    )
+    assert repaired.rendered_text == (
+        "활성 캠페인 수 (Active Campaign Count)\n반응률 (Engagement Rate)"
+    )
+
+
+def test_valid_korean_repairs_survive_model_space_before_percent() -> None:
+    table, evidence, _cell_ids = _table_fixture(
+        ("필 수 키 100% 존 재", "정의 된 복 합 키 100% 유일")
+    )
+
+    candidate_set = build_table_spacing_candidate_set(
+        table=table,
+        evidence=evidence,
+        scorer=KiwiSpacingScorer(),
+    )
+
+    assert candidate_set is not None
+    repaired = next(
+        item for item in candidate_set.candidates if "table_cell_repair" in item.features
+    )
+    assert repaired.rendered_text == "필수 키 100% 존재\n정의된 복합 키 100% 유일"

@@ -13,7 +13,7 @@ def _table_rows(result, region_id: str) -> list[list[str]]:
 
 
 def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) -> None:
-    result, _provider, repeated, repeated_provider = issue_3_replay
+    result, provider, repeated, repeated_provider = issue_3_replay
     golden = json.loads(
         Path("tests/fixtures/semantic/issue-3-golden.json").read_text(encoding="utf-8")
     )
@@ -37,6 +37,12 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
     assert headings == golden["headings"]
     assert table_dimensions == golden["table_dimensions"]
     assert all(phrase in plain_text for phrase in golden["required_phrases"])
+    cell_texts = [cell.text for block in result.canonical.blocks for cell in block.cells]
+    assert all(value in cell_texts for value in golden["required_repaired_table_cells"])
+    assert all(value in cell_texts for value in golden["required_unchanged_table_cells"])
+    assert all(
+        fragment not in plain_text for fragment in golden["forbidden_table_cell_fragments"]
+    )
     assert all(value not in result.markdown for value in golden["forbidden_strings"])
     assert "<pre" not in result.markdown
     table_decisions = [
@@ -58,6 +64,8 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
         all("table_cell_composite" in candidate.features for candidate in candidate_set.candidates)
         for candidate_set in table_spacing_sets
     )
+    assert provider.generation_calls > 0
+    assert provider.verification_calls == provider.generation_calls
     for region_id, expected_rows in golden["exact_tables"].items():
         assert _table_rows(result, region_id) == expected_rows
         block = next(item for item in result.canonical.blocks if item.region_id == region_id)

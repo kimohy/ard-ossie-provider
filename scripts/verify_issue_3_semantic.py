@@ -78,6 +78,9 @@ class ReplayCandidateProvider:
         self.recovery_calls = 0
         self.generation_calls = 0
         self.verification_calls = 0
+        self.table_spacing_generation_calls = 0
+        self.table_spacing_verification_calls = 0
+        self.table_spacing_candidate_sets: set[str] = set()
         self.max_candidate_count = 0
 
     def capabilities(self) -> dict[str, object]:
@@ -103,6 +106,9 @@ class ReplayCandidateProvider:
         task = request.get("task")
         if task == "generate_whitespace_repair":
             self.generation_calls += 1
+            table_composite = candidate_set_id in self.table_spacing_candidate_sets
+            if table_composite:
+                self.table_spacing_generation_calls += 1
             anchor_id = request["anchor_candidate_id"]
             anchor = next(
                 candidate
@@ -112,11 +118,17 @@ class ReplayCandidateProvider:
             structured = {
                 "rendered_text": anchor["rendered_text"],
                 "confidence": 0.99,
-                "repair_reasons": ["korean_morphology"],
+                "repair_reasons": (
+                    ["korean_morphology", "table_cell_boundary"]
+                    if table_composite
+                    else ["korean_morphology"]
+                ),
             }
             return self._result(structured)
         if task == "verify_whitespace_repair":
             self.verification_calls += 1
+            if candidate_set_id in self.table_spacing_candidate_sets:
+                self.table_spacing_verification_calls += 1
             structured = {
                 "candidate_id": request["generated_candidate_id"],
                 "confidence": 0.99,
@@ -125,6 +137,12 @@ class ReplayCandidateProvider:
             return self._result(structured)
 
         phase = request["phase"]
+        table_composite = any(
+            "table_cell_composite" in candidate.get("features", {})
+            for candidate in candidates
+        )
+        if table_composite:
+            self.table_spacing_candidate_sets.add(candidate_set_id)
         if phase in {"recovery", "tiebreak"}:
             self.recovery_calls += 1
         self.max_candidate_count = max(self.max_candidate_count, len(candidates))
@@ -151,7 +169,11 @@ class ReplayCandidateProvider:
                 ),
             )["candidate_id"]
         confidence = (
-            self.LOW_CONFIDENCE_PRIMARY.get(candidate_set_id, 0.99) if phase == "primary" else 0.99
+            0.70
+            if phase == "primary" and table_composite
+            else self.LOW_CONFIDENCE_PRIMARY.get(candidate_set_id, 0.99)
+            if phase == "primary"
+            else 0.99
         )
         structured = {"candidate_id": selected, "confidence": confidence}
         return self._result(structured)
@@ -300,6 +322,11 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
             ),
         ]
     )
+    cell_texts = [
+        cell.text
+        for block in result.canonical.blocks
+        for cell in block.cells
+    ]
     _require(result.validation.status == "verified", "EVIDENCE_REPLAY_NOT_VERIFIED")
     _require(result.validation.character_coverage == 1.0, "EVIDENCE_REPLAY_COVERAGE")
     _require(result.validation.missing_atom_count == 0, "EVIDENCE_REPLAY_MISSING")
@@ -311,6 +338,21 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
     _require(
         all(value in plain_text for value in golden["required_phrases"]),
         "EVIDENCE_REPLAY_REQUIRED_PHRASE",
+    )
+    _require(
+        all(value in cell_texts for value in golden["required_repaired_table_cells"]),
+        "EVIDENCE_REPLAY_REPAIRED_TABLE_CELL",
+    )
+    _require(
+        all(value in cell_texts for value in golden["required_unchanged_table_cells"]),
+        "EVIDENCE_REPLAY_UNCHANGED_TABLE_CELL",
+    )
+    _require(
+        all(
+            fragment not in plain_text
+            for fragment in golden["forbidden_table_cell_fragments"]
+        ),
+        "EVIDENCE_REPLAY_TABLE_CELL_FRAGMENT",
     )
     _require(
         all(value not in result.markdown for value in golden["forbidden_strings"]),
@@ -331,6 +373,23 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         result.validation.canonical_hash == repeated.validation.canonical_hash,
         "EVIDENCE_REPLAY_NONDETERMINISTIC",
     )
+    table_decisions = [
+        decision for decision in result.decisions.decisions if decision.decision_type == "table"
+    ]
+    _require(
+        bool(table_decisions)
+        and all(decision.source == "deterministic" for decision in table_decisions),
+        "EVIDENCE_REPLAY_TABLE_NOT_DETERMINISTIC",
+    )
+    _require(
+        provider.table_spacing_generation_calls > 0,
+        "EVIDENCE_REPLAY_TABLE_SPACING_GENERATION_MISSING",
+    )
+    _require(
+        provider.table_spacing_verification_calls
+        == provider.table_spacing_generation_calls,
+        "EVIDENCE_REPLAY_TABLE_SPACING_VERIFICATION_MISMATCH",
+    )
     _require(repeated_provider.calls == 0, "EVIDENCE_REPLAY_CACHE_MISS")
     return {
         "status": result.validation.status,
@@ -344,6 +403,9 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "recovery_model_calls": provider.recovery_calls,
         "generation_model_calls": provider.generation_calls,
         "verification_model_calls": provider.verification_calls,
+        "affected_table_spacing_count": len(provider.table_spacing_candidate_sets),
+        "table_spacing_generation_calls": provider.table_spacing_generation_calls,
+        "table_spacing_verification_calls": provider.table_spacing_verification_calls,
         "cache_model_calls": repeated_provider.calls,
         "exact_table_count": len(golden["exact_tables"]),
         "max_candidate_count": provider.max_candidate_count,
