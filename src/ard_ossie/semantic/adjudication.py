@@ -36,7 +36,7 @@ from ard_ossie.semantic.candidates import (
 from ard_ossie.semantic.evidence import RegionId
 from ard_ossie.semantic.models import ImmutableStrictModel
 
-PROMPT_VERSION = "semantic-candidate-adjudication-v1"
+PROMPT_VERSION = "semantic-candidate-adjudication-v2"
 DecisionId = Annotated[str, StringConstraints(pattern=r"^decision_[0-9a-f]{16}$")]
 ValidationCode = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]{0,127}$")]
 
@@ -47,11 +47,30 @@ class AdjudicationPolicy(ImmutableStrictModel):
     minimum_model_confidence: float = Field(default=0.80, ge=0, le=1)
     max_candidates: int = Field(default=5, ge=1, le=5)
     max_schema_attempts: int = Field(default=2, ge=1, le=2)
+    max_confidence_recovery_attempts: int = Field(default=2, ge=0, le=2)
+    consensus_votes_required: int = Field(default=2, ge=2, le=2)
 
 
 class CandidateChoice(ImmutableStrictModel):
     candidate_id: CandidateId
     confidence: float = Field(ge=0, le=1)
+
+
+class AdjudicationAttempt(ImmutableStrictModel):
+    attempt_index: int = Field(ge=1, le=6)
+    phase: Literal["primary", "recovery", "tiebreak"]
+    request_hash: Sha256
+    candidate_id: CandidateId | None = None
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    status: Literal[
+        "accepted",
+        "low_confidence",
+        "candidate_unknown",
+        "provider_rejected",
+    ]
+    validation_codes: tuple[ValidationCode, ...] = Field(default=(), max_length=4)
+    provider_retry_count: int = Field(default=0, ge=0, le=2)
+    provider_repair_count: int = Field(default=0, ge=0, le=2)
 
 
 class DecisionRecord(ImmutableStrictModel):
@@ -64,13 +83,25 @@ class DecisionRecord(ImmutableStrictModel):
     decision_type: str = Field(min_length=1, max_length=40)
     selected_candidate_id: CandidateId | None = None
     outcome: Literal["selected", "review_required"]
-    source: Literal["deterministic", "model", "cache", "unavailable", "provider"]
+    source: Literal[
+        "deterministic",
+        "model",
+        "recovered",
+        "cache",
+        "unavailable",
+        "provider",
+    ]
     confidence: float = Field(ge=0, le=1)
     provider: str = Field(min_length=1, max_length=100)
     model: str = Field(min_length=1, max_length=200)
     validation_codes: tuple[ValidationCode, ...] = Field(default=(), max_length=4)
     retry_count: int = Field(default=0, ge=0, le=2)
     repair_count: int = Field(default=0, ge=0, le=2)
+    recovery_status: Literal["not_needed", "recovered", "review_required"] = "not_needed"
+    attempts: tuple[AdjudicationAttempt, ...] = Field(default=(), max_length=6)
+    consensus_method: Literal["none", "same_candidate", "two_of_three"] = "none"
+    consensus_candidate_id: CandidateId | None = None
+    recovery_count: int = Field(default=0, ge=0, le=2)
 
 
 class DecisionReport(ImmutableStrictModel):
@@ -395,9 +426,7 @@ def _provider_identity(provider: LLMProvider | None) -> tuple[str, str]:
     if provider is None:
         return "none", "none"
     capabilities = provider.capabilities()
-    return str(capabilities.get("provider", "unknown")), str(
-        capabilities.get("model", "unknown")
-    )
+    return str(capabilities.get("provider", "unknown")), str(capabilities.get("model", "unknown"))
 
 
 def _request_hash(
@@ -432,13 +461,25 @@ def _record(
     evidence_hash: Sha256,
     selected_candidate_id: CandidateId | None,
     outcome: Literal["selected", "review_required"],
-    source: Literal["deterministic", "model", "cache", "unavailable", "provider"],
+    source: Literal[
+        "deterministic",
+        "model",
+        "recovered",
+        "cache",
+        "unavailable",
+        "provider",
+    ],
     confidence: float,
     provider: str,
     model: str,
     validation_codes: tuple[str, ...] = (),
     retry_count: int = 0,
     repair_count: int = 0,
+    recovery_status: Literal["not_needed", "recovered", "review_required"] = "not_needed",
+    attempts: tuple[AdjudicationAttempt, ...] = (),
+    consensus_method: Literal["none", "same_candidate", "two_of_three"] = "none",
+    consensus_candidate_id: CandidateId | None = None,
+    recovery_count: int = 0,
 ) -> DecisionRecord:
     digest = canonical_hash(
         {
@@ -447,6 +488,10 @@ def _record(
             "outcome": outcome,
             "source": source,
             "validation_codes": validation_codes,
+            "attempt_request_hashes": [item.request_hash for item in attempts],
+            "recovery_status": recovery_status,
+            "consensus_method": consensus_method,
+            "consensus_candidate_id": consensus_candidate_id,
         }
     )
     return DecisionRecord(
@@ -466,6 +511,11 @@ def _record(
         validation_codes=validation_codes,
         retry_count=retry_count,
         repair_count=repair_count,
+        recovery_status=recovery_status,
+        attempts=attempts,
+        consensus_method=consensus_method,
+        consensus_candidate_id=consensus_candidate_id,
+        recovery_count=recovery_count,
     )
 
 

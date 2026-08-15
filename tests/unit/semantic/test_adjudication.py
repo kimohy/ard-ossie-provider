@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from ard_ossie.llm.contracts import (
     LLMImagePart,
@@ -13,7 +14,9 @@ from ard_ossie.llm.contracts import (
     ProviderFailureKind,
 )
 from ard_ossie.semantic.adjudication import (
+    AdjudicationAttempt,
     CandidateAdjudicator,
+    DecisionRecord,
     candidate_choice_schema,
 )
 from ard_ossie.semantic.candidates import (
@@ -116,6 +119,55 @@ def _spacing_set(first_score: float, second_score: float) -> CandidateSet:
     )
 
 
+def _legacy_decision_payload() -> dict[str, object]:
+    return {
+        "decision_id": "decision_0000000000000001",
+        "request_hash": "1" * 64,
+        "source_hash": SOURCE_HASH,
+        "evidence_hash": "2" * 64,
+        "candidate_set_id": "candidate_set_0000000000000001",
+        "region_id": "region_0000000000000001",
+        "decision_type": "spacing",
+        "selected_candidate_id": "candidate_0000000000000001",
+        "outcome": "selected",
+        "source": "model",
+        "confidence": 0.91,
+        "provider": "openai_compatible",
+        "model": "semantic-judge",
+        "validation_codes": [],
+        "retry_count": 0,
+        "repair_count": 0,
+    }
+
+
+def test_decision_record_loads_legacy_payload_with_recovery_defaults() -> None:
+    decision = DecisionRecord.model_validate(_legacy_decision_payload())
+
+    assert decision.recovery_status == "not_needed"
+    assert decision.attempts == ()
+    assert decision.consensus_method == "none"
+    assert decision.consensus_candidate_id is None
+    assert decision.recovery_count == 0
+
+
+def test_adjudication_attempt_is_closed_bounded_and_content_addressed() -> None:
+    attempt = AdjudicationAttempt(
+        attempt_index=1,
+        phase="primary",
+        request_hash="1" * 64,
+        candidate_id="candidate_0000000000000001",
+        confidence=0.70,
+        status="low_confidence",
+        validation_codes=("LLM_CONFIDENCE_TOO_LOW",),
+        provider_retry_count=0,
+        provider_repair_count=0,
+    )
+
+    assert attempt.model_dump(mode="json")["phase"] == "primary"
+    with pytest.raises(ValidationError):
+        AdjudicationAttempt.model_validate({**attempt.model_dump(mode="json"), "attempt_index": 7})
+
+
 def test_clear_score_margin_selects_without_provider_call() -> None:
     provider = RecordingProvider()
     candidate_set = _spacing_set(0.94, 0.60)
@@ -162,9 +214,7 @@ def test_unknown_candidate_is_retried_once_then_requires_review() -> None:
 def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> None:
     candidate_set = _spacing_set(0.80, 0.75)
     selected_id = candidate_set.candidates[0].candidate_id
-    first_provider = RecordingProvider(
-        [{"candidate_id": selected_id, "confidence": 0.91}]
-    )
+    first_provider = RecordingProvider([{"candidate_id": selected_id, "confidence": 0.91}])
     first = CandidateAdjudicator(first_provider).decide(candidate_set)
     reuse_provider = RecordingProvider()
 
@@ -175,17 +225,13 @@ def test_trusted_decision_is_reused_only_when_every_request_hash_matches() -> No
     assert reuse_provider.calls == []
 
     mismatched = first.model_copy(update={"request_hash": "0" * 64})
-    miss_provider = RecordingProvider(
-        [{"candidate_id": selected_id, "confidence": 0.92}]
-    )
+    miss_provider = RecordingProvider([{"candidate_id": selected_id, "confidence": 0.92}])
     missed = CandidateAdjudicator(miss_provider, trusted=(mismatched,)).decide(candidate_set)
     assert missed.source == "model"
     assert len(miss_provider.calls) == 1
 
     mismatched_evidence = first.model_copy(update={"evidence_hash": "1" * 64})
-    evidence_miss_provider = RecordingProvider(
-        [{"candidate_id": selected_id, "confidence": 0.93}]
-    )
+    evidence_miss_provider = RecordingProvider([{"candidate_id": selected_id, "confidence": 0.93}])
     evidence_miss = CandidateAdjudicator(
         evidence_miss_provider,
         trusted=(mismatched_evidence,),
@@ -222,9 +268,7 @@ def test_transient_provider_failure_propagates() -> None:
     provider = RecordingProvider([failure, failure, failure])
 
     with pytest.raises(ProviderExecutionError, match="LLM_PROVIDER_TIMEOUT"):
-        CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(
-            _spacing_set(0.80, 0.75)
-        )
+        CandidateAdjudicator(provider, sleep=lambda _delay: None).decide(_spacing_set(0.80, 0.75))
 
     assert len(provider.calls) == 3
 
@@ -256,10 +300,7 @@ def test_optional_crop_uses_exactly_one_multimodal_image() -> None:
     kind, messages = provider.calls[0]
     assert kind == "multimodal"
     images = [
-        part
-        for message in messages
-        for part in message.content
-        if isinstance(part, LLMImagePart)
+        part for message in messages for part in message.content if isinstance(part, LLMImagePart)
     ]
     assert len(images) == 1
 
