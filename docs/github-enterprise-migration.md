@@ -154,7 +154,7 @@ runner image에는 runner `2.324.0+`, Python 3.12, Git, Git LFS, `gh`, `uv` 실�
 
 이 저장소는 모든 외부 Action을 40자리 commit SHA로 고정합니다. Enterprise 정책도 `Allow select actions`와 SHA pinning을 유지합니다.
 
-GHES는 bundled GitHub-authored Action이 시점별 snapshot일 수 있습니다. 최신 Action이 필요하면 GitHub Connect를 허용하거나 `actions-sync`로 승인된 Action을 내부에 동기화합니다. 외부 `astral-sh/setup-uv`도 별도 승인·동기화가 필요합니다. 인터넷이 없는 runner에서는 Action 코드뿐 아니라 Action이 다운로드하는 tool과 package도 mirror해야 합니다.
+GHES는 bundled GitHub-authored Action이 시점별 snapshot일 수 있습니다. 최신 Action이 필요하면 GitHub Connect를 허용하거나 `actions-sync`로 승인된 Action을 내부에 동기화합니다. 외부 `astral-sh/setup-uv`도 별도 승인·동기화가 필요합니다. 인터넷이 없는 runner에서는 Action 코드뿐 아니라 Action이 다운로드하는 tool과 package도 mirror해야 합니다. 특히 현재 repository static gate는 checksum을 검증하며 `actionlint 1.7.7`을 `github.com/rhysd/actionlint`에서 직접 받으므로, air-gapped 환경에서는 내부 mirror URL을 주입할 수 있는 코드 변경이 필요합니다. runner image에 binary만 넣는 것으로는 checksum manifest download를 우회할 수 없습니다.
 
 ### 현재 workflow의 3.18.12 차단 항목
 
@@ -168,6 +168,7 @@ GHES는 bundled GitHub-authored Action이 시점별 snapshot일 수 있습니다
 | download artifact | `actions/download-artifact@v4.3.0` SHA | GHES용 `v3-node20`의 검토된 40자리 SHA로 변경 |
 | release result 전달 | hidden `.ard/run/**`와 `include-hidden-files` 사용 | result를 non-hidden staging 경로에 복사하고 v3 왕복 뒤 파일 존재와 SHA-256을 검증 |
 | Environment job | required reviewer를 쓰지만 명시적 deployment 권한 없음 | `ard-process.yml`의 2개 job, `ard-direct-change.yml`, `ard-llm-smoke.yml`, `ard-release.yml`의 Environment job에 `deployments: write`를 최소 scope로 추가하고 보안 검토 |
+| static gate | `actionlint 1.7.7` archive와 checksum을 GitHub.com에서 직접 download | 허용된 내부 mirror와 고정 checksum을 설정할 수 있게 구현하고, 차단망에서 static group을 통합 시험 |
 | Issue 첨부 | initial host가 코드에서 `github.com`으로 고정 | GHES host와 실제 redirect storage를 exact allowlist로 구현·시험하기 전에는 Issue intake 비활성화 |
 
 다음 SHA는 **2026-08-15에 upstream tag가 가리킨 commit을 조사하기 위한 migration 기록**입니다. 실제 호환성 PR에서는 각 commit의 `action.yml`, release provenance, GHES 내부 동기화 결과를 다시 검토한 뒤 이 40자리 값을 직접 pin합니다. major tag 자체를 workflow에 쓰지 않습니다.
@@ -248,6 +249,7 @@ GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는
 - [ ] Enterprise 제품과 정확한 버전, runner version, Action 공급 방식을 기록했다.
 - [ ] 3.18.12 appliance를 3.18.13으로 hotpatch하고 보안·알려진 문제를 재확인했다.
 - [ ] Actions, artifact/cache storage, runner group과 outbound allowlist가 준비됐다.
+- [ ] air-gapped 환경이면 actionlint, uv, Python package, OCR/문서 처리 dependency의 내부 mirror 경로가 실제 gate에서 검증됐다.
 - [ ] 모든 workflow의 runner label이 실제 online runner와 일치한다.
 - [ ] upload/download artifact가 같은 GHES 지원 세대이며 release result 왕복이 통과한다.
 - [ ] `ard-llm`과 `production-linkage` Secret은 Environment 승인 전 노출되지 않는다.
