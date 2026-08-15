@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeGuard
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -202,6 +202,19 @@ Candidate = Annotated[
     | TableCandidate,
     Field(discriminator="kind"),
 ]
+
+INVARIANT_PROVEN_TABLE_FEATURES = (
+    "atom_bbox_cell_agreement",
+    "cell_character_multiset",
+    "structure_hint_text",
+)
+
+
+def is_invariant_proven_table(candidate: Candidate) -> TypeGuard[TableCandidate]:
+    return isinstance(candidate, TableCandidate) and all(
+        candidate.features.get(feature) == 1.0
+        for feature in INVARIANT_PROVEN_TABLE_FEATURES
+    )
 
 
 class CandidateSet(ImmutableStrictModel):
