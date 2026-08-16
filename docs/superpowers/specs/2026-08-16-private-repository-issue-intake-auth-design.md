@@ -129,6 +129,27 @@ architecture contract, bootstrap/foundation visibility clauses, and live label d
 dated design and implementation records that materially assert a public runtime contract receive a
 short supersession note rather than having their historical steps silently rewritten.
 
+## Bootstrap ownership and convergence
+
+`ard github bootstrap` remains the repeatable desired-state command for the repository's existing
+Actions settings, `ard-llm` and `production-linkage` Environments, branch protection, Variables,
+and labels. Its repository precondition requires the exact private `kimohy/ard-ossie-provider`
+repository with `main` as the unarchived default branch and admin permission. It must reject a
+public repository rather than treating public and private visibility as interchangeable.
+
+Bootstrap converges the two intake labels to the private contract:
+
+- `ard:submission`: `Private AI Ready Data submission`;
+- `ard:approved`: `Maintainer approved private ingestion`.
+
+The `ard-private-intake` Environment remains outside bootstrap ownership. It is a rollout-managed
+security boundary because bootstrap cannot create or rotate the dedicated bot's classic PAT, and
+silently managing only part of that Environment would obscure who owns its credential and branch
+policy. The private-auth rollout creates the Environment, restricts it to the single `main` branch
+policy, provisions `ARD_ATTACHMENT_TOKEN` through hidden input, and verifies metadata separately.
+Bootstrap must neither delete nor mutate this Environment. The Actions setup and Enterprise
+migration guides state this ownership boundary explicitly.
+
 ## Failure and rotation behavior
 
 - Missing or empty Environment Secret: fail before the attachment request with
@@ -162,6 +183,14 @@ independently recorded source.
   reusable workflows contain no attachment-token reference.
 - Both existing `secrets: inherit` processor calls remain present.
 - The credential-free candidate validation and protected `ard-llm` boundaries remain unchanged.
+
+### Bootstrap contract tests
+
+- The exact private, unarchived `main` repository with admin permission is accepted.
+- A public repository, archived repository, wrong repository name, wrong default branch, or
+  insufficient permission is rejected before mutation.
+- Bootstrap desired labels use the two private descriptions and do not restore public wording.
+- Bootstrap does not inspect, create, update, or delete `ard-private-intake` or its Secret.
 
 ### Documentation and live acceptance
 
