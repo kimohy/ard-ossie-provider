@@ -32,12 +32,12 @@ _LABELS = (
     LabelState(
         name="ard:submission",
         color="1d76db",
-        description="Private AI Ready Data submission",
+        description="Public AI Ready Data submission",
     ),
     LabelState(
         name="ard:approved",
         color="0e8a16",
-        description="Maintainer approved private ingestion",
+        description="Maintainer approved public ingestion",
     ),
     LabelState(
         name="ard:processing",
@@ -398,13 +398,13 @@ class GitHubBootstrapService:
         repository = self.github.repository()
         if (
             repository.full_name != self.repository_name
-            or repository.public
+            or not repository.public
             or repository.archived
             or repository.default_branch != "main"
         ):
             raise WorkflowConfigurationError(
                 "REPOSITORY_MISMATCH",
-                "bootstrap requires the exact private main repository",
+                "bootstrap requires the exact public main repository",
             )
         if repository.permission != "admin":
             raise WorkflowConfigurationError(

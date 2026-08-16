@@ -485,8 +485,7 @@ def test_release_upload_failure_remains_primary_when_cleanup_also_fails(
 
     assert exc_info.value.code == "RELEASE_UPLOAD_FAILED"
     assert any(
-        "RELEASE_ASSET_CLEANUP_FAILED" in note
-        for note in getattr(exc_info.value, "__notes__", ())
+        "RELEASE_ASSET_CLEANUP_FAILED" in note for note in getattr(exc_info.value, "__notes__", ())
     )
 
 
@@ -532,8 +531,7 @@ def test_release_conflict_remains_primary_when_cleanup_also_fails(
 
     assert exc_info.value.code == "MULTIPLE_RELEASE_ASSETS"
     assert any(
-        "RELEASE_ASSET_CLEANUP_FAILED" in note
-        for note in getattr(exc_info.value, "__notes__", ())
+        "RELEASE_ASSET_CLEANUP_FAILED" in note for note in getattr(exc_info.value, "__notes__", ())
     )
 
 
@@ -616,6 +614,31 @@ def test_label_reconciliation_lists_then_updates_exact_label() -> None:
 
     assert mutation.action == "update"
     assert "labels/ard%3Aapproved" in runner.requests[2].argv[4]
+
+
+def test_paginated_api_avoids_unsupported_slurp_flag() -> None:
+    runner = RecordingRunner([ok([])])
+
+    assert GitHubCli(REPOSITORY, runner).list_labels() == {}
+
+    assert "--paginate" in runner.requests[0].argv
+    assert "--slurp" not in runner.requests[0].argv
+
+
+def test_paginated_api_decodes_concatenated_pages() -> None:
+    first_page = json.dumps(
+        [{"name": "ard:submission", "color": "1d76db", "description": "private"}]
+    )
+    second_page = json.dumps(
+        [{"name": "ard:approved", "color": "0e8a16", "description": "approved"}]
+    )
+    runner = RecordingRunner(
+        [CommandResult(returncode=0, stdout=f"{first_page}\n{second_page}\n", stderr="")]
+    )
+
+    labels = GitHubCli(REPOSITORY, runner).list_labels()
+
+    assert set(labels) == {"ard:submission", "ard:approved"}
 
 
 def test_environment_secret_names_and_variable_scope_are_exact() -> None:
@@ -745,9 +768,7 @@ def test_environment_snapshot_and_update_preserve_exact_reviewers_and_branches()
         wait_timer=0,
         branch_patterns=("ard/*", "main"),
     )
-    current_policies = [
-        {"branch_policies": [{"id": 7, "name": "main", "type": "branch"}]}
-    ]
+    current_policies = [{"branch_policies": [{"id": 7, "name": "main", "type": "branch"}]}]
     runner = RecordingRunner(
         [
             ok(current_payload),

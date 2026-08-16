@@ -139,9 +139,7 @@ class GitHubCli:
 
     def get_pr(self, number: int) -> PullRequestState:
         _positive(number, "pull request")
-        return _pull_request(
-            self._api_json("GET", f"repos/{self.repository_name}/pulls/{number}")
-        )
+        return _pull_request(self._api_json("GET", f"repos/{self.repository_name}/pulls/{number}"))
 
     def create_draft_pr(
         self,
@@ -200,9 +198,7 @@ class GitHubCli:
             )
         )
         matches = [
-            item
-            for item in comments
-            if str(item.get("body", "")).startswith(f"<!-- {marker} -->")
+            item for item in comments if str(item.get("body", "")).startswith(f"<!-- {marker} -->")
         ]
         if len(matches) > 1:
             raise GitHubConflict("MULTIPLE_MANAGED_COMMENTS", marker)
@@ -317,9 +313,7 @@ class GitHubCli:
                     if digest != sha256:
                         raise GitHubConflict("RELEASE_ASSET_CONFLICT", payload.name)
                 release_id = existing.id
-                metadata_changed = (
-                    existing.title != title or existing.draft or existing.prerelease
-                )
+                metadata_changed = existing.title != title or existing.draft or existing.prerelease
                 if metadata_changed:
                     self._api_json(
                         "PATCH",
@@ -576,9 +570,7 @@ class GitHubCli:
             f"{quote(environment, safe='')}/secrets?per_page=100",
             paginate=True,
         )
-        return frozenset(
-            _string(item, "name") for item in _paginated_items(payload, "secrets")
-        )
+        return frozenset(_string(item, "name") for item in _paginated_items(payload, "secrets"))
 
     def set_environment_secret(
         self,
@@ -656,7 +648,9 @@ class GitHubCli:
             strict=bool(status_checks.get("strict")),
             enforce_admins=_enabled(payload.get("enforce_admins")),
             required_approving_review_count=int(reviews.get("required_approving_review_count", 0)),
-            require_conversation_resolution=_enabled(payload.get("required_conversation_resolution")),
+            require_conversation_resolution=_enabled(
+                payload.get("required_conversation_resolution")
+            ),
             allow_force_pushes=_enabled(payload.get("allow_force_pushes")),
             allow_deletions=_enabled(payload.get("allow_deletions")),
             require_pull_request=payload.get("required_pull_request_reviews") is not None,
@@ -720,9 +714,7 @@ class GitHubCli:
                             kind=str(item.get("type")),
                             id=int(reviewer["id"]),
                             login=str(
-                                reviewer.get("login")
-                                or reviewer.get("slug")
-                                or reviewer["id"]
+                                reviewer.get("login") or reviewer.get("slug") or reviewer["id"]
                             ),
                         )
                     )
@@ -759,6 +751,8 @@ class GitHubCli:
         result = self._api(method, path, payload=payload, paginate=paginate)
         if empty_ok and result.returncode == 0 and not result.stdout.strip():
             return {}
+        if paginate:
+            return self._decode_paginated(result, "GITHUB_API_FAILED")
         return self._decode(result, "GITHUB_API_FAILED")
 
     def _api(
@@ -771,7 +765,7 @@ class GitHubCli:
     ) -> CommandResult:
         arguments = ["api", "--method", method, path]
         if paginate:
-            arguments.extend(("--paginate", "--slurp"))
+            arguments.append("--paginate")
         stdin = None
         if payload is not None:
             arguments.extend(("--input", "-"))
@@ -813,6 +807,31 @@ class GitHubCli:
         if not isinstance(payload, (dict, list)):
             raise GitHubConflict("INVALID_GITHUB_JSON", "expected object or array")
         return payload
+
+    @staticmethod
+    def _decode_paginated(
+        result: CommandResult,
+        code: str,
+    ) -> dict[str, Any] | list[Any]:
+        GitHubCli._require_success(result, code)
+        decoder = json.JSONDecoder()
+        pages: list[dict[str, Any] | list[Any]] = []
+        offset = 0
+        while offset < len(result.stdout):
+            while offset < len(result.stdout) and result.stdout[offset].isspace():
+                offset += 1
+            if offset == len(result.stdout):
+                break
+            try:
+                page, offset = decoder.raw_decode(result.stdout, offset)
+            except json.JSONDecodeError as error:
+                raise GitHubConflict("INVALID_GITHUB_JSON", str(error)) from None
+            if not isinstance(page, (dict, list)):
+                raise GitHubConflict("INVALID_GITHUB_JSON", "expected object or array")
+            pages.append(page)
+        if len(pages) == 1:
+            return pages[0]
+        return pages
 
     @staticmethod
     def _require_success(result: CommandResult, code: str) -> None:

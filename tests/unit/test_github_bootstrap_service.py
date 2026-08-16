@@ -26,7 +26,7 @@ class FakeGitHub:
     def __init__(self) -> None:
         self.repository_state = RepositoryState(
             full_name=REPOSITORY,
-            public=False,
+            public=True,
             archived=False,
             default_branch="main",
             permission="admin",
@@ -44,6 +44,8 @@ class FakeGitHub:
         self.secret_inputs: list[str] = []
         self.environment_reads: list[str] = []
         self.environment_secret_reads: list[str] = []
+        self.protection_reads: list[str] = []
+        self.protection_writes: list[str] = []
 
     def repository(self) -> RepositoryState:
         return self.repository_state
@@ -99,10 +101,12 @@ class FakeGitHub:
         )
 
     def get_branch_protection(self, branch: str):
+        self.protection_reads.append(branch)
         assert branch == "main"
         return self.protection
 
     def set_branch_protection(self, branch: str, state):
+        self.protection_writes.append(branch)
         self.protection = state
         return MutationRecord(resource="branch_protection", target=f"branch:{branch}", action="set")
 
@@ -136,23 +140,22 @@ def test_bootstrap_plan_contains_exact_project_resources() -> None:
     ]
 
 
-def test_bootstrap_accepts_private_repository_and_converges_private_labels() -> None:
+def test_bootstrap_accepts_public_repository_and_converges_public_labels() -> None:
     github = FakeGitHub()
-    github.repository_state = replace(github.repository_state, public=False)
     service = GitHubBootstrapService(REPOSITORY, github)
 
     service.apply(service.plan(provider_config()), api_key="sentinel-key")
 
-    assert github.labels["ard:submission"].description == ("Private AI Ready Data submission")
-    assert github.labels["ard:approved"].description == ("Maintainer approved private ingestion")
+    assert github.labels["ard:submission"].description == "Public AI Ready Data submission"
+    assert github.labels["ard:approved"].description == "Maintainer approved public ingestion"
     assert "ard-private-intake" not in github.environments
     assert set(github.environment_reads) == {"ard-llm", "production-linkage"}
     assert set(github.environment_secret_reads) == {"ard-llm"}
 
 
-def test_bootstrap_rejects_public_repository_before_mutation() -> None:
+def test_bootstrap_rejects_private_repository_before_mutation() -> None:
     github = FakeGitHub()
-    github.repository_state = replace(github.repository_state, public=True)
+    github.repository_state = replace(github.repository_state, public=False)
 
     with pytest.raises(WorkflowConfigurationError) as captured:
         GitHubBootstrapService(REPOSITORY, github).plan(provider_config())
@@ -160,6 +163,29 @@ def test_bootstrap_rejects_public_repository_before_mutation() -> None:
     assert captured.value.code == "REPOSITORY_MISMATCH"
     assert github.labels == {}
     assert github.environments == {}
+
+
+def test_bootstrap_plans_and_applies_public_branch_protection() -> None:
+    github = FakeGitHub()
+    service = GitHubBootstrapService(REPOSITORY, github)
+
+    plan = service.plan(provider_config())
+    branch_item = next(item for item in plan.items if item.target == "branch:main")
+    result = service.apply(plan, api_key="sentinel-key")
+
+    assert branch_item.action == "create"
+    assert github.protection == BranchProtectionState(
+        required_statuses=("ard/changeset", "ard/quality-gate"),
+        strict=True,
+        enforce_admins=True,
+        required_approving_review_count=0,
+        require_conversation_resolution=True,
+        allow_force_pushes=False,
+        allow_deletions=False,
+        require_pull_request=True,
+    )
+    assert github.protection_writes == ["main"]
+    assert any(mutation.resource == "branch_protection" for mutation in result.mutations)
 
 
 def test_bootstrap_config_uses_profile_variables_without_legacy_model_inputs() -> None:
