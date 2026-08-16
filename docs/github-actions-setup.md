@@ -15,6 +15,10 @@ uv run ard github bootstrap --repo kimohy/ard-ossie-provider \
   --gcp-project-id GCP_PROJECT_ID --dry-run
 ```
 
+bootstrap은 `ard-private-intake`, 해당 Environment의 `main` branch policy,
+`ARD_ATTACHMENT_TOKEN`을 조회하거나 변경하지 않습니다. private 첨부 credential 경계는
+아래의 **Private Issue 첨부 Environment** 절차로 별도 생성·검증·회전합니다.
+
 두 번째 명령은 redacted plan 확인 뒤 LLM API key를 숨김 입력으로 요청하며,
 key는 `gh secret set ... --env ard-llm`의 표준 입력에만 전달됩니다. 기존 key 교체는
 기본적으로 거부됩니다. bootstrap은 Variable과 기존 `ARD_LLM_API_KEY`만 수렴시키며 Azure와

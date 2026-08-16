@@ -215,7 +215,11 @@ Enterprise Issue intake를 사용하려면 별도 코드 변경과 보안 검토
 7. required status `ard/quality-gate`, `ard/changeset`
 8. Actions default read permission과 workflow별 최소 권한
 
-**현재 bootstrap CLI를 private Enterprise 저장소에 실행하지 않습니다.** `ard github bootstrap`은 public `main` 저장소만 허용하며, private 저장소에서는 read-only `--dry-run`도 `REPOSITORY_MISMATCH`로 즉시 종료합니다. 따라서 이 명령은 Enterprise readiness probe가 아닙니다.
+`ard github bootstrap`은 private `main` 저장소만 허용하지만, private visibility 지원이
+GHES host와 API 호환성을 의미하지는 않습니다. 따라서 현재 bootstrap CLI를 private
+Enterprise 저장소의 readiness probe로 사용하거나 검증 없이 apply하지 않습니다.
+`ard-private-intake`, 해당 `main` branch policy, `ARD_ATTACHMENT_TOKEN`은 bootstrap 소유가
+아니며 대상 Enterprise에서 승인된 UI/API와 숨김 Secret 입력으로 별도 생성·검증합니다.
 
 GHES 3.18.12에서는 위 desired state를 UI 또는 승인된 REST API로 만들고 각각 다시 읽어 실제 상태를 대조합니다. 먼저 mutation 없는 read로 host, private visibility, default branch, Actions permission, Environment, branch protection endpoint의 가용성을 확인합니다.
 
@@ -231,7 +235,7 @@ gh api --hostname "$GH_HOST" \
   repos/ENTERPRISE_ORG/ard-ossie-provider/branches/main/protection
 ```
 
-endpoint 또는 protection field가 3.18에 없으면 강행하지 말고, 지원되는 UI/API로 동일 desired state를 만든 뒤 차이와 승인자를 기록합니다. bootstrap이 private destination과 해당 GHES API를 명시적으로 지원하도록 수정·검증된 이후에만 `--dry-run`과 apply 경로를 다시 도입합니다. Secret 값은 shell history, migration archive, Issue, log에 남기지 않습니다.
+endpoint 또는 protection field가 3.18에 없으면 강행하지 말고, 지원되는 UI/API로 동일 desired state를 만든 뒤 차이와 승인자를 기록합니다. bootstrap이 해당 GHES host와 API를 명시적으로 지원하도록 수정·검증된 이후에만 `--dry-run`과 apply 경로를 다시 도입합니다. Secret 값은 shell history, migration archive, Issue, log에 남기지 않습니다.
 
 GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는 Environment job이 성공하려면 `GITHUB_TOKEN`에 명시적 deployment write/admin 권한이 필요합니다. 이 저장소에서는 넓은 repository 기본 권한을 열지 않고 해당 job의 `permissions`에 `deployments: write`만 추가한 뒤, 기존 `contents`, `pull-requests`, `statuses`, `issues` 권한과 함께 최소 권한을 재검토합니다.
 

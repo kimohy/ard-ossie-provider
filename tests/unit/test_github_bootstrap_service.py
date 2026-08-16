@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from ard_ossie.application.contracts import MutationRecord, WorkflowConfigurationError
 from ard_ossie.application.github_bootstrap import (
     BootstrapConfig,
@@ -22,7 +26,7 @@ class FakeGitHub:
     def __init__(self) -> None:
         self.repository_state = RepositoryState(
             full_name=REPOSITORY,
-            public=True,
+            public=False,
             archived=False,
             default_branch="main",
             permission="admin",
@@ -38,6 +42,8 @@ class FakeGitHub:
         self.protection: BranchProtectionState | None = None
         self.collaborators: tuple[CollaboratorState, ...] = ()
         self.secret_inputs: list[str] = []
+        self.environment_reads: list[str] = []
+        self.environment_secret_reads: list[str] = []
 
     def repository(self) -> RepositoryState:
         return self.repository_state
@@ -64,6 +70,7 @@ class FakeGitHub:
         return MutationRecord(resource="actions_permissions", target=REPOSITORY, action="set")
 
     def get_environment(self, name: str):
+        self.environment_reads.append(name)
         return self.environments.get(name)
 
     def upsert_environment(self, state):
@@ -79,6 +86,7 @@ class FakeGitHub:
         return MutationRecord(resource="variable", target=f"{environment}:{name}", action="set")
 
     def list_environment_secret_names(self, environment: str):
+        self.environment_secret_reads.append(environment)
         return frozenset(self.secrets.get(environment, set()))
 
     def set_environment_secret(self, environment: str, name: str, value: str):
@@ -126,6 +134,32 @@ def test_bootstrap_plan_contains_exact_project_resources() -> None:
         "environment:production-linkage",
         "branch:main",
     ]
+
+
+def test_bootstrap_accepts_private_repository_and_converges_private_labels() -> None:
+    github = FakeGitHub()
+    github.repository_state = replace(github.repository_state, public=False)
+    service = GitHubBootstrapService(REPOSITORY, github)
+
+    service.apply(service.plan(provider_config()), api_key="sentinel-key")
+
+    assert github.labels["ard:submission"].description == ("Private AI Ready Data submission")
+    assert github.labels["ard:approved"].description == ("Maintainer approved private ingestion")
+    assert "ard-private-intake" not in github.environments
+    assert set(github.environment_reads) == {"ard-llm", "production-linkage"}
+    assert set(github.environment_secret_reads) == {"ard-llm"}
+
+
+def test_bootstrap_rejects_public_repository_before_mutation() -> None:
+    github = FakeGitHub()
+    github.repository_state = replace(github.repository_state, public=True)
+
+    with pytest.raises(WorkflowConfigurationError) as captured:
+        GitHubBootstrapService(REPOSITORY, github).plan(provider_config())
+
+    assert captured.value.code == "REPOSITORY_MISMATCH"
+    assert github.labels == {}
+    assert github.environments == {}
 
 
 def test_bootstrap_config_uses_profile_variables_without_legacy_model_inputs() -> None:
