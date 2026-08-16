@@ -198,6 +198,9 @@ tests as `ci: isolate private attachment credential`.
 - Modify: `docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md`
 - Modify: `docs/superpowers/plans/2026-08-08-repository-bootstrap.md`
 - Modify: `docs/superpowers/plans/2026-08-08-cli-first-01-foundation.md`
+- Modify: `docs/next-steps.md`
+- Modify: `docs/superpowers/specs/2026-08-16-shared-table-changeset-e2e-design.md`
+- Modify: `docs/superpowers/plans/2026-08-16-shared-table-changeset-e2e.md`
 
 **Interfaces:**
 - Consumes: the approved private design and Task 2 runtime names.

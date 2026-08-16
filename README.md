@@ -1,6 +1,6 @@
 # ARD Ossie Provider
 
-ARD Ossie Provider는 공개 가능한 AI Ready Data 문서를 검증하고 Apache Ossie 0.1.1 모델로 변환하는 오픈소스 컴파일러입니다. 데이터 제품 HTML, 시멘틱 DOCX/PDF, 데이터 딕셔너리 XLSX를 GitHub Issue 또는 신뢰된 branch로 받아, 사람이 읽는 Markdown과 기계가 읽는 모델·Registry·품질 보고서를 함께 생성합니다.
+ARD Ossie Provider는 비공개 저장소에 반입이 승인된 AI Ready Data 문서를 검증하고 Apache Ossie 0.1.1 모델로 변환하는 컴파일러입니다. 데이터 제품 HTML, 시멘틱 DOCX/PDF, 데이터 딕셔너리 XLSX를 GitHub Issue 또는 신뢰된 branch로 받아, 사람이 읽는 Markdown과 기계가 읽는 모델·Registry·품질 보고서를 함께 생성합니다.
 
 ## 입력과 결과
 
@@ -63,7 +63,7 @@ PR gate → merge → immutable Release → downstream dispatch
 ### 승인된 Issue
 
 1. `AI Ready Data submission` Issue Form에 제품 하나와 source 세 개를 첨부합니다.
-2. 공개 가능 여부를 검토한 관리자가 `ard:approved`를 적용합니다.
+2. 저장소 반입 권한과 조직 정책 준수 여부를 검토한 관리자가 `ard:approved`를 적용합니다.
 3. trusted workflow가 첨부와 권한을 검증하고 `ard/issue-<number>-<product-key>` Draft PR을 만듭니다.
 4. 같은 PR에 generated, quality, Registry 변경을 기록합니다.
 5. hard error가 0이고 `ard/quality-gate`와 `ard/changeset`이 정확한 PR head에서 성공해야 병합할 수 있습니다. candidate PDF라면 추가로 `validation-report.json`이 `status=verified`, `publishable=true`여야 하며, `WARN`은 validation이 계속 `verified`인 경우에만 병합할 수 있습니다.

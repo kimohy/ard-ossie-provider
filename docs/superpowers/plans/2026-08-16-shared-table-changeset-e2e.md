@@ -4,7 +4,7 @@
 
 **Goal:** Prove the production shared-table changeset lifecycle across two durable synthetic products, including exact-head readiness, atomic release after the final product merge, and later independent clearing of each active changeset binding.
 
-**Architecture:** First repair the two lifecycle edges that the production sequence depends on: reusing a retained coordination branch after its first PR has merged, and treating future readiness versions as an all-or-nothing release no-op. Land those fixes through the repository code gate before touching production data. Then use only the public Issue intake and changeset coordinator workflows to create the second product, coordinate one semantic-only table change, publish the final atomic release, clear the active bindings, and record immutable evidence.
+**Architecture:** First repair the two lifecycle edges that the production sequence depends on: reusing a retained coordination branch after its first PR has merged, and treating future readiness versions as an all-or-nothing release no-op. Land those fixes through the repository code gate before touching production data. Then use only the private Issue intake and changeset coordinator workflows to create the second product, coordinate one semantic-only table change, publish the final atomic release, clear the active bindings, and record immutable evidence.
 
 **Tech Stack:** Python 3.12, pytest, Typer, Pydantic, GitHub Actions, `gh`, Git/GitHub commit statuses, Git LFS assets, `openpyxl`, `jq`, `curl`, Ruff, actionlint.
 

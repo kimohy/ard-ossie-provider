@@ -1,5 +1,9 @@
 # ARD Ossie Provider Repository Bootstrap Implementation Plan
 
+> **Superseded policy (2026-08-16):** Public visibility requirements in this historical plan are
+> replaced by the private repository and Issue intake contract in
+> `docs/superpowers/specs/2026-08-16-private-repository-issue-intake-auth-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Publish the approved ARD Ossie architecture and repository governance files to the empty `kimohy/ard-ossie-provider` GitHub repository.

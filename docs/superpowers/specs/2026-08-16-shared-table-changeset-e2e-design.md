@@ -125,7 +125,7 @@ The target table schema hash remains unchanged and its canonical hash changes. T
 
 ### Phase A: seed the second product
 
-1. Materialize and verify the baseline LFS sources, then upload the three synthetic source files to a new public ARD Issue for product key `500138302`.
+1. Materialize and verify the baseline LFS sources, then upload the three synthetic source files to a new private ARD Issue for product key `500138302`.
 2. Submit operation `create`, version `1`, the distinct product metadata, an empty Existing product ID, and an empty Changeset ID.
 3. Apply `ard:approved` only after the Issue body and immutable GitHub attachments match the approved payload.
 4. Let the trusted Issue intake and processor author the new product branch, source tree, config, and generated artifacts.
