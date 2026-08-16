@@ -23,14 +23,15 @@ from ard_ossie.github_event import (
     validate_attachment_url,
 )
 
-ATTACHMENT_URL = (
-    "https://github.com/user-attachments/assets/"
-    "11111111-1111-1111-1111-111111111111"
-)
+ATTACHMENT_URL = "https://github.com/user-attachments/assets/11111111-1111-1111-1111-111111111111"
 FILE_ATTACHMENT_URL = (
-    "https://github.com/user-attachments/files/"
-    "30932953/Marketing.Insight.Data.Dictionary.xlsx"
+    "https://github.com/user-attachments/files/30932953/Marketing.Insight.Data.Dictionary.xlsx"
 )
+
+
+@pytest.fixture(autouse=True)
+def private_attachment_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARD_ATTACHMENT_TOKEN", "fixture-attachment-token")
 
 
 def issue_body() -> str:
@@ -259,6 +260,71 @@ def test_download_accepts_canonical_github_file_upload_redirect(tmp_path: Path) 
     assert target.is_file()
 
 
+def test_download_requires_attachment_token_before_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(404)
+
+    monkeypatch.delenv("ARD_ATTACHMENT_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "must-not-be-used")
+    attachment = IntakeAttachment(
+        role="dictionary_excel",
+        filename="dictionary.xlsx",
+        url=FILE_ATTACHMENT_URL,
+    )
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(AttachmentSecurityError, match="ATTACHMENT_TOKEN_REQUIRED"),
+    ):
+        download_attachment(attachment, tmp_path / "dictionary.xlsx", client=client)
+
+    assert called is False
+
+
+def test_download_explicit_attachment_token_overrides_environment_and_client_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b"<!doctype html><html><body>private product</body></html>",
+        )
+
+    monkeypatch.setenv("ARD_ATTACHMENT_TOKEN", "environment-attachment-token")
+    monkeypatch.setenv("GH_TOKEN", "must-not-be-used")
+    attachment = IntakeAttachment(
+        role="product_html",
+        filename="product.html",
+        url=ATTACHMENT_URL,
+    )
+    target = tmp_path / "product.html"
+    with httpx.Client(
+        transport=httpx.MockTransport(handler),
+        headers={"Authorization": "Bearer client-default"},
+        auth=httpx.BasicAuth("client-user", "client-password"),
+    ) as client:
+        result = download_attachment(
+            attachment,
+            target,
+            client=client,
+            attachment_token="explicit-attachment-token",
+        )
+
+    assert result.size_bytes == target.stat().st_size
+    assert requests[0].headers["authorization"] == "Bearer explicit-attachment-token"
+
+
 @pytest.mark.parametrize(
     "storage_url",
     [
@@ -290,7 +356,8 @@ def test_download_authenticates_github_without_leaking_credentials_to_storage(
             content=buffer.getvalue(),
         )
 
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv("ARD_ATTACHMENT_TOKEN", "environment-attachment-token")
+    monkeypatch.setenv("GH_TOKEN", "must-not-be-used")
     attachment = IntakeAttachment(
         role="dictionary_excel",
         filename="dictionary.xlsx",
@@ -305,7 +372,7 @@ def test_download_authenticates_github_without_leaking_credentials_to_storage(
         result = download_attachment(attachment, target, client=client)
 
     assert result.size_bytes == len(buffer.getvalue())
-    assert requests[0].headers["authorization"] == "Bearer workflow-token"
+    assert requests[0].headers["authorization"] == "Bearer environment-attachment-token"
     assert "authorization" not in requests[1].headers
 
 
@@ -381,9 +448,7 @@ def test_download_rejects_mutable_github_redirect(tmp_path) -> None:
             return httpx.Response(
                 302,
                 headers={
-                    "location": (
-                        "https://raw.githubusercontent.com/acme/repo/main/dictionary.xlsx"
-                    )
+                    "location": ("https://raw.githubusercontent.com/acme/repo/main/dictionary.xlsx")
                 },
             )
         return httpx.Response(
