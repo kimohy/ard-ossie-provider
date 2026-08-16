@@ -18,6 +18,7 @@
 | immutable release와 dispatch | 완료 | [Marketing Insight v1](https://github.com/kimohy/ard-ossie-provider/releases/tag/product/prd_019ff10c-8be8-79d0-af07-21450abedf9e/v1), linkage success |
 | fresh-runner annotated tag identity | 완료 | [PR #39](https://github.com/kimohy/ard-ossie-provider/pull/39), merge `28f943d` |
 | 직접 브랜치 제품 v2 | 완료 | [검증 기록](acceptance/direct-branch-v2-verification.md), [제품 PR #43](https://github.com/kimohy/ard-ossie-provider/pull/43), merge `ba83203` |
+| 공개 Issue attachment 인증 경로 | 완료 | [정책 PR #48](https://github.com/kimohy/ard-ossie-provider/pull/48), merge `e285a6aa`, [Issue #46 성공 run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31977762165), [Draft 제품 PR #49](https://github.com/kimohy/ard-ossie-provider/pull/49) |
 
 ## Issue #3 acceptance 결과
 
@@ -37,6 +38,25 @@ Issue #3은 조직 정책을 준수하는 합성 Marketing Insight 제품으로 
 - 동일 release 재실행은 asset `noop`, 동일 dispatch는 status `noop`
 
 Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니다. 처리 실패나 Draft PR 생성 시점에 닫는 것은 완료 조건이 아닙니다.
+
+## Issue #46 공개 attachment-auth acceptance 결과
+
+현재 GitHub.com 저장소를 공개 상태로 복원하면서, 향후 private GitHub Enterprise 이전에 재검증할 격리된 attachment 인증 경로를 실제 합성 Issue로 확인했습니다.
+
+- [정책 PR #48](https://github.com/kimohy/ard-ossie-provider/pull/48)은 exact head `dfaaedf562ce8d680f4bb15a58abb22c7d6ab4db`에서 필수 체크 7개를 통과한 뒤 merge commit `e285a6aa83e0c16b9ed50b02a54a3989667dbcca`로 병합했습니다.
+- 저장소 read-back은 `public`, unarchived, default branch `main`, 관리자 권한을 확인했습니다.
+- `ARD_ATTACHMENT_TOKEN`은 `ard-private-intake` Environment에만 존재하며 metadata update timestamp는 `2026-08-16T22:32:49Z`입니다. Secret 값과 signed attachment URL은 기록하지 않았습니다.
+- `ard-private-intake`, `ard-llm`, `production-linkage` Environment는 각각 정확한 `main` branch policy 하나만 가집니다. `ard-private-intake`에는 reviewer가 없고, `ard-llm`과 `production-linkage`에는 `kimohy` required reviewer가 있습니다.
+- `main` protection은 strict `ard/changeset`·`ard/quality-gate`, admin enforcement, PR 필수, conversation resolution 필수이며 force push와 deletion은 비활성화되어 있습니다. 현재 required approving review count는 `0`입니다.
+- Issue #46은 공개 게시 동의가 체크된 합성 Campaign Governance Monitor 입력이며 실제 고객, 계정, 플랫폼, 조직 또는 운영 수치를 포함하지 않습니다.
+- `ard:approved`를 재적용한 [acceptance run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31977762165)은 merge SHA `e285a6aa83e0c16b9ed50b02a54a3989667dbcca`에서 authorization, routing, authenticated intake, protected LLM validation, processing, finalization을 모두 통과했습니다.
+- 결과 [Draft 제품 PR #49](https://github.com/kimohy/ard-ossie-provider/pull/49)는 branch `ard/issue-46-500138302`, exact head `6dd313c18eb3cc2944815613f030f83e82599f95`에서 생성됐고 `ard/changeset`과 `ard/quality-gate`가 모두 통과했습니다. Issue #46 최종 라벨은 `ard:submission`, `ard:approved`, `ard:pr-created`이며 과거 `ard:failed`는 제거됐습니다.
+- intake가 고정한 source SHA-256은 다음과 같습니다.
+  - `dictionary/dictionary.xlsx`: `10310e99c8a76b4b030935c432e6f879ac4c56361ee4a6d52d6a17b2726c306a`
+  - `product-info/product.html`: `b39248654c0cd9b6f3f28111a6c44036d86a2440a1d7dc2c9bfd7bd40281d7f9`
+  - `semantic/semantic.pdf`: `ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6`
+
+Enterprise 이전 시에는 현재 성공을 그대로 전제하지 않고 private visibility, attachment host와 credential 전달, Environment·reusable workflow Secret, branch/ruleset, Actions runner·API·LFS·Release 동작을 mutation-free read-back부터 다시 검증합니다.
 
 ## 다음 우선순위
 
@@ -88,6 +108,7 @@ Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니�
 - [x] Issue 기반 `v1` 생성, 검증, 병합, immutable release, downstream dispatch
 - [x] LLM 저신뢰·공백·heading·unsafe optional metric의 감사 가능한 처리
 - [x] 직접 브랜치 `v2` 업데이트
+- [x] 공개 Issue attachment 인증과 Enterprise 이전 경계 검증
 - [ ] shared-table changeset E2E
 - [ ] 1인 review protection과 운영 장애 훈련
 - [ ] representative PDF 안정화 표본과 운영 지표
