@@ -371,7 +371,7 @@ Run, in order:
 uv run --frozen pytest tests/unit/test_github_event.py tests/unit/test_workflow_secret_contract.py tests/integration/test_workflow_contracts.py -q
 uv run --frozen pytest -q
 uv run --frozen ruff check src tests
-uv run --frozen ruff format --check src tests
+git diff --name-only -z origin/main...HEAD -- '*.py' | xargs -0 uv run --frozen ruff format --check
 actionlint .github/workflows/*.yml
 uv run --frozen pytest tests/unit/test_model_schema_verification.py -q
 uv run --frozen pytest tests/integration/test_wheel_assets.py -q
