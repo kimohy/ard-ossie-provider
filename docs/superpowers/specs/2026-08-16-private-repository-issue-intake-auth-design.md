@@ -132,10 +132,10 @@ short supersession note rather than having their historical steps silently rewri
 ## Bootstrap ownership and convergence
 
 `ard github bootstrap` remains the repeatable desired-state command for the repository's existing
-Actions settings, `ard-llm` and `production-linkage` Environments, branch protection, Variables,
-and labels. Its repository precondition requires the exact private `kimohy/ard-ossie-provider`
-repository with `main` as the unarchived default branch and admin permission. It must reject a
-public repository rather than treating public and private visibility as interchangeable.
+Actions settings, `ard-llm` and `production-linkage` Environments, Variables, and labels. Its
+repository precondition requires the exact private `kimohy/ard-ossie-provider` repository with
+`main` as the unarchived default branch and admin permission. It must reject a public repository
+rather than treating public and private visibility as interchangeable.
 
 Bootstrap converges the two intake labels to the private contract:
 
@@ -149,6 +149,22 @@ policy. The private-auth rollout creates the Environment, restricts it to the si
 policy, provisions `ARD_ATTACHMENT_TOKEN` through hidden input, and verifies metadata separately.
 Bootstrap must neither delete nor mutate this Environment. The Actions setup and Enterprise
 migration guides state this ownership boundary explicitly.
+
+The repository remains on GitHub Free. GitHub's
+[protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+and
+[ruleset](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets)
+availability contracts do not provide either feature to private repositories on this plan; both
+require GitHub Pro, Team, or Enterprise. Bootstrap therefore does not read, plan, create, update,
+or verify `main` branch protection. `branch:main` is absent from its desired-state plan, and the
+current operating guide does not invoke `ard github enable-review-protection`. Upgrading the account
+and restoring platform-enforced branch protection requires a separate reviewed policy change.
+
+This is an explicit reduction in enforcement, not an equivalent substitute. GitHub cannot prevent
+direct pushes, require pull requests, or enforce the two status checks before merge. Operators must
+instead avoid direct pushes, review the exact PR head, observe successful `ard/quality-gate` and
+`ard/changeset` checks, and merge only with an exact-head guard. Automation continues to publish
+statuses and validate exact heads, but those signals are advisory under this plan.
 
 ## Failure and rotation behavior
 
@@ -191,13 +207,15 @@ independently recorded source.
   insufficient permission is rejected before mutation.
 - Bootstrap desired labels use the two private descriptions and do not restore public wording.
 - Bootstrap does not inspect, create, update, or delete `ard-private-intake` or its Secret.
+- Bootstrap plans no `branch:main` item and makes no branch-protection read or write call.
 
 ### Documentation and live acceptance
 
 - Search active contracts and user-facing copy for stale claims that the repository or submission
   is public.
 - Run focused tests, the complete local suite, static checks, schema verification, and wheel build.
-- Land the change through a reviewed PR with required checks at the exact head.
+- Land the change through a reviewed PR after observing successful checks at the exact head; the
+  GitHub Free private repository cannot enforce those checks as merge requirements.
 - Create `ard-private-intake`, restrict it to `main`, provision the classic PAT without exposing its
   value, and read back only secret metadata and Environment policy.
 - Retry Issue #46 and require exact attachment hashes, Draft PR creation, processing success, and
