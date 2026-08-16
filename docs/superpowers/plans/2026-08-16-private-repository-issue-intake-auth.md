@@ -315,18 +315,20 @@ pytest, wheel, and finalizer success at that same head.
 - [ ] **Step 1: Create the Environment before merge**
 
 Use `gh api` to PUT `repos/kimohy/ard-ossie-provider/environments/ard-private-intake` with
-`wait_timer=0`, `prevent_self_review=false`, protected branches false, and custom branch policies
-true. POST one deployment branch policy with `name=main` and `type=branch`. Read it back and require
-no reviewer/wait rule and exactly one `main` policy.
+no reviewer or wait-timer rule, protected branches false, and custom branch policies true. POST one
+deployment branch policy with `name=main` and `type=branch`. Read it back and require that
+`branch_policy` is the only protection rule and exactly one `main` policy exists. Omitting the
+reviewer and timer fields avoids requesting unsupported private-repository protection rules while
+preserving the intended zero-reviewer, zero-wait contract.
 
 ```text
-gh api --method PUT repos/kimohy/ard-ossie-provider/environments/ard-private-intake \
-  -F wait_timer=0 -F prevent_self_review=false \
+gh api --method PUT \
   -F 'deployment_branch_policy[protected_branches]=false' \
-  -F 'deployment_branch_policy[custom_branch_policies]=true'
+  -F 'deployment_branch_policy[custom_branch_policies]=true' \
+  repos/kimohy/ard-ossie-provider/environments/ard-private-intake
 gh api --method POST \
-  repos/kimohy/ard-ossie-provider/environments/ard-private-intake/deployment-branch-policies \
-  -f name=main -f type=branch
+  -f name=main -f type=branch \
+  repos/kimohy/ard-ossie-provider/environments/ard-private-intake/deployment-branch-policies
 gh api repos/kimohy/ard-ossie-provider/environments/ard-private-intake
 gh api repos/kimohy/ard-ossie-provider/environments/ard-private-intake/deployment-branch-policies
 ```
