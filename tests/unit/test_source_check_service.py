@@ -77,7 +77,7 @@ class FakeGitHub:
         self.created = 0
         self.remote_sha = SHA
 
-    def branch_sha(self, branch: str) -> str:
+    def branch_sha(self, branch: str) -> str | None:
         return self.remote_sha
 
     def find_open_pr(self, branch: str) -> PullRequestState | None:

@@ -205,6 +205,12 @@ def test_branch_sha_uses_authenticated_api_for_slash_branch() -> None:
     )
 
 
+def test_branch_sha_returns_none_when_branch_disappears() -> None:
+    runner = RecordingRunner([not_found()])
+
+    assert GitHubCli(REPOSITORY, runner).branch_sha("acceptance/example") is None
+
+
 def test_set_status_targets_exact_repository_and_sha() -> None:
     """A status written to a moving branch instead of the exact SHA would be unsafe."""
     runner = RecordingRunner([ok({"id": 9})])
