@@ -588,7 +588,7 @@ def _detect_product_service(paths):
     from ard_ossie.adapters.git_cli import GitCli
     from ard_ossie.adapters.subprocess import SubprocessRunner
 
-    return DetectProductService(GitCli(paths.root, SubprocessRunner(), paths=paths))
+    return DetectProductService(paths, GitCli(paths.root, SubprocessRunner(), paths=paths))
 
 
 def _source_check_service(paths, *, require_llm: bool = False):

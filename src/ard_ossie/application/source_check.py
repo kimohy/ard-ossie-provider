@@ -35,7 +35,8 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 class DetectProductService:
-    def __init__(self, git: GitPort) -> None:
+    def __init__(self, paths: FileSystemPort, git: GitPort) -> None:
+        self.paths = paths
         self.git = git
 
     def run(self, base_ref: str, head_ref: str = "HEAD") -> WorkflowResult:
@@ -60,6 +61,7 @@ class DetectProductService:
 
         products: set[str] = set()
         marker_products: set[str] = set()
+        marker_names: dict[str, set[str]] = {}
         config_products: set[str] = set()
         for path in data_paths:
             parts = path.parts
@@ -78,7 +80,7 @@ class DetectProductService:
             if not (is_source or is_marker or is_config):
                 raise WorkflowValidationError(
                     "DIRECT_CHANGE_PATH_NOT_ALLOWED",
-                    "direct ARD changes are limited to one product source tree and marker",
+                    "direct ARD changes are limited to one product config, source tree, and marker",
                 )
             if not _PRODUCT_KEY.fullmatch(parts[1]):
                 raise WorkflowValidationError(
@@ -89,6 +91,7 @@ class DetectProductService:
                 products.add(parts[1])
             elif is_marker:
                 marker_products.add(parts[1])
+                marker_names.setdefault(parts[1], set()).add(parts[3])
             else:
                 config_products.add(parts[1])
         if len(products) > 1:
@@ -101,13 +104,24 @@ class DetectProductService:
                 "CHANGESET_MARKER_PRODUCT_MISMATCH",
                 "changeset marker must accompany sources for the same product",
             )
-        if config_products and (
-            config_products != products or config_products != marker_products
-        ):
+        if config_products and config_products != products:
             raise WorkflowValidationError(
                 "CHANGESET_CONFIG_PRODUCT_MISMATCH",
-                "product config may change only with its canonical changeset marker",
+                "product config must accompany sources for the same product",
             )
+        for product_key in marker_products:
+            product = self.paths.resolve_read(Path("products") / product_key)
+            changeset_id = validate_changeset_binding(
+                self.paths,
+                product,
+                product_key,
+                require_active=True,
+            )
+            if marker_names[product_key] != {f"{changeset_id}.json"}:
+                raise WorkflowSecurityError(
+                    "CHANGESET_MARKER_BINDING_MISMATCH",
+                    "changed marker must match the active product changeset binding",
+                )
 
         outputs: dict[str, object] = {
             "expected_head": self.git.current_sha(),
@@ -270,6 +284,8 @@ def validate_changeset_binding(
     paths: FileSystemPort,
     product: Path,
     product_key: str,
+    *,
+    require_active: bool = False,
 ) -> str | None:
     try:
         config = yaml.safe_load(
@@ -288,13 +304,13 @@ def validate_changeset_binding(
     changeset_id = config.get("changeset_id")
     marker_root = product / "changesets"
     markers = sorted(marker_root.glob("cst_*.json")) if marker_root.is_dir() else []
-    if not markers and not changeset_id:
-        return None
     if not isinstance(changeset_id, str) or not changeset_id:
-        raise WorkflowSecurityError(
-            "CHANGESET_BINDING_REQUIRED",
-            "tracking marker requires product config changeset binding",
-        )
+        if require_active:
+            raise WorkflowSecurityError(
+                "CHANGESET_BINDING_REQUIRED",
+                "changed tracking marker requires product config changeset binding",
+            )
+        return None
     marker_path = marker_root / f"{changeset_id}.json"
     if marker_path not in markers:
         raise WorkflowSecurityError(
