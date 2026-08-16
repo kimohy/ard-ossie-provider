@@ -1,14 +1,14 @@
 {
   "metrics": [
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_campaign"
       ],
-      "description": "Count of synthetic campaigns.",
+      "description": "Count of distinct synthetic campaigns.",
       "evidence": [
         {
-          "excerpt": "캠페인 수 (Campaign Count) | 가상 캠페인의 수 | COUNT(DISTINCT campaign_id)",
+          "excerpt": "캠페인 수 (Campaign Count)\t가상 캠페인의 수\tCOUNT(DISTINCT campaign_id)\t건\tmarketing_campaign.campaign_id",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -31,14 +31,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_campaign"
       ],
-      "description": "Count of synthetic campaigns with Active status.",
+      "description": "Count of distinct campaigns whose status is Active.",
       "evidence": [
         {
-          "excerpt": "활성 캠페인 수 (Active Campaign Count) | Active 상태의 가상 캠페인 수 | COUNT(DISTINCT campaign_id) WHERE campaign_status = Active",
+          "excerpt": "활성 캠페인 수 (Active Campaign Count)\tActive 상태의 가상 캠페인 수\tCOUNT(DISTINCT campaign_id) WHERE campaign_status = Active",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -61,14 +61,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_creative"
       ],
-      "description": "Count of synthetic advertising creatives.",
+      "description": "Count of distinct synthetic advertising creatives.",
       "evidence": [
         {
-          "excerpt": "소재 수 (Creative Count) | 가상 광고 소재 수 | COUNT(DISTINCT creative_id)",
+          "excerpt": "소재 수 (Creative Count)\t가상 광고 소재 수\tCOUNT(DISTINCT creative_id)\t건\tmarketing_creative.creative_id",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -91,14 +91,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_delivery"
       ],
-      "description": "Total synthetic advertising impressions.",
+      "description": "Sum of synthetic advertising impressions.",
       "evidence": [
         {
-          "excerpt": "노출 수 (Impressions) | 가상 광고 노출 합계 | SUM(impression_count)",
+          "excerpt": "노출 수 (Impressions)\t가상 광고 노출 합계\tSUM(impression_count)\t회\tmarketing_delivery.impression_count",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -122,14 +122,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_delivery"
       ],
-      "description": "Total synthetic advertising engagements.",
+      "description": "Sum of synthetic advertising engagements.",
       "evidence": [
         {
-          "excerpt": "반응 수 (Engagements) | 가상 광고 반응 합계 | SUM(engagement_count)",
+          "excerpt": "반응 수 (Engagements)\t가상 광고 반응 합계\tSUM(engagement_count)\t회\tmarketing_delivery.engagement_count",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -153,14 +153,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_delivery"
       ],
       "description": "Ratio of engagements to impressions; returns NULL when impressions are zero.",
       "evidence": [
         {
-          "excerpt": "반응률 (Engagement Rate) | 노출 대비 반응 비율 | SUM(engagement_count) / NULLIF(SUM(impression_count),0)",
+          "excerpt": "반응률 (Engagement Rate)\t노출 대비 반응 비율\tSUM(engagement_count) / NULLIF(SUM(impression_count),0)",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -183,14 +183,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_delivery"
       ],
-      "description": "Total simulated spend units.",
+      "description": "Sum of simulated spend units.",
       "evidence": [
         {
-          "excerpt": "집행 비용 단위 (Spend Units) | 시뮬레이션 비용 합계 | SUM(spend_units)",
+          "excerpt": "집행 비용 단위 (Spend Units)\t시뮬레이션 비용 합계\tSUM(spend_units)\tunit\tmarketing_delivery.spend_units",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -213,14 +213,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_delivery"
       ],
-      "description": "Simulated spend units per engagement; returns NULL when engagements are zero.",
+      "description": "Simulated spend units per engagement; returns NULL when engagement count is zero.",
       "evidence": [
         {
-          "excerpt": "반응당 비용 단위 (Cost per Engagement) | 반응 1 건당 시뮬레이션 비용 | SUM(spend_units) / NULLIF(SUM(engagement_count),0)",
+          "excerpt": "반응당 비용 단위 (Cost per Engagement)\t반응 1 건당 시뮬레이션 비용\tSUM(spend_units) / NULLIF(SUM(engagement_count),0)",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -243,14 +243,14 @@
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_outcome"
       ],
-      "description": "Total synthetic interest signals.",
+      "description": "Sum of synthetic interest signals.",
       "evidence": [
         {
-          "excerpt": "관심 신호 수 (Interest Signals) | 가상 관심 신호 합계 | SUM(interest_signal_count)",
+          "excerpt": "관심 신호 수 (Interest Signals)\t가상 관심 신호 합계\tSUM(interest_signal_count)\t회\tmarketing_outcome",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -269,19 +269,18 @@
       "name": "Interest Signals",
       "status": "ai_suggested",
       "synonyms": [
-        "관심 신호 수",
-        "Interest Event"
+        "관심 신호 수"
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_outcome"
       ],
-      "description": "Total synthetic action signals.",
+      "description": "Sum of synthetic action signals.",
       "evidence": [
         {
-          "excerpt": "행동 신호 수 (Action Signals) | 가상 행동 신호 합계 | SUM(action_signal_count)",
+          "excerpt": "행동 신호 수 (Action Signals)\t가상 행동 신호 합계\tSUM(action_signal_count)\t회\tmarketing_outcome",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -300,19 +299,18 @@
       "name": "Action Signals",
       "status": "ai_suggested",
       "synonyms": [
-        "행동 신호 수",
-        "Outcome Signal"
+        "행동 신호 수"
       ]
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "dataset_names": [
         "marketing_outcome"
       ],
-      "description": "Total modeled value units generated for comparison.",
+      "description": "Sum of modeled, non-monetary value units.",
       "evidence": [
         {
-          "excerpt": "가상 가치 단위 (Modeled Value Units) | 설명용 가상 가치 합계 | SUM(modeled_value_units)",
+          "excerpt": "가상 가치 단위 (Modeled Value Units)\t설명용 가상 가치 합계\tSUM(modeled_value_units)\tunit\tmarketing_outcome",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -331,8 +329,7 @@
       "name": "Modeled Value Units",
       "status": "ai_suggested",
       "synonyms": [
-        "가상 가치 단위",
-        "Synthetic Value"
+        "가상 가치 단위"
       ]
     }
   ],
@@ -348,7 +345,7 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "description",
@@ -365,7 +362,7 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "source_name",
@@ -382,7 +379,7 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "data_type",
@@ -399,7 +396,7 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "storage_location",
@@ -416,62 +413,11 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "tag",
-      "value": "가상 캠페인"
-    },
-    {
-      "confidence": 0.99,
-      "evidence": [
-        {
-          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
-          "locator": {
-            "document": "product-info/product.html",
-            "item_index": 57,
-            "level": 5
-          },
-          "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
-        }
-      ],
-      "kind": "tag",
-      "value": "광고 소재"
-    },
-    {
-      "confidence": 0.99,
-      "evidence": [
-        {
-          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
-          "locator": {
-            "document": "product-info/product.html",
-            "item_index": 57,
-            "level": 5
-          },
-          "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
-        }
-      ],
-      "kind": "tag",
-      "value": "집행 신호"
-    },
-    {
-      "confidence": 0.99,
-      "evidence": [
-        {
-          "excerpt": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호",
-          "locator": {
-            "document": "product-info/product.html",
-            "item_index": 57,
-            "level": 5
-          },
-          "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
-        }
-      ],
-      "kind": "tag",
-      "value": "성과 신호"
+      "value": "가상 캠페인, 광고 소재, 집행 신호, 성과 신호"
     },
     {
       "confidence": 0.99,
@@ -484,7 +430,7 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "ai_readiness",
@@ -501,7 +447,7 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "owner",
@@ -518,7 +464,7 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "contact",
@@ -528,6 +474,23 @@
       "confidence": 0.97,
       "evidence": [
         {
+          "excerpt": "손님 이상",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 35,
+            "level": 6
+          },
+          "role": "product_html",
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
+        }
+      ],
+      "kind": "access",
+      "value": "손님 이상"
+    },
+    {
+      "confidence": 0.96,
+      "evidence": [
+        {
           "excerpt": "Y",
           "locator": {
             "document": "product-info/product.html",
@@ -535,15 +498,8 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
-        }
-      ],
-      "kind": "access",
-      "value": "접근 권한 관리 여부: Y"
-    },
-    {
-      "confidence": 0.97,
-      "evidence": [
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
+        },
         {
           "excerpt": "Y",
           "locator": {
@@ -552,15 +508,8 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
-        }
-      ],
-      "kind": "quality",
-      "value": "운영 관리 여부: Y"
-    },
-    {
-      "confidence": 0.97,
-      "evidence": [
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
+        },
         {
           "excerpt": "Y",
           "locator": {
@@ -569,16 +518,33 @@
             "level": 5
           },
           "role": "product_html",
-          "source_hash": "ca83db1d3a58ee14ddea872e55f4132ea268541b36841c2c164e651c3ff8b987"
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
         }
       ],
       "kind": "quality",
-      "value": "메타 데이터 보유 여부: Y"
+      "value": "접근 권한 관리 여부 Y, 운영 관리 여부 Y, 메타 데이터 보유 여부 Y"
+    },
+    {
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "excerpt": "Synthetic Marketing Insight 모든 명칭·수치·규칙은 가상 예시이며 실제 고객·플랫폼·조직 데이터가 아닙니다. [ 데이터 메타 정보 및 스펙 ]",
+          "locator": {
+            "document": "product-info/product.html",
+            "item_index": 46,
+            "level": 5
+          },
+          "role": "product_html",
+          "source_hash": "ce2f8db06d307f10010c0a2509f8f65b2e89b375eaeb0555bc8565d553407e2d"
+        }
+      ],
+      "kind": "constraint",
+      "value": "모든 명칭·수치·규칙은 가상 예시이며 실제 고객·플랫폼·조직 데이터가 아닙니다."
     }
   ],
   "suggestions": [
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "evidence": [
         {
           "excerpt": "본 문서는 Marketing Insight 도메인의 AI-Ready Data Semantics 정의서이며, AI Agent가 합성 데이터를 실제 운영 데이터로 오해하지 않도록 업무 맥락과 용어의 의미를 정의합니다.",
@@ -613,13 +579,13 @@
       ],
       "field_path": "product.description",
       "status": "ai_suggested",
-      "value": "AI Agent가 합성 데이터를 실제 운영 데이터로 오해하지 않도록 정의된 Marketing Insight 도메인의 AI-Ready 데이터입니다. 가상 캠페인, 광고 소재, 집행 집계 및 성과 신호를 다룹니다."
+      "value": "Marketing Insight의 가상 캠페인, 광고 소재, 집행 집계 및 성과 신호를 설명하는 AI-Ready 합성 마케팅 데이터입니다. 실제 운영 데이터로 해석하지 않도록 업무 맥락과 용어를 정의합니다."
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "evidence": [
         {
-          "excerpt": "관련 키워드 | 가상 캠페인, 광고 소재, 집행 신호, 성과 신호, 합성 데이터",
+          "excerpt": "도메인\tMarketing Insight\n관련 키워드\t가상 캠페인, 광고 소재, 집행 신호, 성과 신호, 합성 데이터",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -648,7 +614,7 @@
       "confidence": 0.99,
       "evidence": [
         {
-          "excerpt": "synthetic_workspace.marketing_campaign | 가상 캠페인 기획 및 상태 데이터 | campaign_id",
+          "excerpt": "synthetic_workspace.marketing_campaign\t가상 캠페인 기획 및 상태 데이터\tcampaign_id\t-",
           "locator": {
             "bbox": null,
             "charspan": null,
@@ -665,20 +631,20 @@
       ],
       "field_path": "tables.tbl_01a00585-94b8-7e49-ac43-97e00a165e26.description",
       "status": "ai_suggested",
-      "value": "가상 캠페인 기획 및 상태 데이터."
+      "value": "가상 캠페인 기획 및 상태 데이터입니다."
     },
     {
       "confidence": 0.99,
       "evidence": [
         {
-          "excerpt": "캠페인 (Campaign) | 공통 목표와 기간을 갖는 가상 광고 기획 단위. campaign_id로 식별. | Initiative | marketing_campaign",
+          "excerpt": "Campaign\tcampaign_id 당 1행\tcampaign_id",
           "locator": {
             "bbox": null,
             "charspan": null,
             "document": "semantic/semantic.pdf",
             "item_index": null,
             "level": null,
-            "page": 2,
+            "page": 3,
             "range": null,
             "sheet": null
           },
@@ -688,20 +654,20 @@
       ],
       "field_path": "tables.tbl_01a00585-94b8-7e49-ac43-97e00a165e26.columns.col_01a00585-94b8-712a-b30c-48a2c504a7a7.description",
       "status": "ai_suggested",
-      "value": "가상 광고 기획 단위인 캠페인을 식별하는 고유 ID."
+      "value": "가상 캠페인을 식별하는 키입니다."
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "evidence": [
         {
-          "excerpt": "목표 유형 (Objective Type) | Awareness, Interest, Action으로 구성한 추상 목표 분류. | Goal Group | marketing_campaign",
+          "excerpt": "캠페인 기간\tend_date는 start_date보다 같거나 늦어야 한다.",
           "locator": {
             "bbox": null,
             "charspan": null,
             "document": "semantic/semantic.pdf",
             "item_index": null,
             "level": null,
-            "page": 2,
+            "page": 4,
             "range": null,
             "sheet": null
           },
@@ -709,22 +675,22 @@
           "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
         }
       ],
-      "field_path": "tables.tbl_01a00585-94b8-7e49-ac43-97e00a165e26.columns.col_01a00585-94b8-7ec5-847e-084ae94a3c0b.description",
+      "field_path": "tables.tbl_01a00585-94b8-7e49-ac43-97e00a165e26.columns.col_01a00585-94b8-74ab-a4e8-3f391d64960d.description",
       "status": "ai_suggested",
-      "value": "Awareness, Interest, Action으로 구성된 추상 목표 분류."
+      "value": "캠페인의 시작일입니다."
     },
     {
-      "confidence": 0.99,
+      "confidence": 0.98,
       "evidence": [
         {
-          "excerpt": "채널 그룹 (Channel Group) | Search, Social, Video, Display로 구성한 추상 채널 그룹. | Media Group | marketing_campaign",
+          "excerpt": "캠페인 기간\tend_date는 start_date보다 같거나 늦어야 한다.",
           "locator": {
             "bbox": null,
             "charspan": null,
             "document": "semantic/semantic.pdf",
             "item_index": null,
             "level": null,
-            "page": 2,
+            "page": 4,
             "range": null,
             "sheet": null
           },
@@ -732,9 +698,32 @@
           "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
         }
       ],
-      "field_path": "tables.tbl_01a00585-94b8-7e49-ac43-97e00a165e26.columns.col_01a00585-94b8-7f4b-a04c-d472e8fbfba1.description",
+      "field_path": "tables.tbl_01a00585-94b8-7e49-ac43-97e00a165e26.columns.col_01a00585-94b8-7515-a5b1-63a507e3db76.description",
       "status": "ai_suggested",
-      "value": "Search, Social, Video, Display로 구성된 추상 채널 그룹."
+      "value": "캠페인의 종료일이며 start_date보다 같거나 늦어야 합니다."
+    },
+    {
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "excerpt": "상태 코드\t캠페인, 소재, 집행 상태는 정의된 가상 코드 집합만 사용한다.",
+          "locator": {
+            "bbox": null,
+            "charspan": null,
+            "document": "semantic/semantic.pdf",
+            "item_index": null,
+            "level": null,
+            "page": 4,
+            "range": null,
+            "sheet": null
+          },
+          "role": "semantic_document",
+          "source_hash": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6"
+        }
+      ],
+      "field_path": "tables.tbl_01a00585-94b8-7e49-ac43-97e00a165e26.columns.col_01a00585-94b8-7010-a4d4-9a09351a7ed9.description",
+      "status": "ai_suggested",
+      "value": "정의된 가상 코드 집합을 사용하는 캠페인 상태입니다."
     }
   ]
 }

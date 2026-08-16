@@ -1,45 +1,45 @@
 [
   {
-    "base_version": null,
+    "base_version": 1,
     "changed": true,
-    "code": "NEW_V1",
-    "current_version": null,
+    "code": "ADVANCE",
+    "current_version": 1,
+    "expected_version": 2,
+    "outcome": "ALLOW",
+    "proposed_version": 2
+  },
+  {
+    "base_version": 1,
+    "changed": false,
+    "code": "NO_CHANGE",
+    "current_version": 1,
     "expected_version": 1,
     "outcome": "ALLOW",
     "proposed_version": 1
   },
   {
-    "base_version": null,
-    "changed": true,
-    "code": "NEW_V1",
-    "current_version": null,
+    "base_version": 1,
+    "changed": false,
+    "code": "NO_CHANGE",
+    "current_version": 1,
     "expected_version": 1,
     "outcome": "ALLOW",
     "proposed_version": 1
   },
   {
-    "base_version": null,
-    "changed": true,
-    "code": "NEW_V1",
-    "current_version": null,
+    "base_version": 1,
+    "changed": false,
+    "code": "NO_CHANGE",
+    "current_version": 1,
     "expected_version": 1,
     "outcome": "ALLOW",
     "proposed_version": 1
   },
   {
-    "base_version": null,
-    "changed": true,
-    "code": "NEW_V1",
-    "current_version": null,
-    "expected_version": 1,
-    "outcome": "ALLOW",
-    "proposed_version": 1
-  },
-  {
-    "base_version": null,
-    "changed": true,
-    "code": "NEW_V1",
-    "current_version": null,
+    "base_version": 1,
+    "changed": false,
+    "code": "NO_CHANGE",
+    "current_version": 1,
     "expected_version": 1,
     "outcome": "ALLOW",
     "proposed_version": 1

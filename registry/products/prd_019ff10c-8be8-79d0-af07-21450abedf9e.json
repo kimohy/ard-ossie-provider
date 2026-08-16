@@ -1,6 +1,6 @@
 {
   "aliases": [],
-  "canonical_hash": "910d4a87ed6a6eb078f4286dc5e7c924bbf311d133bb11530b2f7d56ebb143d3",
+  "canonical_hash": "4226746f68eaeb1d12e710ff6561a25104abf0f733d456fa8d8656b77d5ff9fc",
   "display_name": "Marketing Insight",
   "metrics": [
     {
@@ -74,5 +74,5 @@
   "product_key": "500138301",
   "relationships": [],
   "status": "active",
-  "version": 1
+  "version": 2
 }
