@@ -29,10 +29,11 @@ class FakeGit:
         self.branch = "main"
         self.sha_counter = 0
         self.sha = "a" * 40
-        self.remote: dict[str, str] = {}
+        self.remote: dict[str, str] = {"main": "a" * 40}
         self.tracking_version = 1
         self.changed_override: tuple[Path, ...] | None = None
         self.ancestor_override = False
+        self.ancestor_args: tuple[str, str] | None = None
 
     def switch_or_create(self, branch: str, base_ref: str) -> None:
         self.branch = branch
@@ -69,6 +70,9 @@ class FakeGit:
         return ChangedPaths(merge_base="a" * 40, paths=paths)
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        self.ancestor_args = (ancestor, descendant)
+        assert len(ancestor) == 40
+        assert descendant == self.remote["main"]
         return self.ancestor_override
 
     def read_text_at(self, revision: str, path: str | Path) -> str:
@@ -238,6 +242,7 @@ def test_changeset_ready_reuses_merged_coordination_branch_with_empty_diff(
     service = ChangesetService(RepositoryPaths(tmp_path), git, github)
     service.run(create_request(tmp_path))
     coordination_branch = f"ard/changeset-{CHANGESET_ID}"
+    retained_coordination_head = git.remote[coordination_branch]
     tracking = github.prs[f"ard/{CHANGESET_ID}-sales-order"]
     github.prs.pop(coordination_branch)
     git.changed_override = ()
@@ -260,6 +265,7 @@ def test_changeset_ready_reuses_merged_coordination_branch_with_empty_diff(
     assert result.outputs["ready_count"] == 1
     assert github.created_pr_count == 4
     assert github.prs[coordination_branch].number == 4
+    assert git.ancestor_args == (retained_coordination_head, git.remote["main"])
 
 
 def test_changeset_ready_is_idempotent_for_same_head(tmp_path: Path) -> None:

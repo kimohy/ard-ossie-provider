@@ -346,8 +346,10 @@ class ChangesetService:
         changed = self.git.changed_paths(base_branch, existing_head)
         if set(changed.paths) == expected_paths:
             return
-        if not changed.paths and self.git.is_ancestor(existing_head, base_branch):
-            return
+        if not changed.paths:
+            base_head = self.git.remote_branch_sha(base_branch)
+            if base_head is not None and self.git.is_ancestor(existing_head, base_head):
+                return
         raise WorkflowSecurityError(
             code,
             "existing managed branch contains unexpected committed paths",
