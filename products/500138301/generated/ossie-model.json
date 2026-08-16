@@ -16,7 +16,7 @@
       },
       "custom_extensions": [
         {
-          "data": "{\"id\":\"prd_019ff10c-8be8-79d0-af07-21450abedf9e\",\"kind\":\"product\",\"namespace\":\"ai_ready_data\",\"version\":1}",
+          "data": "{\"id\":\"prd_019ff10c-8be8-79d0-af07-21450abedf9e\",\"kind\":\"product\",\"namespace\":\"ai_ready_data\",\"version\":2}",
           "vendor_name": "COMMON"
         }
       ],
@@ -809,7 +809,7 @@
           "source": "synthetic_workspace.marketing_insight.marketing_outcome"
         }
       ],
-      "description": "이 데이터는 가상 캠페인, 소재, 집행 및 성과 신호를 설명하기 위한 합성 데이터입니다. 실제 고객, 계정, 광고 플랫폼, 조직 또는 운영 수치를 포함하지 않으며, 상세 구조는 첨부된 Data Dictionary에서 확인할 수 있습니다.",
+      "description": "이 데이터는 가상 캠페인, 소재, 집행 및 성과 신호를 설명하고 캠페인 성과 탐색과 AI 분석 실습을 지원하는 합성 데이터입니다. 실제 고객, 계정, 광고 플랫폼, 조직 또는 운영 수치를 포함하지 않으며, 상세 구조는 첨부된 Data Dictionary에서 확인할 수 있습니다.",
       "metrics": [
         {
           "ai_context": {
@@ -824,7 +824,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Total synthetic advertising impressions.",
+          "description": "Sum of synthetic advertising impressions.",
           "expression": {
             "dialects": [
               {
@@ -847,7 +847,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Simulated spend units per engagement; returns NULL when engagements are zero.",
+          "description": "Simulated spend units per engagement; returns NULL when engagement count is zero.",
           "expression": {
             "dialects": [
               {
@@ -870,7 +870,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Count of synthetic campaigns.",
+          "description": "Count of distinct synthetic campaigns.",
           "expression": {
             "dialects": [
               {
@@ -916,7 +916,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Total simulated spend units.",
+          "description": "Sum of simulated spend units.",
           "expression": {
             "dialects": [
               {
@@ -940,7 +940,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Total synthetic advertising engagements.",
+          "description": "Sum of synthetic advertising engagements.",
           "expression": {
             "dialects": [
               {
@@ -963,7 +963,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Count of synthetic advertising creatives.",
+          "description": "Count of distinct synthetic advertising creatives.",
           "expression": {
             "dialects": [
               {
@@ -986,7 +986,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Count of synthetic campaigns with Active status.",
+          "description": "Count of distinct campaigns whose status is Active.",
           "expression": {
             "dialects": [
               {
@@ -1000,8 +1000,7 @@
         {
           "ai_context": {
             "synonyms": [
-              "행동 신호 수",
-              "Outcome Signal"
+              "행동 신호 수"
             ]
           },
           "custom_extensions": [
@@ -1010,7 +1009,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Total synthetic action signals.",
+          "description": "Sum of synthetic action signals.",
           "expression": {
             "dialects": [
               {
@@ -1024,8 +1023,7 @@
         {
           "ai_context": {
             "synonyms": [
-              "관심 신호 수",
-              "Interest Event"
+              "관심 신호 수"
             ]
           },
           "custom_extensions": [
@@ -1034,7 +1032,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Total synthetic interest signals.",
+          "description": "Sum of synthetic interest signals.",
           "expression": {
             "dialects": [
               {
@@ -1048,8 +1046,7 @@
         {
           "ai_context": {
             "synonyms": [
-              "가상 가치 단위",
-              "Synthetic Value"
+              "가상 가치 단위"
             ]
           },
           "custom_extensions": [
@@ -1058,7 +1055,7 @@
               "vendor_name": "COMMON"
             }
           ],
-          "description": "Total modeled value units generated for comparison.",
+          "description": "Sum of modeled, non-monetary value units.",
           "expression": {
             "dialects": [
               {

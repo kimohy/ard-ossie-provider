@@ -191,6 +191,26 @@ def test_find_open_pr_status_and_dispatches_use_exact_resources() -> None:
     }
 
 
+def test_branch_sha_uses_authenticated_api_for_slash_branch() -> None:
+    """Private credential-free checkouts must resolve the live head through GitHub."""
+    runner = RecordingRunner([ok({"commit": {"sha": SHA}})])
+
+    assert GitHubCli(REPOSITORY, runner).branch_sha("acceptance/example") == SHA
+    assert runner.requests[0].argv == (
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        f"repos/{REPOSITORY}/branches/acceptance%2Fexample",
+    )
+
+
+def test_branch_sha_returns_none_when_branch_disappears() -> None:
+    runner = RecordingRunner([not_found()])
+
+    assert GitHubCli(REPOSITORY, runner).branch_sha("acceptance/example") is None
+
+
 def test_set_status_targets_exact_repository_and_sha() -> None:
     """A status written to a moving branch instead of the exact SHA would be unsafe."""
     runner = RecordingRunner([ok({"id": 9})])
