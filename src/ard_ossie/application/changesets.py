@@ -344,11 +344,16 @@ class ChangesetService:
         if self.git.current_sha() != existing_head:
             raise WorkflowSecurityError(code, "existing branch checkout is not its remote head")
         changed = self.git.changed_paths(base_branch, existing_head)
-        if set(changed.paths) != expected_paths:
-            raise WorkflowSecurityError(
-                code,
-                "existing managed branch contains unexpected committed paths",
-            )
+        if set(changed.paths) == expected_paths:
+            return
+        if not changed.paths:
+            base_head = self.git.remote_branch_sha(base_branch)
+            if base_head is not None and self.git.is_ancestor(existing_head, base_head):
+                return
+        raise WorkflowSecurityError(
+            code,
+            "existing managed branch contains unexpected committed paths",
+        )
 
     def _central_statuses(self, sha: str, target_url: str) -> list[MutationRecord]:
         return [

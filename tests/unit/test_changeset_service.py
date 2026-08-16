@@ -29,9 +29,11 @@ class FakeGit:
         self.branch = "main"
         self.sha_counter = 0
         self.sha = "a" * 40
-        self.remote: dict[str, str] = {}
+        self.remote: dict[str, str] = {"main": "a" * 40}
         self.tracking_version = 1
         self.changed_override: tuple[Path, ...] | None = None
+        self.ancestor_override = False
+        self.ancestor_args: tuple[str, str] | None = None
 
     def switch_or_create(self, branch: str, base_ref: str) -> None:
         self.branch = branch
@@ -66,6 +68,12 @@ class FakeGit:
             key = "-".join(product_key)
             paths = (Path(f"products/{key}/changesets/{CHANGESET_ID}.json"),)
         return ChangedPaths(merge_base="a" * 40, paths=paths)
+
+    def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        self.ancestor_args = (ancestor, descendant)
+        assert len(ancestor) == 40
+        assert descendant == self.remote["main"]
+        return self.ancestor_override
 
     def read_text_at(self, revision: str, path: str | Path) -> str:
         relative = Path(path)
@@ -208,6 +216,56 @@ def test_changeset_rejects_preclaimed_coordination_branch_with_code(
         ChangesetService(RepositoryPaths(tmp_path), git, FakeGitHub(git)).run(
             create_request(tmp_path)
         )
+
+
+def test_changeset_rejects_empty_divergent_coordination_branch(
+    tmp_path: Path,
+) -> None:
+    seed_registry(tmp_path)
+    git = FakeGit()
+    branch = f"ard/changeset-{CHANGESET_ID}"
+    git.remote[branch] = "c" * 40
+    git.changed_override = ()
+
+    with pytest.raises(WorkflowSecurityError, match="CHANGESET_COORDINATION_PATH_MISMATCH"):
+        ChangesetService(RepositoryPaths(tmp_path), git, FakeGitHub(git)).run(
+            create_request(tmp_path)
+        )
+
+
+def test_changeset_ready_reuses_merged_coordination_branch_with_empty_diff(
+    tmp_path: Path,
+) -> None:
+    seed_registry(tmp_path)
+    git = FakeGit()
+    github = FakeGitHub(git)
+    service = ChangesetService(RepositoryPaths(tmp_path), git, github)
+    service.run(create_request(tmp_path))
+    coordination_branch = f"ard/changeset-{CHANGESET_ID}"
+    retained_coordination_head = git.remote[coordination_branch]
+    tracking = github.prs[f"ard/{CHANGESET_ID}-sales-order"]
+    github.prs.pop(coordination_branch)
+    git.changed_override = ()
+    git.ancestor_override = True
+
+    result = service.run(
+        ChangesetRequest(
+            repository=tmp_path,
+            mode="ready",
+            changeset_id=CHANGESET_ID,
+            product_id=PRODUCT_A,
+            version=1,
+            pr_number=tracking.number,
+            head_sha=tracking.head_sha,
+            base_branch="main",
+        )
+    )
+
+    assert result.status is WorkflowStatus.SUCCESS
+    assert result.outputs["ready_count"] == 1
+    assert github.created_pr_count == 4
+    assert github.prs[coordination_branch].number == 4
+    assert git.ancestor_args == (retained_coordination_head, git.remote["main"])
 
 
 def test_changeset_ready_is_idempotent_for_same_head(tmp_path: Path) -> None:

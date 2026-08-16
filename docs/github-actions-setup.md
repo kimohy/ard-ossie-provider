@@ -225,7 +225,9 @@ workflow는 중앙 Registry PR과 제품별 Draft 추적 PR을 생성합니다. 
 1. 최초 중앙 PR의 두 상태 검사를 확인하고 먼저 병합하여 빈 changeset 레코드를 main에 게시합니다.
 2. 제품별 PR을 처리합니다. 각 성공 시 기록된 제품 버전, PR 번호와 정확한 head SHA가 중앙 readiness PR에 누적됩니다. 모든 제품이 준비되면 그 readiness PR을 제품 PR보다 먼저 병합하고, 이어서 모든 제품 PR을 병합합니다.
 
-릴리스는 required 제품의 Registry 현재 버전이 readiness 버전과 같은지, 기록된 PR head가 바뀌지 않았는지, 모든 PR이 병합되었고 merge commit이 릴리스 commit의 조상인지 확인합니다. 마지막 제품 병합이나 readiness 레코드 병합 시 changeset에 속한 제품 전체가 다시 릴리스 대상으로 확장됩니다.
+릴리스 감지는 required 제품마다 readiness 버전과 Registry 현재 버전을 비교합니다. readiness 버전이 더 크면 아직 병합되지 않은 정상적인 future 전이로 보고 제품과 테이블 전체를 릴리스 대상에서 보류합니다. 하나라도 future이면 일부 제품이나 테이블만 확장하지 않습니다. 모든 버전이 같아진 commit에서만 changeset의 제품 전체와 테이블을 함께 확장합니다. readiness 버전이 현재 버전보다 작으면 오래된 감사 상태이므로 `CHANGESET_VERSION_NOT_CURRENT`로 중단합니다.
+
+릴리스 게시 단계는 기록된 PR head가 바뀌지 않았는지, 모든 PR이 병합되었는지, 각 merge commit이 최종 릴리스 commit의 조상인지 별도로 확인합니다. 따라서 readiness PR을 제품 PR보다 먼저 병합한 commit과 첫 제품만 병합한 commit은 성공적인 no-op이고, 마지막 필수 제품을 병합한 commit에서 전체 changeset이 하나의 릴리스 대상으로 확장됩니다.
 
 changeset이 끝난 뒤 다음의 독립 변경에서는 Issue의 Changeset ID를 비워 `product.yaml`의 값을 `null`로 전환합니다. 과거 changeset JSON과 제품별 추적 marker는 감사 이력으로 남지만 새 릴리스의 활성 changeset으로 재사용하지 않습니다.
 
