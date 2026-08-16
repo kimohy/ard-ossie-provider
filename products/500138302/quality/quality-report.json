@@ -1,0 +1,52 @@
+{
+  "artifact_hashes": {
+    "data-dictionary.json": "b561beed30dd1161ce44967c9547305bceb641157aa8bb47d016b3e1fe414057",
+    "data-product.md": "2a4b8dce45280c23063c07aaa45f35f78e1583d73a2a549fb2c91ccf096d86cd",
+    "data-semantic.md": "29a6537187f8f7b60ab040603157e1eaf337a4b83e653a9cb0c64839f5c611bd",
+    "ossie-model.json": "2f9171833ec3504c68c7866cde4d49b53f2f67a4fd2a9c9e28e26bd8377a5d7e",
+    "source-manifest.json": "cc860b76c740b3dc15775e8dcef5f4d4bb129c62b54a9957c80b6fce9c7d9299"
+  },
+  "completeness": 1.0,
+  "hard_errors": [],
+  "llm_provenance": {
+    "elapsed_ms": 22044,
+    "finish_reason": "stop",
+    "input_tokens": 32555,
+    "model": "gpt-5.6-terra",
+    "output_tokens": 3857,
+    "profile": "openai-compatible-default",
+    "provider": "openai_compatible",
+    "repair_count": 0,
+    "request_id": "chatcmpl-EDeFxWd6QGAMljg9H8KBHk4kXFJeK",
+    "retry_count": 0
+  },
+  "product_id": "prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d",
+  "product_version": 1,
+  "quality_artifact_hashes": {
+    "application-report.json": "904d954bc7c05a0c2238b0e87c5f5b44650746448e9dced77eab8e5875292419",
+    "candidate-report.json": "785cc9fd8596ac9f7e16aafae890b4960a4dbc8bd4bead5d1b051b736c755eee",
+    "decision-report.json": "3cc19f7cb59f7b3bb9fde1c48afc29bfe513f49309dab99d8604024ba51a159e",
+    "duplicate-report.json": "810597cf92dada893b02d0dc5a70450905501fcf52ef6d1abc8e9245a7366246",
+    "evidence-summary.json": "40a2b2016093875267681ed01f103cd94a04fc115b03969078fe1e8ada1d8c83",
+    "failure-report.json": "8ba5996c9cd33e269ba9f64a0cb7f9b3342e857be4a9f565a9bbfd26afe8b013",
+    "impact-report.json": "b7be788ffd2f8152e62001e6cb0ace662876d890c07e7ec2e56ca124dc9b645c",
+    "llm-suggestions.json": "0a83af5e67097677d94e6b4f4970790bd6f8f6146a366a1e6184929d2e600e02",
+    "manifest.json": "7befcce7709371b7307fed4866910b1c33290ff0c5c454e4f8c186f63b086620",
+    "semantic-fidelity.json": "1d62615d3423fdc76aaebd90b6f741a42db871de28eeec72b8375cc8c729d360",
+    "validation-report.json": "eaafb06423cb92cadb3fad284108af39cdf81f1eca6e3eee1908f35db516af24",
+    "version-report.json": "b238184e582e6b14c6c01c12c7b9c3a29ce2a68442c70cfeeb743e6c8b5a1f8f"
+  },
+  "status": "WARN",
+  "warnings": [
+    {
+      "code": "METRIC_MULTI_DATASET_UNSUPPORTED",
+      "message": "Metric uses multiple datasets and was excluded because join path, cardinality, and grain are not declared",
+      "path": "metrics.Action Signal Rate"
+    },
+    {
+      "code": "METRIC_MULTI_DATASET_UNSUPPORTED",
+      "message": "Metric uses multiple datasets and was excluded because join path, cardinality, and grain are not declared",
+      "path": "metrics.Modeled Efficiency"
+    }
+  ]
+}
