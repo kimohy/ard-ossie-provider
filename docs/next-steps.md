@@ -17,6 +17,7 @@
 | Issue #3 제품 v1 | 완료 | [Issue #3](https://github.com/kimohy/ard-ossie-provider/issues/3), [제품 PR #5](https://github.com/kimohy/ard-ossie-provider/pull/5), merge `673b8311` |
 | immutable release와 dispatch | 완료 | [Marketing Insight v1](https://github.com/kimohy/ard-ossie-provider/releases/tag/product/prd_019ff10c-8be8-79d0-af07-21450abedf9e/v1), linkage success |
 | fresh-runner annotated tag identity | 완료 | [PR #39](https://github.com/kimohy/ard-ossie-provider/pull/39), merge `28f943d` |
+| 직접 브랜치 제품 v2 | 완료 | [검증 기록](acceptance/direct-branch-v2-verification.md), [제품 PR #43](https://github.com/kimohy/ard-ossie-provider/pull/43), merge `ba83203` |
 
 ## Issue #3 acceptance 결과
 
@@ -41,13 +42,13 @@ Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니�
 
 ### P1. 직접 브랜치 업데이트 `v2`
 
-- [ ] 기존 제품에 `operation: update`, 같은 `product_id`, 현재 `base_version`, 정확히 `+1`인 버전을 제출합니다.
-- [ ] trusted `workflow_run` coordinator가 exact candidate data만 읽고 처리하는지 확인합니다.
-- [ ] 내용이 같은 table은 버전을 유지하고 실제 변경 엔터티만 `v2`가 되는지 확인합니다.
-- [ ] `ard history`, `ard diff`, Registry, tag, Release가 같은 변경을 설명하는지 확인합니다.
-- [ ] stale base, skipped version, fork writeback을 fail-closed 사례로 남깁니다.
+- [x] 기존 제품에 `operation: update`, 같은 `product_id`, 현재 `base_version`, 정확히 `+1`인 버전을 제출했습니다.
+- [x] trusted `workflow_run` coordinator가 exact candidate data만 읽고 처리하는지 확인했습니다.
+- [x] 내용이 같은 table은 버전을 유지하고 실제 변경 엔터티만 `v2`가 되는지 확인했습니다.
+- [x] `ard history`, `ard diff`, Registry, tag, Release가 같은 변경을 설명하는지 확인했습니다.
+- [x] stale base, skipped version, fork writeback을 fail-closed 사례로 남겼습니다.
 
-완료 기준: 직접 업데이트 성공과 거부 경로, `v2` tag·Release, history/diff 증거가 모두 있습니다.
+완료: [production 검증 기록](acceptance/direct-branch-v2-verification.md), [제품 PR #43](https://github.com/kimohy/ard-ossie-provider/pull/43), [성공 coordinator](https://github.com/kimohy/ard-ossie-provider/actions/runs/31920963044), [release](https://github.com/kimohy/ard-ossie-provider/actions/runs/31921644512), [stale 거절](https://github.com/kimohy/ard-ossie-provider/actions/runs/31921955295), [gap 거절](https://github.com/kimohy/ard-ossie-provider/actions/runs/31922033108)에 성공·거부·수렴 증거가 있습니다.
 
 ### P2. Shared-table changeset E2E
 
@@ -62,6 +63,7 @@ Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니�
 ### P2. 운영 보호와 장애 훈련
 
 - [ ] 비소유자 writer를 준비한 뒤 1인 review protection을 활성화합니다.
+- [ ] `production-linkage` Environment에 required reviewer를 추가하고 승인 대기·거절을 리허설합니다.
 - [ ] exit `30`, exit `70`, `TAG_TARGET_CONFLICT`, LFS 누락, symlink, 혼합 code/data PR 복구를 리허설합니다.
 - [ ] `review_pending`의 PR 계속 처리·merge 보류·release 차단과 `review_required`의 canonical 차단·재처리를 운영자가 구분하는지 확인합니다.
 - [ ] downstream consumer가 `(product_id, version, tag, commit)`으로 중복 dispatch를 제거하는지 검증합니다.
@@ -85,7 +87,7 @@ Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니�
 - [x] repository bootstrap과 영구 required status gate
 - [x] Issue 기반 `v1` 생성, 검증, 병합, immutable release, downstream dispatch
 - [x] LLM 저신뢰·공백·heading·unsafe optional metric의 감사 가능한 처리
-- [ ] 직접 브랜치 `v2` 업데이트
+- [x] 직접 브랜치 `v2` 업데이트
 - [ ] shared-table changeset E2E
 - [ ] 1인 review protection과 운영 장애 훈련
 - [ ] representative PDF 안정화 표본과 운영 지표
