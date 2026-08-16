@@ -6,7 +6,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 import ard_ossie.cli.workflow as workflow_cli
-from ard_ossie.application.contracts import WorkflowResult, WorkflowStatus
+from ard_ossie.application.contracts import (
+    WorkflowResult,
+    WorkflowSecurityError,
+    WorkflowStatus,
+)
 from ard_ossie.cli import app
 
 
@@ -233,11 +237,59 @@ def test_issue_base_sync_cli_writes_the_synchronized_exact_head(
         "product_key=500138301\n"
     )
     envelope = json.loads(
-        (
-            tmp_path
-            / ".ard"
-            / "run"
-            / "workflow.issue-base-sync-result.json"
-        ).read_text()
+        (tmp_path / ".ard" / "run" / "workflow.issue-base-sync-result.json").read_text()
     )
     assert envelope["outputs"]["expected_head"] == "c" * 40
+
+
+def test_issue_base_sync_cli_redacts_attachment_failure_with_security_exit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    signed_secret = "must-not-appear-in-cli-output"
+
+    class FailedService:
+        def run(self, context, **kwargs):
+            raise WorkflowSecurityError(
+                "ATTACHMENT_DOWNLOAD_HTTP_403",
+                f"unsafe signed attachment URL: {signed_secret}",
+            )
+
+    monkeypatch.setattr(
+        workflow_cli,
+        "_issue_base_sync_service",
+        lambda repository_name, paths: FailedService(),
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "issue-base-sync",
+            "--event",
+            str(event_file(tmp_path)),
+            "--base-sha",
+            "a" * 40,
+            "--repository",
+            str(tmp_path),
+            "--repository-name",
+            "owner/repository",
+            "--actor",
+            "kimohy",
+        ],
+    )
+
+    assert result.exit_code == 50, result.output
+    assert signed_secret not in result.output
+    envelope = json.loads(
+        (tmp_path / ".ard" / "run" / "workflow.issue-base-sync-result.json").read_text()
+    )
+    assert envelope["outputs"]["failure_exit_code"] == 50
+    assert envelope["findings"] == [
+        {
+            "code": "ATTACHMENT_DOWNLOAD_HTTP_403",
+            "message": "ATTACHMENT_DOWNLOAD_HTTP_403",
+        }
+    ]
+    assert signed_secret not in json.dumps(envelope)

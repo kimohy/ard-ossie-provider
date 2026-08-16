@@ -4,12 +4,21 @@ import hashlib
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from ard_ossie.adapters.filesystem import RepositoryPaths
 from ard_ossie.application.base_sync import IssueBaseSyncService, IssueRouteService
-from ard_ossie.application.contracts import WorkflowContext, WorkflowSecurityError
-from ard_ossie.github_event import DownloadedAttachment, IntakeManifest
+from ard_ossie.application.contracts import (
+    ExitCode,
+    WorkflowContext,
+    WorkflowSecurityError,
+)
+from ard_ossie.github_event import (
+    DownloadedAttachment,
+    IntakeManifest,
+    prepare_issue_event,
+)
 from ard_ossie.models import (
     ProductRecord,
     ProductTableRef,
@@ -160,9 +169,7 @@ def test_route_selects_unchanged_intake_when_managed_pr_is_absent(
 
 
 def test_route_selects_exact_existing_managed_draft(tmp_path: Path) -> None:
-    result = IssueRouteService(RouteGit(), RouteGitHub(managed_pr())).run(
-        context(tmp_path)
-    )
+    result = IssueRouteService(RouteGit(), RouteGitHub(managed_pr())).run(context(tmp_path))
 
     assert result.outputs == {
         "mode": "base_sync",
@@ -204,7 +211,9 @@ def test_route_rejects_a_pr_outside_the_managed_draft_contract(
         IssueRouteService(RouteGit(), RouteGitHub(pull_request)).run(context(tmp_path))
 
 
-def registry_output(*, product_id: str = PRODUCT_ID) -> tuple[
+def registry_output(
+    *, product_id: str = PRODUCT_ID
+) -> tuple[
     ProductRecord,
     TableRecord,
     ProductTableRef,
@@ -311,9 +320,7 @@ def populate_candidate(root: Path) -> IntakeManifest:
         root / "registry" / "mappings" / f"{PRODUCT_ID}.json": [
             registry_mapping.model_dump(mode="json")
         ],
-        root / "registry" / "tables" / f"{TABLE_ID}.json": (
-            registry_table.model_dump(mode="json")
-        ),
+        root / "registry" / "tables" / f"{TABLE_ID}.json": (registry_table.model_dump(mode="json")),
     }
     for path, payload in registry_payloads.items():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -440,6 +447,43 @@ def test_base_sync_preserves_approved_input_and_resets_only_derived_paths(
     ]
 
 
+def test_base_sync_maps_attachment_token_failure_to_security_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    populate_candidate(tmp_path)
+    git = BaseSyncGit(candidate_paths())
+    transport_calls = 0
+
+    def unexpected_send(*args: object, **kwargs: object) -> httpx.Response:
+        nonlocal transport_calls
+        transport_calls += 1
+        raise AssertionError("attachment transport must not run without a token")
+
+    monkeypatch.delenv("ARD_ATTACHMENT_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "must-not-be-used")
+    monkeypatch.setattr(httpx.Client, "send", unexpected_send)
+
+    with pytest.raises(
+        WorkflowSecurityError,
+        match="ATTACHMENT_TOKEN_REQUIRED",
+    ) as captured:
+        IssueBaseSyncService(
+            RepositoryPaths(tmp_path),
+            git,
+            RouteGitHub(managed_pr()),
+            prepare=prepare_issue_event,
+        ).run(context(tmp_path), base_sha=BASE_SHA)
+
+    assert captured.value.code == "ATTACHMENT_TOKEN_REQUIRED"
+    assert captured.value.exit_code == ExitCode.SECURITY
+    assert transport_calls == 0
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"merge_revision", "restore_paths", "push"}
+        for item in git.operations
+    )
+
+
 @pytest.mark.parametrize(
     "unexpected",
     [
@@ -485,8 +529,7 @@ def test_base_sync_rejects_a_moved_base_before_mutation(tmp_path: Path) -> None:
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
     assert not any(
-        isinstance(item, tuple) and item[0] == "merge_revision"
-        for item in git.operations
+        isinstance(item, tuple) and item[0] == "merge_revision" for item in git.operations
     )
 
 
@@ -516,8 +559,7 @@ def test_base_sync_rechecks_remote_heads_after_canonical_validation(
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
     assert not any(
-        isinstance(item, tuple) and item[0] == "merge_revision"
-        for item in git.operations
+        isinstance(item, tuple) and item[0] == "merge_revision" for item in git.operations
     )
 
 
@@ -540,8 +582,7 @@ def test_base_sync_rechecks_managed_pr_state_after_canonical_validation(
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
     assert not any(
-        isinstance(item, tuple) and item[0] == "merge_revision"
-        for item in git.operations
+        isinstance(item, tuple) and item[0] == "merge_revision" for item in git.operations
     )
 
 
@@ -562,9 +603,7 @@ def test_base_sync_rejects_registry_ownership_for_another_product(
 ) -> None:
     populate_candidate(tmp_path)
     product = tmp_path / "registry" / "products" / f"{PRODUCT_ID}.json"
-    unrelated, _, _ = registry_output(
-        product_id="prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632"
-    )
+    unrelated, _, _ = registry_output(product_id="prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632")
     product.write_text(
         unrelated.model_dump_json(),
         encoding="utf-8",
@@ -583,8 +622,7 @@ def test_base_sync_rejects_registry_ownership_for_another_product(
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
     assert not any(
-        isinstance(item, tuple) and item[0] == "merge_revision"
-        for item in git.operations
+        isinstance(item, tuple) and item[0] == "merge_revision" for item in git.operations
     )
 
 
@@ -608,8 +646,7 @@ def test_base_sync_rejects_a_cross_product_registry_mapping(tmp_path: Path) -> N
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
     assert not any(
-        isinstance(item, tuple) and item[0] == "merge_revision"
-        for item in git.operations
+        isinstance(item, tuple) and item[0] == "merge_revision" for item in git.operations
     )
 
 
@@ -633,8 +670,7 @@ def test_base_sync_rejects_a_registry_table_version_mismatch(tmp_path: Path) -> 
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
     assert not any(
-        isinstance(item, tuple) and item[0] == "merge_revision"
-        for item in git.operations
+        isinstance(item, tuple) and item[0] == "merge_revision" for item in git.operations
     )
 
 
@@ -652,8 +688,7 @@ def test_base_sync_rejects_a_dirty_candidate_before_mutation(tmp_path: Path) -> 
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
     assert not any(
-        isinstance(item, tuple) and item[0] == "merge_revision"
-        for item in git.operations
+        isinstance(item, tuple) and item[0] == "merge_revision" for item in git.operations
     )
 
 
@@ -712,9 +747,7 @@ def test_base_sync_rejects_failed_final_ancestry(tmp_path: Path) -> None:
             prepare=canonical_prepare,
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
-    assert not any(
-        isinstance(item, tuple) and item[0] == "push" for item in git.operations
-    )
+    assert not any(isinstance(item, tuple) and item[0] == "push" for item in git.operations)
 
 
 def test_base_sync_rejects_a_dirty_post_sync_worktree(tmp_path: Path) -> None:
@@ -744,9 +777,7 @@ def test_base_sync_rejects_a_remote_head_move_before_push(tmp_path: Path) -> Non
             prepare=canonical_prepare,
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
-    assert not any(
-        isinstance(item, tuple) and item[0] == "push" for item in git.operations
-    )
+    assert not any(isinstance(item, tuple) and item[0] == "push" for item in git.operations)
 
 
 def test_base_sync_rejects_a_base_move_before_push(tmp_path: Path) -> None:
@@ -762,9 +793,7 @@ def test_base_sync_rejects_a_base_move_before_push(tmp_path: Path) -> None:
             prepare=canonical_prepare,
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
-    assert not any(
-        isinstance(item, tuple) and item[0] == "push" for item in git.operations
-    )
+    assert not any(isinstance(item, tuple) and item[0] == "push" for item in git.operations)
 
 
 def test_base_sync_rechecks_managed_pr_state_before_push(tmp_path: Path) -> None:
@@ -787,9 +816,7 @@ def test_base_sync_rechecks_managed_pr_state_before_push(tmp_path: Path) -> None
             prepare=canonical_prepare,
         ).run(context(tmp_path), base_sha=BASE_SHA)
 
-    assert not any(
-        isinstance(item, tuple) and item[0] == "push" for item in git.operations
-    )
+    assert not any(isinstance(item, tuple) and item[0] == "push" for item in git.operations)
 
 
 def test_base_sync_verifies_the_published_remote_head(tmp_path: Path) -> None:

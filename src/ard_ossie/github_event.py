@@ -300,7 +300,18 @@ def download_attachment(
                         raise AttachmentSecurityError("ATTACHMENT_REDIRECT_WITHOUT_LOCATION")
                     current_url = _validate_attachment_redirect_url(urljoin(current_url, location))
                     continue
-                response.raise_for_status()
+                if not response.is_success:
+                    sanitized_url = (
+                        urlsplit(current_url)
+                        ._replace(
+                            query="",
+                            fragment="",
+                        )
+                        .geturl()
+                    )
+                    raise AttachmentSecurityError(
+                        f"ATTACHMENT_DOWNLOAD_HTTP_{response.status_code}: {sanitized_url}"
+                    )
                 _validate_content_headers(attachment, response.headers, max_bytes=max_bytes)
                 digest = hashlib.sha256()
                 size = 0

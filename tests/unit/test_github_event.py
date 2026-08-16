@@ -376,6 +376,41 @@ def test_download_authenticates_github_without_leaking_credentials_to_storage(
     assert "authorization" not in requests[1].headers
 
 
+def test_download_redacts_signed_storage_url_from_http_failure(tmp_path: Path) -> None:
+    signed_secret = "must-not-appear-in-errors"
+    storage_url = (
+        "https://github-production-user-asset-6210df.s3.amazonaws.com/asset.xlsx"
+        f"?X-Amz-Credential={signed_secret}&X-Amz-Signature={signed_secret}"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "github.com":
+            return httpx.Response(302, headers={"location": storage_url})
+        return httpx.Response(403)
+
+    attachment = IntakeAttachment(
+        role="dictionary_excel",
+        filename="dictionary.xlsx",
+        url=FILE_ATTACHMENT_URL,
+    )
+    target = tmp_path / "dictionary.xlsx"
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            AttachmentSecurityError,
+            match="ATTACHMENT_DOWNLOAD_HTTP_403",
+        ) as captured,
+    ):
+        download_attachment(attachment, target, client=client)
+
+    assert signed_secret not in str(captured.value)
+    assert "X-Amz-" not in str(captured.value)
+    assert str(captured.value).endswith(
+        "https://github-production-user-asset-6210df.s3.amazonaws.com/asset.xlsx"
+    )
+    assert not target.exists()
+
+
 def test_download_rejects_declared_size_before_writing(tmp_path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
