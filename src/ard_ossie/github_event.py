@@ -9,6 +9,7 @@ import tempfile
 import unicodedata
 import zipfile
 from collections.abc import Mapping
+from contextlib import closing
 from pathlib import Path
 from typing import Literal
 from urllib.parse import unquote_to_bytes, urljoin, urlsplit
@@ -153,6 +154,15 @@ def _validate_attachment_redirect_url(url: str) -> str:
     raise AttachmentSecurityError(f"UNTRUSTED_ATTACHMENT_HOST: {host}")
 
 
+def _attachment_request_headers(url: str) -> dict[str, str]:
+    if (urlsplit(url).hostname or "").lower() != "github.com":
+        return {}
+    token = os.environ.get("GH_TOKEN")
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _validate_attachment_transport(url: str, *, allow_query: bool):
     parsed = urlsplit(url)
     if parsed.scheme.lower() != "https":
@@ -267,7 +277,17 @@ def download_attachment(
     current_url = validate_attachment_url(attachment.url)
     try:
         for redirect_count in range(max_redirects + 1):
-            with active_client.stream("GET", current_url, follow_redirects=False) as response:
+            request = active_client.build_request("GET", current_url)
+            request.headers.pop("authorization", None)
+            request.headers.update(_attachment_request_headers(current_url))
+            with closing(
+                active_client.send(
+                    request,
+                    stream=True,
+                    auth=None,
+                    follow_redirects=False,
+                )
+            ) as response:
                 if response.is_redirect:
                     if redirect_count == max_redirects:
                         raise AttachmentSecurityError("ATTACHMENT_TOO_MANY_REDIRECTS")

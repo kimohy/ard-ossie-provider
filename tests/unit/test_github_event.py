@@ -259,6 +259,56 @@ def test_download_accepts_canonical_github_file_upload_redirect(tmp_path: Path) 
     assert target.is_file()
 
 
+@pytest.mark.parametrize(
+    "storage_url",
+    [
+        "https://objects.githubusercontent.com/download/1?signature=value",
+        (
+            "https://github-production-user-asset-6210df.s3.amazonaws.com/"
+            "asset.xlsx?X-Amz-Signature=value"
+        ),
+    ],
+)
+def test_download_authenticates_github_without_leaking_credentials_to_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    storage_url: str,
+) -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "types")
+        archive.writestr("xl/workbook.xml", "workbook")
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "github.com":
+            return httpx.Response(302, headers={"location": storage_url})
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=buffer.getvalue(),
+        )
+
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    attachment = IntakeAttachment(
+        role="dictionary_excel",
+        filename="dictionary.xlsx",
+        url=FILE_ATTACHMENT_URL,
+    )
+    target = tmp_path / "dictionary.xlsx"
+    with httpx.Client(
+        transport=httpx.MockTransport(handler),
+        headers={"Authorization": "Bearer client-default"},
+        auth=httpx.BasicAuth("client-user", "client-password"),
+    ) as client:
+        result = download_attachment(attachment, target, client=client)
+
+    assert result.size_bytes == len(buffer.getvalue())
+    assert requests[0].headers["authorization"] == "Bearer workflow-token"
+    assert "authorization" not in requests[1].headers
+
+
 def test_download_rejects_declared_size_before_writing(tmp_path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
