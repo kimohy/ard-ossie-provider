@@ -184,4 +184,3 @@ independently recorded source.
    if classic PAT policy changes, but replaces the approved Issue attachment UX.
 4. **Browser session automation:** rejected because cookies are broader, harder to rotate and audit,
    and incompatible with the existing non-browser trusted processing boundary.
-
