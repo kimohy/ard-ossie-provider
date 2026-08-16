@@ -1,5 +1,9 @@
 # ARD GitHub Pipeline Implementation Plan
 
+> **Superseded policy (2026-08-16):** Public visibility requirements in this historical plan are
+> replaced by the private repository and Issue intake contract in
+> `docs/superpowers/specs/2026-08-16-private-repository-issue-intake-auth-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Implement a public-repository MVP that ingests one ARD product from an approved GitHub Issue or an internal source branch, parses the documents with Docling, generates canonical/Ossie artifacts through an OpenAI-compatible provider, blocks duplicates and invalid numeric versions, and publishes immutable Git tags and GitHub Releases after merge.

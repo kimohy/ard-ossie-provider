@@ -665,7 +665,7 @@ For `500138302`, use its exact current v1 product HTML from the seed Issue attac
 
 Verify both PDF hashes equal the fixed PDF baseline and both XLSX hashes equal each other. Do not reuse the original v1 HTML for `500138301` because its current v2 metadata must be preserved.
 
-### Step 3: Create two public update Issues
+### Step 3: Create two private update Issues
 
 Use the `gstack:browse` skill to upload files through the Issue form.
 
@@ -854,7 +854,7 @@ For each product, materialize its current accepted HTML, change only its matchin
 
 ### Step 2: Submit and approve the existing product v4 update
 
-Create a public update Issue with the exact existing ID, version 4, the first description, matching HTML, unchanged current PDF/XLSX, and an empty Changeset ID. Use change reason:
+Create a private update Issue with the exact existing ID, version 4, the first description, matching HTML, unchanged current PDF/XLSX, and an empty Changeset ID. Use change reason:
 
 ```text
 독립 제품 설명을 보강하고 완료된 changeset의 활성 연결을 해제합니다.

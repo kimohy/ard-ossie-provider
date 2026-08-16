@@ -144,7 +144,7 @@ The target table schema hash remains unchanged and its canonical hash changes. T
 
 ### Phase C: prepare both exact tracking heads
 
-1. Prepare one public update Issue per product. Each Issue supplies the complete synthetic source set, the exact existing product ID, the current base version, the next product version, and the same Changeset ID.
+1. Prepare one private update Issue per product. Each Issue supplies the complete synthetic source set, the exact existing product ID, the current base version, the next product version, and the same Changeset ID.
 2. Upload byte-identical modified XLSX files to both Issues and preserve each product's approved HTML metadata and semantic PDF.
 3. Approve the Issues only after their attachment hashes and requested identities are recorded. Issue intake must reuse and populate the existing canonical tracking branches and PRs rather than creating replacement PRs.
 4. Bring the merged definition record into both tracking branches without overwriting their managed markers.
