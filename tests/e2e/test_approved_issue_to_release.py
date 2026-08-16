@@ -362,7 +362,7 @@ class RecordingProvider:
         return {"suggestions": [], "metrics": [], "product_facts": []}
 
 
-def test_approved_private_issue_to_numeric_release_is_reproducible_and_traceable(
+def test_approved_public_issue_with_attachment_auth_to_numeric_release_is_reproducible_and_traceable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -501,9 +501,9 @@ ard release plan <product-key>
 ard release create <product-key> --version auto
 ```
 
-Git 작업 흐름은 Issue 또는 작업 브랜치 입력, Draft PR, `ard build`, 생성물 자동 commit, 품질·중복·버전 검증, review, merge, release 순서이다. 단일 orchestrator가 repository mutation에는 기본 `GITHUB_TOKEN`을 사용하고 private Issue 첨부 다운로드에는 격리된 `ARD_ATTACHMENT_TOKEN`만 사용해 승인된 Issue의 브랜치 생성부터 최종 commit status 등록까지 담당한다. 사람의 직접 변경은 작업 브랜치에만 허용하며 PR이 없으면 자동 생성한다.
+Git 작업 흐름은 Issue 또는 작업 브랜치 입력, Draft PR, `ard build`, 생성물 자동 commit, 품질·중복·버전 검증, review, merge, release 순서이다. 단일 orchestrator가 repository mutation에는 기본 `GITHUB_TOKEN`을 사용하고 공개 Issue 첨부 다운로드에는 Enterprise 전환을 대비해 격리된 `ARD_ATTACHMENT_TOKEN`만 사용해 승인된 Issue의 브랜치 생성부터 최종 commit status 등록까지 담당한다. 사람의 직접 변경은 작업 브랜치에만 허용하며 PR이 없으면 자동 생성한다.
 
-private 저장소 Issue는 생성만으로 credential이나 LLM을 사용하지 않는다. write 이상의 권한을 가진 사용자가 저장소 반입 권한과 조직 정책을 검토하고 `ard:approved` label을 부여하며, workflow가 label actor 권한을 다시 확인한 뒤에만 `ard-private-intake`의 `ARD_ATTACHMENT_TOKEN`과 보호된 `ARD_LLM_API_KEY`를 각자의 trusted job에서 사용한다. 외부 fork PR, 승인 전 Issue와 `pull_request_target`에서 untrusted code를 checkout하는 실행에는 secret과 쓰기 권한을 제공하지 않는다.
+공개 저장소 Issue는 생성만으로 credential이나 LLM을 사용하지 않는다. write 이상의 권한을 가진 사용자가 공개 권한과 조직 정책을 검토하고 `ard:approved` label을 부여하며, workflow가 label actor 권한을 다시 확인한 뒤에만 `ard-private-intake`의 `ARD_ATTACHMENT_TOKEN`과 보호된 `ARD_LLM_API_KEY`를 각자의 trusted job에서 사용한다. 외부 fork PR, 승인 전 Issue와 `pull_request_target`에서 untrusted code를 checkout하는 실행에는 secret과 쓰기 권한을 제공하지 않는다.
 
 `ard-issue-intake.yml`은 Issue Form과 첨부를 검증하고 `ard/issue-<number>-<product-key>` 브랜치와 Draft PR을 만든다. `ard-direct-change.yml`은 `products/*/sources/**` 변경을 감지해 제품 하나·버전 하나 규칙을 확인하고 PR을 생성 또는 갱신한다. 두 입력 경로는 `ard-process.yml`의 동일한 처리 계약을 사용한다.
 

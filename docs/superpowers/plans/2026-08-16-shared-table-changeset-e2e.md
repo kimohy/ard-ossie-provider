@@ -4,7 +4,7 @@
 
 **Goal:** Prove the production shared-table changeset lifecycle across two durable synthetic products, including exact-head readiness, atomic release after the final product merge, and later independent clearing of each active changeset binding.
 
-**Architecture:** First repair the two lifecycle edges that the production sequence depends on: reusing a retained coordination branch after its first PR has merged, and treating future readiness versions as an all-or-nothing release no-op. Land those fixes through the repository code gate before touching production data. Then use only the private Issue intake and changeset coordinator workflows to create the second product, coordinate one semantic-only table change, publish the final atomic release, clear the active bindings, and record immutable evidence.
+**Architecture:** First repair the two lifecycle edges that the production sequence depends on: reusing a retained coordination branch after its first PR has merged, and treating future readiness versions as an all-or-nothing release no-op. Land those fixes through the repository code gate before touching production data. Then use only the public Issue intake and changeset coordinator workflows to create the second product, coordinate one semantic-only table change, publish the final atomic release, clear the active bindings, and record immutable evidence.
 
 **Tech Stack:** Python 3.12, pytest, Typer, Pydantic, GitHub Actions, `gh`, Git/GitHub commit statuses, Git LFS assets, `openpyxl`, `jq`, `curl`, Ruff, actionlint.
 
@@ -665,7 +665,7 @@ For `500138302`, use its exact current v1 product HTML from the seed Issue attac
 
 Verify both PDF hashes equal the fixed PDF baseline and both XLSX hashes equal each other. Do not reuse the original v1 HTML for `500138301` because its current v2 metadata must be preserved.
 
-### Step 3: Create two private update Issues
+### Step 3: Create two public update Issues
 
 Use the `gstack:browse` skill to upload files through the Issue form.
 
@@ -854,7 +854,7 @@ For each product, materialize its current accepted HTML, change only its matchin
 
 ### Step 2: Submit and approve the existing product v4 update
 
-Create a private update Issue with the exact existing ID, version 4, the first description, matching HTML, unchanged current PDF/XLSX, and an empty Changeset ID. Use change reason:
+Create a public update Issue with the exact existing ID, version 4, the first description, matching HTML, unchanged current PDF/XLSX, and an empty Changeset ID. Use change reason:
 
 ```text
 독립 제품 설명을 보강하고 완료된 changeset의 활성 연결을 해제합니다.

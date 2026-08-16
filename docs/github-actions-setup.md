@@ -1,6 +1,6 @@
 # GitHub Actions 운영 설정
 
-이 저장소는 권한이 부여된 사용자만 접근하는 비공개 ARD 컨텐츠, GitHub Issue 승인, 같은 PR writeback, 숫자 릴리스와 승인된 후속 연계를 전제로 합니다. 변환 판단의 정책은 [ARD 변환 정책과 거버넌스](policy-and-governance.md), PDF 처리 상태와 보고서 계약은 [시멘틱 PDF 파이프라인](semantic-pdf-pipeline.md)을 먼저 확인하세요. Enterprise Cloud 또는 GHES의 새 저장소를 구성한다면 이 문서보다 먼저 [GitHub Enterprise 이전 및 신규 저장소 구축](github-enterprise-migration.md)의 제품별 호환성 게이트를 완료합니다. 해당 매뉴얼은 GHES 3.18.12를 호환성 기준으로 삼고 3.18.13 보안 hotpatch를 운영 전제조건으로 둡니다.
+이 저장소는 현재 GitHub.com에서 공개로 운영합니다. 저장소, Issue, 첨부 링크, branch, PR, Actions metadata, artifact, tag와 Release는 누구나 볼 수 있으므로 공개 권한이 있는 합성·비기밀 ARD 콘텐츠만 사용합니다. Secret, 개인정보, 고객 데이터와 내부 문서는 제출하지 않습니다. 변환 판단의 정책은 [ARD 변환 정책과 거버넌스](policy-and-governance.md), PDF 처리 상태와 보고서 계약은 [시멘틱 PDF 파이프라인](semantic-pdf-pipeline.md)을 먼저 확인하세요. Enterprise Cloud 또는 GHES의 private 새 저장소를 구성한다면 이 문서보다 먼저 [GitHub Enterprise 이전 및 신규 저장소 구축](github-enterprise-migration.md)의 제품별 호환성 게이트를 완료합니다. 해당 매뉴얼은 GHES 3.18.12를 호환성 기준으로 삼고 3.18.13 보안 hotpatch를 운영 전제조건으로 둡니다.
 
 ## 자동 bootstrap
 
@@ -16,15 +16,15 @@ uv run ard github bootstrap --repo kimohy/ard-ossie-provider \
 ```
 
 bootstrap은 `ard-private-intake`, 해당 Environment의 `main` branch policy,
-`ARD_ATTACHMENT_TOKEN`을 조회하거나 변경하지 않습니다. private 첨부 credential 경계는
-아래의 **Private Issue 첨부 Environment** 절차로 별도 생성·검증·회전합니다.
+`ARD_ATTACHMENT_TOKEN`을 조회하거나 변경하지 않습니다. 첨부 credential 경계는
+아래의 **Enterprise-ready 첨부 Environment** 절차로 별도 생성·검증·회전합니다.
 
 두 번째 명령은 redacted plan 확인 뒤 LLM API key를 숨김 입력으로 요청하며,
 key는 `gh secret set ... --env ard-llm`의 표준 입력에만 전달됩니다. 기존 key 교체는
 기본적으로 거부됩니다. bootstrap은 Variable과 기존 `ARD_LLM_API_KEY`만 수렴시키며 Azure와
-Vertex Secret은 읽거나 교체하지 않습니다. 초기 `main` 보호는 두 required status, 최신 base, PR 및 conversation
-resolution을 요구하지만 승인 수는 0으로 둡니다. 비소유자 writer가 준비된 뒤에만 다음 명령으로
-승인 수를 1로 전환합니다.
+Vertex Secret은 읽거나 교체하지 않습니다. 초기 `main` 보호는 두 required status, 최신 base,
+PR 및 conversation resolution을 요구하지만 승인 수는 0으로 둡니다. 비소유자 writer가 준비된
+뒤에만 다음 명령으로 승인 수를 1로 전환합니다.
 
 ```bash
 uv run ard github enable-review-protection --repo kimohy/ard-ossie-provider
@@ -39,15 +39,15 @@ uv run ard github enable-review-protection --repo kimohy/ard-ossie-provider
 - `Allow GitHub Actions to create and approve pull requests`를 활성화합니다. 이 프로젝트는 PR 생성만 사용하며 자동 승인은 하지 않습니다.
 - 외부 Action은 workflow에 기록된 40자리 commit SHA로 고정합니다.
 
-Repository·Issue·PR·status 자동화는 repository `GITHUB_TOKEN`을 사용합니다. private Issue 첨부 다운로드만 아래의 격리된 `ARD_ATTACHMENT_TOKEN` classic PAT를 사용하며 두 credential은 서로 대체하지 않습니다.
+Repository·Issue·PR·status 자동화는 repository `GITHUB_TOKEN`을 사용합니다. 공개 Issue 첨부 다운로드는 현재 인증이 필요하지 않지만 Enterprise 전환 경계를 미리 검증하기 위해 아래의 격리된 `ARD_ATTACHMENT_TOKEN` classic PAT만 사용합니다. 두 credential은 서로 대체하지 않습니다.
 
 ## 2. Secrets와 Variables
 
-LLM Secret은 repository-level Secret이 아니라 보호된 `ard-llm` Environment에 둡니다. private 첨부 Secret은 별도의 `ard-private-intake` Environment에 격리합니다. `Settings → Environments`에서 각 Environment와 허용 branch를 지정하며 운영 workflow는 아래 고정 이름만 읽습니다.
+LLM Secret은 repository-level Secret이 아니라 보호된 `ard-llm` Environment에 둡니다. 첨부 Secret은 별도의 `ard-private-intake` Environment에 격리합니다. `Settings → Environments`에서 각 Environment와 허용 branch를 지정하며 운영 workflow는 아래 고정 이름만 읽습니다.
 
 | 종류 | 이름 | 용도 | 필수 조건 |
 |---|---|---|---|
-| Environment Secret | `ARD_ATTACHMENT_TOKEN` | private Issue `user-attachments` 다운로드 | Issue intake 필수; `ard-private-intake`에만 저장 |
+| Environment Secret | `ARD_ATTACHMENT_TOKEN` | 인증된 Issue `user-attachments` 다운로드 경계 | Issue intake 필수; `ard-private-intake`에만 저장 |
 | Variable | `ARD_LLM_PROFILE` | `config/llm-profiles.yaml`의 기본 프로필 이름 | 항상 필수; 초기값 `openai-compatible-default` |
 | Variable/Secret | `ARD_LLM_BASE_URL` | OpenAI-compatible endpoint | 해당 provider 선택 시 필수; 같은 이름의 Secret이 우선 |
 | Secret | `ARD_LLM_API_KEY` | OpenAI-compatible API 키 | 해당 provider 선택 시 필수 |
@@ -58,13 +58,21 @@ LLM Secret은 repository-level Secret이 아니라 보호된 `ard-llm` Environme
 | Variable | `ARD_MAX_ATTACHMENT_BYTES` | 파일 하나의 최대 byte | 선택; 기본값 `52428800` |
 | Variable | `ARD_SEMANTIC_PDF_PIPELINE` | PDF parser mode: `candidate`, `shadow`, `legacy` | 선택; 미설정 시 `candidate` |
 
-### Private Issue 첨부 Environment
+### Enterprise-ready 첨부 Environment
 
 `Settings → Environments`에서 `ard-private-intake`를 만들고 custom deployment branch policy를 `main` 하나로 제한합니다. required reviewer와 wait timer는 두지 않습니다. write 이상 관리자가 `ard:approved`를 적용하고 workflow가 label actor 권한을 다시 확인하는 단계가 사람 승인 경계입니다.
 
-`ARD_ATTACHMENT_TOKEN`은 이 저장소에 read 접근만 있고 다른 private 저장소에는 접근하지 않는 전용 bot 계정의 만료 기한이 있는 classic PAT를 사용합니다. classic PAT에는 private 저장소 접근을 위한 `repo` scope가 필요하며, 조직으로 이전해 SSO를 적용하면 해당 토큰도 SSO 승인을 받아야 합니다. 일반 관리자 계정의 범용 토큰은 사용하지 않습니다.
+`ARD_ATTACHMENT_TOKEN`은 향후 private GitHub.com 대상에서 이 저장소에만 read 접근하고 다른 private 저장소에는 접근하지 않는 전용 bot 계정의 만료 기한이 있는 classic PAT를 사용합니다. classic PAT에는 계획된 private 저장소 접근을 위한 `repo` scope가 필요하며, 조직으로 이전해 SSO를 적용하면 해당 토큰도 SSO 승인을 받아야 합니다. 일반 관리자 계정의 범용 토큰은 사용하지 않습니다. GHES 또는 다른 Enterprise 제품에서는 같은 host·path·token 계약을 가정하지 않고 이전 전에 다시 검증합니다.
 
-Secret 값은 GitHub의 암호화 입력 또는 로컬 `gh secret set ARD_ATTACHMENT_TOKEN --env ard-private-intake`의 숨김 입력으로만 등록합니다. 만료·폐기·권한 변경 시 Secret을 교체하고 기존 Issue에서 `ard:approved`를 제거한 뒤 다시 적용합니다. `intake`와 `base_sync`의 trusted CLI step만 이 Secret을 읽으며 checkout, processor, LLM, release와 finalizer에는 전달하지 않습니다.
+Secret 값은 GitHub의 암호화 입력 또는 다음 로컬 명령의 숨김 입력으로만 등록합니다.
+
+```bash
+gh secret set ARD_ATTACHMENT_TOKEN \
+  --repo kimohy/ard-ossie-provider \
+  --env ard-private-intake
+```
+
+만료·폐기·권한 변경 시 Secret을 교체하고 기존 Issue에서 `ard:approved`를 제거한 뒤 다시 적용합니다. `intake`와 `base_sync`의 trusted CLI step만 이 Secret을 읽으며 checkout, processor, LLM, release와 finalizer에는 전달하지 않습니다.
 
 선택하지 않은 provider의 값은 없어도 됩니다. 선택된 프로필에 필요한 값만 읽고 검증합니다.
 기존 `ARD_LLM_MODEL`과 `ARD_LLM_API_STYLE` Variable은 삭제합니다. 해당 값은 이제 아래처럼
@@ -139,7 +147,7 @@ uv run ard llm smoke-test --profile openai-compatible-default
 | Label | 용도 |
 |---|---|
 | `ard:submission` | Issue Form으로 제출됨 |
-| `ard:approved` | write 이상 관리자가 비공개 저장소 반입과 LLM 처리를 승인함 |
+| `ard:approved` | write 이상 관리자가 공개 권한과 LLM 처리를 승인함 |
 | `ard:processing` | 수집/변환 진행 중 |
 | `ard:failed` | 수집 또는 변환 실패 |
 | `ard:pr-created` | 제품 Draft PR 생성 완료 |
@@ -148,7 +156,7 @@ uv run ard llm smoke-test --profile openai-compatible-default
 
 ## 4. Main branch 보호
 
-`main` ruleset 또는 branch protection에 다음을 적용합니다.
+`main` branch protection에 다음을 적용합니다.
 
 - direct push 금지
 - pull request 필수
@@ -183,7 +191,7 @@ bootstrap을 적용해 다음 운영 계약을 구성했습니다.
   provider의 Environment Secret이 있습니다. Secret 값은 운영 기록과 workflow log에
   남기지 않습니다.
 - Actions 기본 권한은 read이며 workflow의 pull request 생성을 허용합니다.
-- `main`은 pull request, 최신 base, conversation resolution,
+- 현재 public 저장소의 `main`은 pull request, 최신 base, conversation resolution,
   `ard/quality-gate`, `ard/changeset`을 요구하고 관리자 우회, force push, 삭제를 허용하지
   않습니다. 비소유자 writer가 준비되기 전까지 승인 수는 0입니다.
 
@@ -211,7 +219,7 @@ downstream은 `(product_id, version, tag, commit)`을 중복 제거 키로 사�
 3. 관리자가 `ard:approved`를 붙입니다.
 4. `ARD approved issue intake` workflow가 Draft PR을 만듭니다.
 5. 변환 결과와 보고서를 검토합니다. `deferred_review`가 있으면 적용된 fallback과 attempt audit를 확인하고 후속 개선 사항을 기록합니다.
-6. hard error가 0이고 두 required status가 성공한 뒤 병합합니다. candidate PDF라면 추가로 `validation-report.json`이 `status=verified`, `publishable=true`여야 합니다. `WARN`은 validation이 계속 `verified`인 경우에만 허용하고 `review_pending`은 병합하지 않습니다.
+6. hard error가 0이고 두 required status가 성공한 뒤 exact-head guard로 병합합니다. candidate PDF라면 추가로 `validation-report.json`이 `status=verified`, `publishable=true`여야 합니다. `WARN`은 validation이 계속 `verified`인 경우에만 허용하고 `review_pending`은 병합하지 않습니다.
 
 제품 PR 본문은 승인된 Issue를 `Closes #<issue-number>`로 연결합니다. Issue는 이 PR이 병합될 때만 정상 완료로 닫습니다. 처리 실패, `ard:failed`, Draft PR 생성만으로 Issue를 닫지 않습니다.
 
