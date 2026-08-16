@@ -799,7 +799,7 @@ def test_processing_rejects_stale_head_before_loading_provider(tmp_path: Path) -
     assert provider_loaded is False
 
 
-def test_processing_rejects_unbound_changeset_marker_before_provider(
+def test_processing_accepts_historical_changeset_marker_without_active_binding(
     tmp_path: Path,
 ) -> None:
     repository(tmp_path)
@@ -815,16 +815,16 @@ def test_processing_rejects_unbound_changeset_marker_before_provider(
         provider_loaded = True
 
     git = FakeGit()
-    with pytest.raises(WorkflowSecurityError, match="CHANGESET_BINDING_REQUIRED"):
-        ProcessingService(
-            RepositoryPaths(tmp_path),
-            git,
-            FakeGitHub(git),
-            processor=successful_processor,
-            provider_factory=provider_factory,
-        ).run(request(tmp_path))
+    result = ProcessingService(
+        RepositoryPaths(tmp_path),
+        git,
+        FakeGitHub(git),
+        processor=successful_processor,
+        provider_factory=provider_factory,
+    ).run(request(tmp_path))
 
-    assert provider_loaded is False
+    assert provider_loaded is True
+    assert result.status is WorkflowStatus.SUCCESS
 
 
 @pytest.mark.parametrize(
