@@ -210,6 +210,36 @@ def test_detect_product_allows_canonical_changeset_marker_with_sources() -> None
     assert result.outputs["product_key"] == "sales-order"
 
 
+def test_detect_product_allows_direct_update_config_with_same_product_sources() -> None:
+    result = DetectProductService(
+        FakeGit(
+            (
+                "products/sales-order/product.yaml",
+                "products/sales-order/sources/product/product.html",
+            )
+        )
+    ).run("origin/main", "HEAD")
+
+    assert result.outputs["product_key"] == "sales-order"
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ("products/sales-order/product.yaml",),
+        (
+            "products/finance-order/product.yaml",
+            "products/sales-order/sources/product/product.html",
+        ),
+    ],
+)
+def test_detect_product_rejects_config_without_same_product_sources(
+    paths: tuple[str, ...],
+) -> None:
+    with pytest.raises(WorkflowValidationError, match="CHANGESET_CONFIG_PRODUCT_MISMATCH"):
+        DetectProductService(FakeGit(paths)).run("origin/main", "HEAD")
+
+
 def test_detect_product_rejects_mixed_code_and_data() -> None:
     git = FakeGit(("README.md", "products/sales/sources/product.html"))
 

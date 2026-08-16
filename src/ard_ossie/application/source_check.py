@@ -101,12 +101,10 @@ class DetectProductService:
                 "CHANGESET_MARKER_PRODUCT_MISMATCH",
                 "changeset marker must accompany sources for the same product",
             )
-        if config_products and (
-            config_products != products or config_products != marker_products
-        ):
+        if config_products and config_products != products:
             raise WorkflowValidationError(
                 "CHANGESET_CONFIG_PRODUCT_MISMATCH",
-                "product config may change only with its canonical changeset marker",
+                "product config must accompany sources for the same product",
             )
 
         outputs: dict[str, object] = {
