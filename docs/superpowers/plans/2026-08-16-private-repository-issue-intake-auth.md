@@ -250,10 +250,114 @@ human-facing prose.
 
 ---
 
-### Task 4: Verify and publish the branch
+### Task 4: Converge bootstrap on the private contract
 
 **Files:**
-- Verify: all Task 1-3 changes plus this plan and design
+- Modify: `src/ard_ossie/application/github_bootstrap.py:31-41,397-408`
+- Modify: `tests/unit/test_github_bootstrap_service.py`
+- Modify: `docs/github-actions-setup.md`
+- Modify: `docs/github-enterprise-migration.md`
+
+**Interfaces:**
+- Consumes: `RepositoryState.public: bool`, `GitHubBootstrapService.plan()`, and the approved
+  bootstrap ownership section in the private-auth design.
+- Produces: a bootstrap precondition that accepts only the exact private `main` repository,
+  private desired label descriptions, and an explicit manual ownership boundary for
+  `ard-private-intake`.
+
+- [ ] **Step 1: Add private-repository and label RED tests**
+
+Import `replace` from `dataclasses` and `pytest`, then add:
+
+```python
+def test_bootstrap_accepts_private_repository_and_converges_private_labels() -> None:
+    github = FakeGitHub()
+    github.repository_state = replace(github.repository_state, public=False)
+    service = GitHubBootstrapService(REPOSITORY, github)
+
+    service.apply(service.plan(provider_config()), api_key="sentinel-key")
+
+    assert github.labels["ard:submission"].description == (
+        "Private AI Ready Data submission"
+    )
+    assert github.labels["ard:approved"].description == (
+        "Maintainer approved private ingestion"
+    )
+    assert "ard-private-intake" not in github.environments
+
+
+def test_bootstrap_rejects_public_repository_before_mutation() -> None:
+    github = FakeGitHub()
+    github.repository_state = replace(github.repository_state, public=True)
+
+    with pytest.raises(WorkflowConfigurationError) as captured:
+        GitHubBootstrapService(REPOSITORY, github).plan(provider_config())
+
+    assert captured.value.code == "REPOSITORY_MISMATCH"
+    assert github.labels == {}
+    assert github.environments == {}
+```
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+```text
+uv run --frozen pytest -q \
+  tests/unit/test_github_bootstrap_service.py::test_bootstrap_accepts_private_repository_and_converges_private_labels \
+  tests/unit/test_github_bootstrap_service.py::test_bootstrap_rejects_public_repository_before_mutation
+```
+
+Expected: the private repository is rejected by `REPOSITORY_MISMATCH`, while the public repository
+is incorrectly accepted.
+
+- [ ] **Step 3: Apply the minimal bootstrap change**
+
+Change the repository predicate from `not repository.public` to `repository.public`, change the
+message to `bootstrap requires the exact private main repository`, and replace only these desired
+label descriptions:
+
+```python
+description="Private AI Ready Data submission"
+description="Maintainer approved private ingestion"
+```
+
+Set the `FakeGitHub` default repository state to `public=False`; the explicit public rejection test
+remains the negative case. Do not add `ard-private-intake` to `_llm_environment()`,
+`_production_environment()`, the plan items, or Secret operations.
+
+- [ ] **Step 4: Document the ownership boundary**
+
+In `docs/github-actions-setup.md`, state directly after the bootstrap examples that bootstrap does
+not inspect or manage `ard-private-intake`, its branch policy, or `ARD_ATTACHMENT_TOKEN`; operators
+must use the private attachment Environment procedure below. In
+`docs/github-enterprise-migration.md`, remove the obsolete public-visibility rejection claim. State
+that private visibility is required, but GHES host/API compatibility is still a separate gate and
+that the private intake Environment remains manually owned.
+
+- [ ] **Step 5: Verify GREEN and commit**
+
+Run:
+
+```text
+uv run --frozen pytest -q tests/unit/test_github_bootstrap_service.py
+uv run --frozen ruff check src/ard_ossie/application/github_bootstrap.py \
+  tests/unit/test_github_bootstrap_service.py
+uv run --frozen ruff format --check src/ard_ossie/application/github_bootstrap.py \
+  tests/unit/test_github_bootstrap_service.py
+git diff --check
+```
+
+Expected: all commands pass and `rg -n "Public AI Ready|public ingestion|exact public main" src
+tests/unit/test_github_bootstrap_service.py` returns no matches. Commit as
+`fix: converge bootstrap on private repository`.
+
+---
+
+### Task 5: Verify and publish the branch
+
+**Files:**
+- Verify: all Task 1-4 changes plus this plan and design
 
 **Interfaces:**
 - Consumes: branch based on main merge `bdc96c213b00ce62fa36c64fc4ecce7e5b186020`.
@@ -303,7 +407,7 @@ pytest, wheel, and finalizer success at that same head.
 
 ---
 
-### Task 5: Provision, merge, and retry Issue #46
+### Task 6: Provision, merge, and retry Issue #46
 
 **Files:**
 - Update runtime-only `.ard/run/shared-table-e2e-state.json`
