@@ -354,10 +354,128 @@ tests/unit/test_github_bootstrap_service.py` returns no matches. Commit as
 
 ---
 
-### Task 5: Verify and publish the branch
+### Task 5: Exclude unsupported branch protection on GitHub Free private
 
 **Files:**
-- Verify: all Task 1-4 changes plus this plan and design
+- Modify: `src/ard_ossie/application/github_bootstrap.py:204-225,305-316`
+- Modify: `tests/unit/test_github_bootstrap_service.py`
+- Modify: `README.md`
+- Modify: `docs/github-actions-setup.md`
+- Modify: `docs/github-enterprise-migration.md`
+- Modify: `docs/superpowers/specs/2026-08-08-github-cli-bootstrap-design.md`
+
+**Interfaces:**
+- Consumes: `GitHubBootstrapService.plan()` and `apply()`, the existing optional
+  `enable_review_protection()` command, and the approved GitHub Free enforcement reduction.
+- Produces: bootstrap plans without `branch:main`, no bootstrap branch-protection API calls, and
+  an operating guide that treats exact-head checks as advisory manual gates.
+
+- [ ] **Step 1: Add a branch-protection exclusion RED test**
+
+Add `protection_reads` and `protection_writes` recorders to `FakeGitHub`, then add:
+
+```python
+def test_bootstrap_excludes_branch_protection_on_github_free_private() -> None:
+    github = FakeGitHub()
+    service = GitHubBootstrapService(REPOSITORY, github)
+
+    plan = service.plan(provider_config())
+    service.apply(plan, api_key="sentinel-key")
+
+    assert "branch:main" not in {item.target for item in plan.items}
+    assert github.protection_reads == []
+    assert github.protection_writes == []
+```
+
+Record calls without changing fake behavior:
+
+```python
+def get_branch_protection(self, branch: str):
+    self.protection_reads.append(branch)
+    assert branch == "main"
+    return self.protection
+
+def set_branch_protection(self, branch: str, state):
+    self.protection_writes.append(branch)
+    self.protection = state
+    return MutationRecord(
+        resource="branch_protection",
+        target=f"branch:{branch}",
+        action="set",
+    )
+```
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+```text
+uv run --frozen pytest -q \
+  tests/unit/test_github_bootstrap_service.py::test_bootstrap_excludes_branch_protection_on_github_free_private
+```
+
+Expected: `branch:main` remains in the plan and `protection_reads` contains `main`.
+
+- [ ] **Step 3: Remove branch protection only from bootstrap plan/apply**
+
+Delete the `current_protection`/`BootstrapItem(target="branch:main", ...)` block from `plan()` and
+the `current_protection`/`desired_protection` mutation block from `apply()`. Keep `_PROTECTION`,
+`_bootstrap_protection()`, and `enable_review_protection()` unchanged as an explicit future paid-plan
+path that is no longer invoked by the current runbook.
+
+Change `test_bootstrap_plan_contains_exact_project_resources()` so its last item is
+`environment:production-linkage`. Replace the protection-based drift in
+`test_apply_replans_noop_resources_after_confirmation_drift()` with Actions drift:
+
+```python
+github.actions = ActionsPermissionState(
+    default_workflow_permissions="write",
+    can_approve_pull_request_reviews=False,
+)
+result = service.apply(confirmed_plan)
+
+assert github.actions.default_workflow_permissions == "read"
+assert any(mutation.resource == "actions_permissions" for mutation in result.mutations)
+```
+
+- [ ] **Step 4: Replace active branch-protection claims**
+
+In `docs/github-actions-setup.md`, remove the current `enable-review-protection` command and replace
+the `Main branch 보호` section with `GitHub Free private main 운영 게이트`. State explicitly that
+GitHub does not enforce direct-push blocking, PR requirements, conversations, current-base, or the
+two statuses. Require operators to avoid direct pushes, inspect the exact PR head, observe successful
+`ard/quality-gate` and `ard/changeset`, and use exact-head merge matching.
+
+Change README's setup summary from branch-protection settings to `GitHub Free private 운영 게이트`.
+In `docs/github-enterprise-migration.md`, remove the stale claim that bootstrap rejects private
+visibility and state that bootstrap intentionally excludes branch protection on every host; paid
+Enterprise targets recreate and verify it separately. Add a supersession note to the historical
+`2026-08-08-github-cli-bootstrap-design.md` pointing to the private-auth design instead of silently
+rewriting its historical branch-protection steps.
+
+- [ ] **Step 5: Verify live dry-run, GREEN tests, and commit**
+
+Run:
+
+```text
+uv run --frozen pytest -q tests/unit/test_github_bootstrap_service.py
+uv run --frozen ruff check src/ard_ossie/application/github_bootstrap.py \
+  tests/unit/test_github_bootstrap_service.py
+uv run --frozen ruff format --check src/ard_ossie/application/github_bootstrap.py \
+  tests/unit/test_github_bootstrap_service.py
+uv run --frozen ard github bootstrap --repo kimohy/ard-ossie-provider --dry-run
+git diff --check
+```
+
+Expected: tests and checks pass; live dry-run exits `0`, contains no `branch:main`, and performs no
+mutation. Commit as `fix: skip unsupported private branch protection`.
+
+---
+
+### Task 6: Verify and publish the branch
+
+**Files:**
+- Verify: all Task 1-5 changes plus this plan and design
 
 **Interfaces:**
 - Consumes: branch based on main merge `bdc96c213b00ce62fa36c64fc4ecce7e5b186020`.
@@ -407,7 +525,7 @@ pytest, wheel, and finalizer success at that same head.
 
 ---
 
-### Task 6: Provision, merge, and retry Issue #46
+### Task 7: Provision, merge, and retry Issue #46
 
 **Files:**
 - Update runtime-only `.ard/run/shared-table-e2e-state.json`
