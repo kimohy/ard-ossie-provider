@@ -120,9 +120,9 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert validation["permissions"] == {"contents": "read"}
     assert validation["environment"] == "ard-llm"
     assert "GH_TOKEN" not in str(validation)
-    assert {
-        name for name in validation["env"] if name.startswith("ARD_")
-    } == {"ARD_SEMANTIC_PDF_PIPELINE"}
+    assert {name for name in validation["env"] if name.startswith("ARD_")} == {
+        "ARD_SEMANTIC_PDF_PIPELINE"
+    }
     assert validation["env"]["ARD_SEMANTIC_PDF_PIPELINE"] == (
         "${{ vars.ARD_SEMANTIC_PDF_PIPELINE || 'candidate' }}"
     )
@@ -142,9 +142,10 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
     assert validation_run["working-directory"] == "trusted"
     assert '--repository "$CANDIDATE_REPOSITORY"' in validation_run["run"]
     assert "--require-llm" in validation_run["run"]
-    assert '--diagnostics-dir "$CANDIDATE_REPOSITORY/.ard/run/semantic-validate"' in validation_run[
-        "run"
-    ]
+    assert (
+        '--diagnostics-dir "$CANDIDATE_REPOSITORY/.ard/run/semantic-validate"'
+        in validation_run["run"]
+    )
     validation_upload = next(
         step
         for step in validation["steps"]
@@ -169,9 +170,7 @@ def test_reusable_processor_has_writeback_quality_and_secret_contracts() -> None
         "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}"
     )
     assert all(
-        "secrets." not in str(step)
-        for step in validation["steps"]
-        if step is not validation_run
+        "secrets." not in str(step) for step in validation["steps"] if step is not validation_run
     )
 
     job = workflow["jobs"]["process"]
@@ -305,9 +304,7 @@ def test_direct_change_uses_read_only_signal_and_default_branch_coordinator() ->
         "${{ secrets.ARD_VERTEX_CREDENTIALS_JSON }}"
     )
     assert all(
-        "secrets." not in str(step)
-        for step in validation["steps"]
-        if step is not source_check
+        "secrets." not in str(step) for step in validation["steps"] if step is not source_check
     )
 
     pull_request = workflow["jobs"]["pull_request"]
@@ -364,10 +361,16 @@ def test_issue_intake_routes_existing_drafts_through_trusted_base_sync() -> None
     intake = workflow["jobs"]["intake"]
     assert intake["needs"] == "route"
     assert intake["if"] == "needs.route.outputs.mode == 'intake'"
+    assert intake["environment"] == "ard-private-intake"
+    intake_run = next(step for step in intake["steps"] if step.get("id") == "intake")
+    assert intake_run["env"] == {
+        "ARD_ATTACHMENT_TOKEN": "${{ secrets.ARD_ATTACHMENT_TOKEN }}",
+    }
 
     base_sync = workflow["jobs"]["base_sync"]
     assert base_sync["needs"] == "route"
     assert base_sync["if"] == "needs.route.outputs.mode == 'base_sync'"
+    assert base_sync["environment"] == "ard-private-intake"
     assert base_sync["permissions"] == {
         "contents": "write",
         "issues": "read",
@@ -391,7 +394,10 @@ def test_issue_intake_routes_existing_drafts_through_trusted_base_sync() -> None
     }
     base_sync_run = next(step for step in base_sync["steps"] if step.get("run"))
     assert base_sync_run["working-directory"] == "trusted"
-    assert base_sync_run["env"]["PYTHONSAFEPATH"] == "1"
+    assert base_sync_run["env"] == {
+        "PYTHONSAFEPATH": "1",
+        "ARD_ATTACHMENT_TOKEN": "${{ secrets.ARD_ATTACHMENT_TOKEN }}",
+    }
     assert '--repository "$CANDIDATE_REPOSITORY"' in base_sync_run["run"]
     assert '--base-sha "$BASE_SHA"' in base_sync_run["run"]
 
