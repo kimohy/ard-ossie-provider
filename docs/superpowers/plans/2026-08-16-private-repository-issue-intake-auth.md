@@ -192,7 +192,6 @@ tests as `ci: isolate private attachment credential`.
 ### Task 3: Replace the active public contract
 
 **Files:**
-- Create: `tests/integration/test_private_repository_contract.py`
 - Modify: `.github/ISSUE_TEMPLATE/ard-content.yml`
 - Modify: `README.md`
 - Modify: `docs/github-actions-setup.md`
@@ -204,60 +203,18 @@ tests as `ci: isolate private attachment credential`.
 - Consumes: the approved private design and Task 2 runtime names.
 - Produces: private consent, operating/rotation instructions, and historical supersession.
 
-- [ ] **Step 1: Add a RED active-contract test**
+- [ ] **Step 1: Capture the current public contract before editing**
 
-```python
-from pathlib import Path
-
-import yaml
-
-ROOT = Path(__file__).parents[2]
-
-
-def test_issue_form_requires_private_repository_authorization() -> None:
-    form = yaml.safe_load(
-        (ROOT / ".github/ISSUE_TEMPLATE/ard-content.yml").read_text(encoding="utf-8")
-    )
-    assert form["description"] == (
-        "Submit one private ARD product for validation and Ossie conversion"
-    )
-    notice, acknowledgement = form["body"][:2]
-    assert "비공개 저장소" in notice["attributes"]["value"]
-    assert acknowledgement["id"] == "private_authorization"
-    assert acknowledgement["attributes"]["label"] == "Private repository authorization"
-    assert acknowledgement["attributes"]["options"][0] == {
-        "label": "I am authorized to submit this content to the private repository.",
-        "required": True,
-    }
-
-
-def test_active_documents_define_private_intake() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    setup = (ROOT / "docs/github-actions-setup.md").read_text(encoding="utf-8")
-    architecture = (
-        ROOT / "docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md"
-    ).read_text(encoding="utf-8")
-    assert "비공개 저장소" in readme and "저장소 반입 권한" in readme
-    assert "ard-private-intake" in setup and "ARD_ATTACHMENT_TOKEN" in setup
-    assert "private 저장소 Issue" in architecture
-    for stale in ("공개 가능 여부를 검토", "public ARD 컨텐츠", "공개 저장소 Issue는"):
-        assert stale not in "\n".join((readme, setup, architecture))
-
-
-def test_historical_public_plans_are_marked_superseded() -> None:
-    marker = "Superseded policy (2026-08-16)"
-    for relative in (
-        "docs/superpowers/plans/2026-08-08-repository-bootstrap.md",
-        "docs/superpowers/plans/2026-08-08-cli-first-01-foundation.md",
-    ):
-        assert marker in (ROOT / relative).read_text(encoding="utf-8")
+```text
+rg -n -i "public ARD|공개 저장소 Issue|공개 수집|may be published publicly" \
+  README.md .github/ISSUE_TEMPLATE/ard-content.yml docs/github-actions-setup.md \
+  docs/superpowers/specs/2026-08-08-ai-ready-data-ossie-architecture-design.md
+uv run --frozen python -c "import pathlib,yaml; form=yaml.safe_load(pathlib.Path('.github/ISSUE_TEMPLATE/ard-content.yml').read_text()); assert form['body'][1]['id'] == 'private_authorization'"
 ```
 
-- [ ] **Step 2: Verify RED**
-
-Run `uv run --frozen pytest tests/integration/test_private_repository_contract.py -q`.
-
-Expected: public form, active docs, and unmarked historical plans fail.
+Expected: `rg` finds the superseded public language and the Python assertion fails on
+`public_acknowledgement`. This is a one-time configuration/prose check, not a permanent source-text
+test; durable automated tests remain focused on observable Python and workflow behavior.
 
 - [ ] **Step 3: Update the Issue Form and README**
 
@@ -280,11 +237,13 @@ historical plan without erasing old steps:
 > `docs/superpowers/specs/2026-08-16-private-repository-issue-intake-auth-design.md`.
 ```
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [ ] **Step 5: Validate the private contract and commit**
 
-Run the new test, `git diff --check`, and search active docs for `public ARD`, `공개 저장소 Issue`,
-`공개 수집`, and `may be published publicly`; require no match. Commit the listed files as
-`docs: adopt private repository intake policy`.
+Parse the Issue Form with PyYAML and require the exact private ID/label/required option. Run
+`git diff --check`, search active docs for `public ARD`, `공개 저장소 Issue`, `공개 수집`, and
+`may be published publicly`, and require no match. Commit the listed files as
+`docs: adopt private repository intake policy`; do not add a persistent test that only freezes
+human-facing prose.
 
 ---
 
@@ -302,7 +261,7 @@ Run the new test, `git diff --check`, and search active docs for `public ARD`, `
 Run, in order:
 
 ```text
-uv run --frozen pytest tests/unit/test_github_event.py tests/unit/test_workflow_secret_contract.py tests/integration/test_workflow_contracts.py tests/integration/test_private_repository_contract.py -q
+uv run --frozen pytest tests/unit/test_github_event.py tests/unit/test_workflow_secret_contract.py tests/integration/test_workflow_contracts.py -q
 uv run --frozen pytest -q
 uv run --frozen ruff check src tests
 uv run --frozen ruff format --check src tests
