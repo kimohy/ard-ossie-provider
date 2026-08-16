@@ -360,8 +360,13 @@ Run:
 uv run --frozen pytest -q
 git diff --name-only -z origin/main...HEAD -- '*.py' | xargs -0 uv run --frozen ruff check
 git diff --name-only -z origin/main...HEAD -- '*.py' | xargs -0 uv run --frozen ruff format --check
-uv run --frozen ard workflow repository-check
-uv run --frozen python -m build
+uv run --frozen ard workflow repository-check \
+  --base-ref "$(git rev-parse origin/main)" \
+  --head-ref "$(git rev-parse HEAD)" \
+  --head-sha "$(git rev-parse HEAD)" \
+  --repository . \
+  --verification-group static
+uv build --sdist --wheel
 git diff --check
 ```
 
