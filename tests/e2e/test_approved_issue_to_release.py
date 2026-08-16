@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import httpx
+import pytest
 from docx import Document
 from openpyxl import Workbook
 
@@ -84,7 +85,7 @@ def dictionary_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def attachment_transport() -> httpx.MockTransport:
+def attachment_transport(expected_token: str) -> httpx.MockTransport:
     payloads = {
         "11111111-1111-1111-1111-111111111111": (
             b"<html><body><h1>Sales Order</h1><p>Order analytics.</p></body></html>",
@@ -101,6 +102,7 @@ def attachment_transport() -> httpx.MockTransport:
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == f"Bearer {expected_token}"
         key = request.url.path.rsplit("/", 1)[-1]
         content, content_type = payloads[key]
         return httpx.Response(200, headers={"content-type": content_type}, content=content)
@@ -360,8 +362,9 @@ class RecordingProvider:
         return {"suggestions": [], "metrics": [], "product_facts": []}
 
 
-def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
+def test_approved_private_issue_to_numeric_release_is_reproducible_and_traceable(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -371,9 +374,7 @@ def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
     git(repository, "commit", "--allow-empty", "-m", "chore: initialize repository")
     base_head = git(repository, "rev-parse", "HEAD")
 
-    event_payload = json.loads(
-        (FIXTURES / "approved-issue.json").read_text(encoding="utf-8")
-    )
+    event_payload = json.loads((FIXTURES / "approved-issue.json").read_text(encoding="utf-8"))
     event_payload["repository"] = {
         "default_branch": "main",
         "full_name": "owner/repository",
@@ -398,7 +399,9 @@ def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
     )
     assert authorization.outputs == {"allowed": True}
 
-    with httpx.Client(transport=attachment_transport()) as client:
+    attachment_token = "e2e-attachment-token"
+    monkeypatch.setenv("ARD_ATTACHMENT_TOKEN", attachment_token)
+    with httpx.Client(transport=attachment_transport(attachment_token)) as client:
         intake_result = IssueIntakeService(
             RepositoryPaths(repository),
             git_adapter,
@@ -492,8 +495,7 @@ def test_approved_issue_to_numeric_release_is_public_reproducible_and_traceable(
     }
     assert provider.requests
     assert all(
-        "semantic-structure-repair-v1" not in json.dumps(request)
-        for request in provider.requests
+        "semantic-structure-repair-v1" not in json.dumps(request) for request in provider.requests
     )
 
     manifest = json.loads(
