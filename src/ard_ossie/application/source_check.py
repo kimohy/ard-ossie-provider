@@ -230,7 +230,7 @@ class EnsureProductPrService:
     ) -> WorkflowResult:
         _validate_product_key(product_key)
         _validate_sha(expected_head)
-        remote_head = self.git.remote_branch_sha(branch)
+        remote_head = self.github.branch_sha(branch)
         if remote_head != expected_head:
             raise WorkflowSecurityError(
                 "DIRECT_BRANCH_HEAD_MISMATCH",
