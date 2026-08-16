@@ -104,9 +104,8 @@ _USER_ASSET_PATH = re.compile(
 )
 _USER_FILE_PATH = re.compile(r"^/user-attachments/files/([1-9][0-9]*)/([^/]+)$")
 _MALFORMED_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
-_ASSET_STORAGE_HOST = re.compile(
-    r"^github-production-user-asset-[a-z0-9-]+\.s3\.amazonaws\.com$"
-)
+_ASSET_STORAGE_HOST = re.compile(r"^github-production-user-asset-[a-z0-9-]+\.s3\.amazonaws\.com$")
+_ATTACHMENT_TOKEN_ENV = "ARD_ATTACHMENT_TOKEN"
 _FIELD_NAMES = {
     "Operation": "operation",
     "Product key": "product_key",
@@ -154,11 +153,15 @@ def _validate_attachment_redirect_url(url: str) -> str:
     raise AttachmentSecurityError(f"UNTRUSTED_ATTACHMENT_HOST: {host}")
 
 
-def _attachment_request_headers(url: str) -> dict[str, str]:
+def _resolve_attachment_token(value: str | None) -> str:
+    token = value if value is not None else os.environ.get(_ATTACHMENT_TOKEN_ENV)
+    if token is None or not token.strip():
+        raise AttachmentSecurityError("ATTACHMENT_TOKEN_REQUIRED")
+    return token
+
+
+def _attachment_request_headers(url: str, token: str) -> dict[str, str]:
     if (urlsplit(url).hostname or "").lower() != "github.com":
-        return {}
-    token = os.environ.get("GH_TOKEN")
-    if not token:
         return {}
     return {"Authorization": f"Bearer {token}"}
 
@@ -206,8 +209,7 @@ def _validate_user_attachment_path(path: str) -> None:
         or "/" in filename
         or "\\" in filename
         or any(
-            unicodedata.category(character) in {"Cc", "Cf", "Zl", "Zp"}
-            for character in filename
+            unicodedata.category(character) in {"Cc", "Cf", "Zl", "Zp"} for character in filename
         )
     ):
         raise AttachmentSecurityError("UNTRUSTED_ATTACHMENT_PATH")
@@ -269,17 +271,19 @@ def download_attachment(
     max_bytes: int = 50 * 1024 * 1024,
     client: httpx.Client | None = None,
     max_redirects: int = 5,
+    attachment_token: str | None = None,
 ) -> DownloadedAttachment:
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
     active_client = client or httpx.Client(timeout=120)
     owns_client = client is None
     current_url = validate_attachment_url(attachment.url)
+    token = _resolve_attachment_token(attachment_token)
     try:
         for redirect_count in range(max_redirects + 1):
             request = active_client.build_request("GET", current_url)
             request.headers.pop("authorization", None)
-            request.headers.update(_attachment_request_headers(current_url))
+            request.headers.update(_attachment_request_headers(current_url, token))
             with closing(
                 active_client.send(
                     request,
@@ -294,11 +298,20 @@ def download_attachment(
                     location = response.headers.get("location")
                     if not location:
                         raise AttachmentSecurityError("ATTACHMENT_REDIRECT_WITHOUT_LOCATION")
-                    current_url = _validate_attachment_redirect_url(
-                        urljoin(current_url, location)
-                    )
+                    current_url = _validate_attachment_redirect_url(urljoin(current_url, location))
                     continue
-                response.raise_for_status()
+                if not response.is_success:
+                    sanitized_url = (
+                        urlsplit(current_url)
+                        ._replace(
+                            query="",
+                            fragment="",
+                        )
+                        .geturl()
+                    )
+                    raise AttachmentSecurityError(
+                        f"ATTACHMENT_DOWNLOAD_HTTP_{response.status_code}: {sanitized_url}"
+                    )
                 _validate_content_headers(attachment, response.headers, max_bytes=max_bytes)
                 digest = hashlib.sha256()
                 size = 0

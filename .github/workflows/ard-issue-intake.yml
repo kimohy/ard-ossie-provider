@@ -95,6 +95,7 @@ jobs:
     needs: route
     if: needs.route.outputs.mode == 'intake'
     runs-on: ubuntu-24.04
+    environment: ard-private-intake
     permissions:
       actions: write
       contents: write
@@ -128,6 +129,8 @@ jobs:
           version: '0.11.33'
       - name: Ingest approved issue
         id: intake
+        env:
+          ARD_ATTACHMENT_TOKEN: ${{ secrets.ARD_ATTACHMENT_TOKEN }}
         run: >-
           uv run --frozen ard workflow issue-intake
           --event "$GITHUB_EVENT_PATH"
@@ -138,6 +141,7 @@ jobs:
     needs: route
     if: needs.route.outputs.mode == 'base_sync'
     runs-on: ubuntu-24.04
+    environment: ard-private-intake
     permissions:
       contents: write
       issues: read
@@ -183,6 +187,7 @@ jobs:
         working-directory: trusted
         env:
           PYTHONSAFEPATH: '1'
+          ARD_ATTACHMENT_TOKEN: ${{ secrets.ARD_ATTACHMENT_TOKEN }}
         run: >-
           uv run --frozen ard workflow issue-base-sync
           --event "$GITHUB_EVENT_PATH"

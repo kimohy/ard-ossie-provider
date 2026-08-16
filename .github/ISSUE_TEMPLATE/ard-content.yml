@@ -1,5 +1,5 @@
 name: AI Ready Data submission
-description: Submit one public ARD product for validation and Ossie conversion
+description: Submit one public-safe ARD product for validation and Ossie conversion
 title: "[ARD] "
 labels:
   - ard:submission
@@ -7,14 +7,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        모든 입력, 첨부파일, 생성 결과는 공개 저장소에 영구적으로 기록됩니다.
-        비밀정보, 개인정보, 접근 토큰을 첨부하지 마세요.
+        저장소, Issue, 첨부파일, 생성 결과와 Release는 누구나 볼 수 있습니다.
+        공개 권한이 있는 합성·비기밀 데이터만 제출하고 비밀정보, 개인정보, 고객 데이터, 내부 문서, 접근 토큰을 첨부하지 마세요.
   - type: checkboxes
-    id: public_acknowledgement
+    id: public_authorization
     attributes:
-      label: Public content acknowledgement
+      label: Public publication authorization
       options:
-        - label: I confirm that all submitted content may be published publicly.
+        - label: I am authorized to publish this synthetic, non-confidential content publicly.
           required: true
   - type: dropdown
     id: operation

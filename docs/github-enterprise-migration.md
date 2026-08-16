@@ -128,7 +128,7 @@ gh auth setup-git --hostname "$GH_HOST"
 gh auth status --hostname "$GH_HOST"
 ```
 
-headless GHES 자동화에는 `GH_ENTERPRISE_TOKEN`을 사용합니다. 현재 프로젝트의 repository bootstrap adapter는 `GH_HOST`를 자식 `gh` 명령에 전달하지만 private 저장소를 거부하므로 Enterprise 검증에 사용하지 않습니다. 대상 GHES의 Environment·branch protection·Actions permission API는 8장의 mutation 없는 `gh api` read로 검증합니다. GHES REST endpoint는 `https://HOSTNAME/api/v3`이며 `gh api`가 host에 맞게 해석하도록 전체 `api.github.com` URL을 코드나 스크립트에 넣지 않습니다.
+headless GHES 자동화에는 `GH_ENTERPRISE_TOKEN`을 사용합니다. 현재 프로젝트의 repository bootstrap adapter는 `GH_HOST`를 자식 `gh` 명령에 전달하지만 정확한 public `main` 저장소만 허용하므로 private Enterprise 검증에 사용하지 않습니다. 대상 GHES의 Environment·branch protection·Actions permission API는 8장의 mutation 없는 `gh api` read로 검증합니다. GHES REST endpoint는 `https://HOSTNAME/api/v3`이며 `gh api`가 host에 맞게 해석하도록 전체 `api.github.com` URL을 코드나 스크립트에 넣지 않습니다.
 
 ## 5. GHES Actions 기반 준비
 
@@ -215,7 +215,15 @@ Enterprise Issue intake를 사용하려면 별도 코드 변경과 보안 검토
 7. required status `ard/quality-gate`, `ard/changeset`
 8. Actions default read permission과 workflow별 최소 권한
 
-**현재 bootstrap CLI를 private Enterprise 저장소에 실행하지 않습니다.** `ard github bootstrap`은 public `main` 저장소만 허용하며, private 저장소에서는 read-only `--dry-run`도 `REPOSITORY_MISMATCH`로 즉시 종료합니다. 따라서 이 명령은 Enterprise readiness probe가 아닙니다.
+`ard github bootstrap`은 현재 GitHub.com의 정확한 public `main` 저장소만 허용하고 그
+저장소의 branch protection을 관리합니다. 이는 private Enterprise host와 API 호환성을
+의미하지 않으므로 현재 bootstrap CLI를 private Enterprise 저장소의 readiness probe로
+사용하거나 검증 없이 apply하지 않습니다. 대상 제품의 private visibility, Environment,
+attachment host·path·credential, reusable-workflow Secret, branch protection 또는 ruleset,
+Actions, runner, API, LFS와 Release 동작은 mutation 없는 read와 격리된 fixture로 먼저
+검증합니다. 이후 승인된 UI/API로 desired state를 재생성하고 다시 read-back합니다.
+`ard-private-intake`, 해당 `main` branch policy, `ARD_ATTACHMENT_TOKEN`은 bootstrap 소유가
+아니며 대상 Enterprise에서 승인된 UI/API와 숨김 Secret 입력으로 별도 생성·검증합니다.
 
 GHES 3.18.12에서는 위 desired state를 UI 또는 승인된 REST API로 만들고 각각 다시 읽어 실제 상태를 대조합니다. 먼저 mutation 없는 read로 host, private visibility, default branch, Actions permission, Environment, branch protection endpoint의 가용성을 확인합니다.
 
@@ -231,7 +239,7 @@ gh api --hostname "$GH_HOST" \
   repos/ENTERPRISE_ORG/ard-ossie-provider/branches/main/protection
 ```
 
-endpoint 또는 protection field가 3.18에 없으면 강행하지 말고, 지원되는 UI/API로 동일 desired state를 만든 뒤 차이와 승인자를 기록합니다. bootstrap이 private destination과 해당 GHES API를 명시적으로 지원하도록 수정·검증된 이후에만 `--dry-run`과 apply 경로를 다시 도입합니다. Secret 값은 shell history, migration archive, Issue, log에 남기지 않습니다.
+endpoint 또는 protection field가 3.18에 없으면 강행하지 말고, 지원되는 UI/API로 동일 desired state를 만든 뒤 차이와 승인자를 기록합니다. bootstrap이 해당 GHES host와 API를 명시적으로 지원하도록 수정·검증된 이후에만 `--dry-run`과 apply 경로를 다시 도입합니다. Secret 값은 shell history, migration archive, Issue, log에 남기지 않습니다.
 
 GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는 Environment job이 성공하려면 `GITHUB_TOKEN`에 명시적 deployment write/admin 권한이 필요합니다. 이 저장소에서는 넓은 repository 기본 권한을 열지 않고 해당 job의 `permissions`에 `deployments: write`만 추가한 뒤, 기존 `contents`, `pull-requests`, `statuses`, `issues` 권한과 함께 최소 권한을 재검토합니다.
 
@@ -239,7 +247,7 @@ GHES 3.18에서는 required reviewer 또는 deployment protection rule이 있는
 
 한 번에 모든 workflow를 활성화하지 않습니다.
 
-1. **호환성 branch:** private bootstrap 정책, runner label, Node 20 Action SHA, artifact 왕복, Environment job의 deployment 권한을 수정하고 `actionlint`와 unit/integration test를 실행합니다.
+1. **호환성 branch:** private visibility와 attachment 인증 정책, runner label, Node 20 Action SHA, artifact 왕복, Environment job의 deployment 권한을 수정하고 `actionlint`와 unit/integration test를 실행합니다.
 2. **읽기 전용 gate:** `ARD repository change gate`만 허용해 clean checkout에서 전체 test, Ruff, actionlint가 통과하는지 확인합니다.
 3. **LLM smoke:** `ard-llm` Environment 승인을 거쳐 실제 provider text/structured 요청을 수행합니다. raw 응답이나 Secret이 artifact/log에 없는지 확인합니다.
 4. **direct branch 처리:** 테스트 제품 하나를 Git LFS로 올려 candidate 변환, Draft PR, 두 required status를 확인합니다.

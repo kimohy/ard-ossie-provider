@@ -203,12 +203,12 @@ ai-ready-data-registry/
 
 ### 5.1 Git 추적 정책
 
-- 추적: 최신 원본 문서, product 설정, Registry, 검증된 IR, 구조화 LLM 추출 cache, 최신 공개 산출물과 보고서
+- 추적: 최신 원본 문서, product 설정, Registry, 검증된 IR, 구조화 LLM 추출 cache, 최신 검증 산출물과 보고서
 - 미추적: `.build/`, Docling 로컬 원시 cache, 로그, API 응답 envelope, 임시 OCR 이미지
 - PDF, DOCX, XLSX는 Git LFS를 사용한다.
 - 생성 파일명에는 실행시각, 랜덤 ID 또는 임시 경로를 넣지 않는다.
 - 과거 버전은 제품·테이블 tag와 Git history로 조회하고 저장소 내부에 버전별 디렉터리를 복제하지 않는다.
-- GitHub Release asset에는 해당 tag의 공개 산출물, manifest와 검증 보고서를 묶어 게시한다.
+- 현재 public GitHub Release asset에는 해당 tag에서 공개가 승인된 합성·비기밀 산출물, manifest와 검증 보고서만 묶어 게시한다. Secret, 개인정보, 고객 데이터와 내부 문서는 포함하지 않는다. 향후 private Enterprise로 이전하기 전에는 대상 제품의 Release visibility와 접근 통제를 별도로 재검증한다.
 
 ## 6. ID 및 다대다 매핑
 
@@ -501,9 +501,9 @@ ard release plan <product-key>
 ard release create <product-key> --version auto
 ```
 
-Git 작업 흐름은 Issue 또는 작업 브랜치 입력, Draft PR, `ard build`, 생성물 자동 commit, 품질·중복·버전 검증, review, merge, release 순서이다. 기본 `GITHUB_TOKEN`을 사용하는 단일 orchestrator가 승인된 Issue의 브랜치 생성부터 최종 commit status 등록까지 담당한다. 사람의 직접 변경은 작업 브랜치에만 허용하며 PR이 없으면 자동 생성한다.
+Git 작업 흐름은 Issue 또는 작업 브랜치 입력, Draft PR, `ard build`, 생성물 자동 commit, 품질·중복·버전 검증, review, merge, release 순서이다. 단일 orchestrator가 repository mutation에는 기본 `GITHUB_TOKEN`을 사용하고 공개 Issue 첨부 다운로드에는 Enterprise 전환을 대비해 격리된 `ARD_ATTACHMENT_TOKEN`만 사용해 승인된 Issue의 브랜치 생성부터 최종 commit status 등록까지 담당한다. 사람의 직접 변경은 작업 브랜치에만 허용하며 PR이 없으면 자동 생성한다.
 
-공개 저장소 Issue는 생성만으로 LLM을 호출하지 않는다. write 이상의 권한을 가진 사용자가 `ard:approved` label을 부여하고 workflow가 label actor 권한을 다시 확인한 뒤에만 GitHub Secret의 `ARD_LLM_API_KEY`를 사용한다. 외부 fork PR, 승인 전 Issue와 `pull_request_target`에서 untrusted code를 checkout하는 실행에는 secret과 쓰기 권한을 제공하지 않는다.
+공개 저장소 Issue는 생성만으로 credential이나 LLM을 사용하지 않는다. write 이상의 권한을 가진 사용자가 공개 권한과 조직 정책을 검토하고 `ard:approved` label을 부여하며, workflow가 label actor 권한을 다시 확인한 뒤에만 `ard-private-intake`의 `ARD_ATTACHMENT_TOKEN`과 보호된 `ARD_LLM_API_KEY`를 각자의 trusted job에서 사용한다. 외부 fork PR, 승인 전 Issue와 `pull_request_target`에서 untrusted code를 checkout하는 실행에는 secret과 쓰기 권한을 제공하지 않는다.
 
 `ard-issue-intake.yml`은 Issue Form과 첨부를 검증하고 `ard/issue-<number>-<product-key>` 브랜치와 Draft PR을 만든다. `ard-direct-change.yml`은 `products/*/sources/**` 변경을 감지해 제품 하나·버전 하나 규칙을 확인하고 PR을 생성 또는 갱신한다. 두 입력 경로는 `ard-process.yml`의 동일한 처리 계약을 사용한다.
 

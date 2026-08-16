@@ -1,5 +1,10 @@
 # GitHub CLI Bootstrap Design
 
+> **Current transition policy (2026-08-16):** Public visibility and bootstrap-managed branch
+> protection remain current. Attachment credential isolation and the later private Enterprise
+> migration boundary are governed by
+> `docs/superpowers/specs/2026-08-16-public-transition-enterprise-ready-intake-auth-design.md`.
+
 ## 1. Status and scope
 
 This is a subordinate specification of the

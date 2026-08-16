@@ -21,7 +21,7 @@
 
 ## Issue #3 acceptance 결과
 
-Issue #3은 공개 가능한 합성 Marketing Insight 제품으로 최초 Issue 기반 PDF 경로를 검증했습니다.
+Issue #3은 조직 정책을 준수하는 합성 Marketing Insight 제품으로 최초 공개 Issue 기반 PDF 경로를 검증했습니다.
 
 - source PDF 5페이지와 XLSX를 Git LFS 객체로 검증
 - source text coverage `1.0`

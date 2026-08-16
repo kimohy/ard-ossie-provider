@@ -350,22 +350,21 @@ def prepare_existing_intake(
     ) as staging_directory:
         staging = Path(staging_directory)
         if request.intake.operation.value == "update":
-            staged_config = (
-                staging
-                / "products"
-                / str(request.intake.product_key)
-                / "product.yaml"
-            )
+            staged_config = staging / "products" / str(request.intake.product_key) / "product.yaml"
             staged_config.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(
                 paths.resolve_read(
-                    Path("products")
-                    / str(request.intake.product_key)
-                    / "product.yaml"
+                    Path("products") / str(request.intake.product_key) / "product.yaml"
                 ),
                 staged_config,
             )
-        canonical = prepare(event_path, staging)
+        try:
+            canonical = prepare(event_path, staging)
+        except AttachmentSecurityError as error:
+            raise WorkflowSecurityError(
+                _error_code(error),
+                "unsafe issue attachment",
+            ) from error
         return _validate_existing_intake(
             paths,
             request.event,
@@ -385,9 +384,7 @@ def _validate_existing_intake(
     product_root = Path("products") / str(intake.product_key)
     try:
         manifest_path = paths.resolve_read(product_root / "intake-manifest.json")
-        manifest = IntakeManifest.model_validate_json(
-            manifest_path.read_text(encoding="utf-8")
-        )
+        manifest = IntakeManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
         config_path = paths.resolve_read(product_root / "product.yaml")
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, yaml.YAMLError) as error:
@@ -427,9 +424,8 @@ def _validate_existing_intake(
 
     attachments = intake.attachments
     canonical_files = {item.role: item for item in canonical.files}
-    if (
-        {item.role for item in manifest.files} != set(attachments)
-        or set(canonical_files) != set(attachments)
+    if {item.role for item in manifest.files} != set(attachments) or set(canonical_files) != set(
+        attachments
     ):
         raise WorkflowSecurityError(
             "ISSUE_EXISTING_MANIFEST_MISMATCH",

@@ -66,6 +66,28 @@ class TestWorkflowSecretContract(unittest.TestCase):
 
         self.assertEqual(actual, {(path, "process") for path in TRUSTED_CALLERS})
 
+    def test_attachment_secret_is_limited_to_private_intake_commands(self) -> None:
+        issue_path = Path(".github/workflows/ard-issue-intake.yml")
+        jobs = _workflow(issue_path)["jobs"]
+        self.assertIsInstance(jobs, dict)
+        references: set[tuple[str, str]] = set()
+        for job_name, job in jobs.items():
+            if isinstance(job, dict):
+                for step in job.get("steps", []):
+                    if isinstance(step, dict) and "ARD_ATTACHMENT_TOKEN" in str(step):
+                        references.add((job_name, str(step.get("id"))))
+
+        self.assertEqual(
+            references,
+            {("intake", "intake"), ("base_sync", "base_sync")},
+        )
+        for path in _workflow_paths(ROOT):
+            if path.relative_to(ROOT) != issue_path:
+                self.assertNotIn(
+                    "ARD_ATTACHMENT_TOKEN",
+                    path.read_text(encoding="utf-8"),
+                )
+
     def test_workflow_discovery_covers_both_supported_yaml_extensions(self) -> None:
         with TemporaryDirectory() as value:
             root = Path(value)

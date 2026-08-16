@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from ard_ossie.application.contracts import MutationRecord, WorkflowConfigurationError
 from ard_ossie.application.github_bootstrap import (
     BootstrapConfig,
@@ -38,6 +42,10 @@ class FakeGitHub:
         self.protection: BranchProtectionState | None = None
         self.collaborators: tuple[CollaboratorState, ...] = ()
         self.secret_inputs: list[str] = []
+        self.environment_reads: list[str] = []
+        self.environment_secret_reads: list[str] = []
+        self.protection_reads: list[str] = []
+        self.protection_writes: list[str] = []
 
     def repository(self) -> RepositoryState:
         return self.repository_state
@@ -64,6 +72,7 @@ class FakeGitHub:
         return MutationRecord(resource="actions_permissions", target=REPOSITORY, action="set")
 
     def get_environment(self, name: str):
+        self.environment_reads.append(name)
         return self.environments.get(name)
 
     def upsert_environment(self, state):
@@ -79,6 +88,7 @@ class FakeGitHub:
         return MutationRecord(resource="variable", target=f"{environment}:{name}", action="set")
 
     def list_environment_secret_names(self, environment: str):
+        self.environment_secret_reads.append(environment)
         return frozenset(self.secrets.get(environment, set()))
 
     def set_environment_secret(self, environment: str, name: str, value: str):
@@ -91,10 +101,12 @@ class FakeGitHub:
         )
 
     def get_branch_protection(self, branch: str):
+        self.protection_reads.append(branch)
         assert branch == "main"
         return self.protection
 
     def set_branch_protection(self, branch: str, state):
+        self.protection_writes.append(branch)
         self.protection = state
         return MutationRecord(resource="branch_protection", target=f"branch:{branch}", action="set")
 
@@ -126,6 +138,54 @@ def test_bootstrap_plan_contains_exact_project_resources() -> None:
         "environment:production-linkage",
         "branch:main",
     ]
+
+
+def test_bootstrap_accepts_public_repository_and_converges_public_labels() -> None:
+    github = FakeGitHub()
+    service = GitHubBootstrapService(REPOSITORY, github)
+
+    service.apply(service.plan(provider_config()), api_key="sentinel-key")
+
+    assert github.labels["ard:submission"].description == "Public AI Ready Data submission"
+    assert github.labels["ard:approved"].description == "Maintainer approved public ingestion"
+    assert "ard-private-intake" not in github.environments
+    assert set(github.environment_reads) == {"ard-llm", "production-linkage"}
+    assert set(github.environment_secret_reads) == {"ard-llm"}
+
+
+def test_bootstrap_rejects_private_repository_before_mutation() -> None:
+    github = FakeGitHub()
+    github.repository_state = replace(github.repository_state, public=False)
+
+    with pytest.raises(WorkflowConfigurationError) as captured:
+        GitHubBootstrapService(REPOSITORY, github).plan(provider_config())
+
+    assert captured.value.code == "REPOSITORY_MISMATCH"
+    assert github.labels == {}
+    assert github.environments == {}
+
+
+def test_bootstrap_plans_and_applies_public_branch_protection() -> None:
+    github = FakeGitHub()
+    service = GitHubBootstrapService(REPOSITORY, github)
+
+    plan = service.plan(provider_config())
+    branch_item = next(item for item in plan.items if item.target == "branch:main")
+    result = service.apply(plan, api_key="sentinel-key")
+
+    assert branch_item.action == "create"
+    assert github.protection == BranchProtectionState(
+        required_statuses=("ard/changeset", "ard/quality-gate"),
+        strict=True,
+        enforce_admins=True,
+        required_approving_review_count=0,
+        require_conversation_resolution=True,
+        allow_force_pushes=False,
+        allow_deletions=False,
+        require_pull_request=True,
+    )
+    assert github.protection_writes == ["main"]
+    assert any(mutation.resource == "branch_protection" for mutation in result.mutations)
 
 
 def test_bootstrap_config_uses_profile_variables_without_legacy_model_inputs() -> None:

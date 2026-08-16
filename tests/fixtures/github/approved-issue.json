@@ -4,6 +4,6 @@
   "sender": {"login": "maintainer"},
   "issue": {
     "number": 42,
-    "body": "### Operation\ncreate\n\n### Product key\nsales-order\n\n### Existing product ID\n_No response_\n\n### Requested version\n1\n\n### Display name\nSales Order\n\n### Description\nOrder analytics product.\n\n### Changeset ID\n_No response_\n\n### Product HTML\n[product.html](https://github.com/user-attachments/assets/11111111-1111-1111-1111-111111111111)\n\n### Semantic document\n[semantic.docx](https://github.com/user-attachments/assets/22222222-2222-2222-2222-222222222222)\n\n### Data dictionary\n[dictionary.xlsx](https://github.com/user-attachments/assets/33333333-3333-3333-3333-333333333333)\n\n### Change reason\nInitial public publication\n"
+    "body": "### Operation\ncreate\n\n### Product key\nsales-order\n\n### Existing product ID\n_No response_\n\n### Requested version\n1\n\n### Display name\nSales Order\n\n### Description\nOrder analytics product.\n\n### Changeset ID\n_No response_\n\n### Product HTML\n[product.html](https://github.com/user-attachments/assets/11111111-1111-1111-1111-111111111111)\n\n### Semantic document\n[semantic.docx](https://github.com/user-attachments/assets/22222222-2222-2222-2222-222222222222)\n\n### Data dictionary\n[dictionary.xlsx](https://github.com/user-attachments/assets/33333333-3333-3333-3333-333333333333)\n\n### Change reason\nInitial authenticated public Issue ingestion\n"
   }
 }
