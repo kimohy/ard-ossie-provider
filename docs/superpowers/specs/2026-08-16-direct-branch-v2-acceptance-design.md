@@ -1,6 +1,6 @@
 # Direct Branch `v2` Acceptance Design
 
-**Date:** 2026-08-16  
+**Date:** 2026-08-16
 **Status:** Approved
 
 ## 1. Goal
