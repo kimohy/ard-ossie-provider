@@ -31,7 +31,7 @@ from ard_ossie.llm import (
     ProviderExecutionError,
     ProviderFailureKind,
 )
-from ard_ossie.pipeline import QualityFinding
+from ard_ossie.pipeline import QualityFinding, process_product
 from ard_ossie.ports.git import ChangedPaths
 from ard_ossie.ports.github import PullRequestState
 from ard_ossie.semantic import parser as semantic_parser
@@ -176,14 +176,20 @@ class AcceptedOcrCorrectionPlanner:
         (("README.md",), None),
     ],
 )
-def test_detect_product(paths: tuple[str, ...], expected: str | None) -> None:
-    result = DetectProductService(FakeGit(paths)).run("origin/main", "HEAD")
+def test_detect_product(
+    tmp_path: Path,
+    paths: tuple[str, ...],
+    expected: str | None,
+) -> None:
+    result = DetectProductService(RepositoryPaths(tmp_path), FakeGit(paths)).run(
+        "origin/main", "HEAD"
+    )
 
     assert result.outputs.get("product_key") == expected
     assert result.outputs["expected_head"] == SHA
 
 
-def test_detect_product_rejects_multiple_products() -> None:
+def test_detect_product_rejects_multiple_products(tmp_path: Path) -> None:
     git = FakeGit(
         (
             "products/a/sources/a.html",
@@ -192,15 +198,36 @@ def test_detect_product_rejects_multiple_products() -> None:
     )
 
     with pytest.raises(WorkflowValidationError, match="MULTIPLE_PRODUCTS_NOT_ALLOWED"):
-        DetectProductService(git).run("origin/main", "HEAD")
+        DetectProductService(RepositoryPaths(tmp_path), git).run("origin/main", "HEAD")
 
 
-def test_detect_product_allows_canonical_changeset_marker_with_sources() -> None:
+def test_detect_product_allows_canonical_changeset_marker_with_sources(
+    tmp_path: Path,
+) -> None:
+    changeset_id = "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2"
+    product_id = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
+    product = tmp_path / "products" / "sales-order"
+    marker = product / "changesets" / f"{changeset_id}.json"
+    marker.parent.mkdir(parents=True)
+    (product / "product.yaml").write_text(
+        f"product_id: {product_id}\nproduct_key: sales-order\nchangeset_id: {changeset_id}\n",
+        encoding="utf-8",
+    )
+    marker.write_text(
+        json.dumps(
+            {
+                "changeset_id": changeset_id,
+                "product_id": product_id,
+                "status": "required",
+            }
+        ),
+        encoding="utf-8",
+    )
     result = DetectProductService(
+        RepositoryPaths(tmp_path),
         FakeGit(
             (
-                "products/sales-order/changesets/"
-                "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2.json",
+                f"products/sales-order/changesets/{changeset_id}.json",
                 "products/sales-order/product.yaml",
                 "products/sales-order/sources/product/product.html",
             )
@@ -210,11 +237,66 @@ def test_detect_product_allows_canonical_changeset_marker_with_sources() -> None
     assert result.outputs["product_key"] == "sales-order"
 
 
-def test_detect_product_rejects_mixed_code_and_data() -> None:
+def test_detect_product_rejects_changeset_marker_for_another_product(
+    tmp_path: Path,
+) -> None:
+    git = FakeGit(
+        (
+            "products/finance-order/changesets/"
+            "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2.json",
+            "products/sales-order/product.yaml",
+            "products/sales-order/sources/product/product.html",
+        )
+    )
+
+    with pytest.raises(
+        WorkflowValidationError,
+        match="CHANGESET_MARKER_PRODUCT_MISMATCH",
+    ):
+        DetectProductService(RepositoryPaths(tmp_path), git).run("origin/main", "HEAD")
+
+
+def test_detect_product_allows_direct_update_config_with_same_product_sources(
+    tmp_path: Path,
+) -> None:
+    result = DetectProductService(
+        RepositoryPaths(tmp_path),
+        FakeGit(
+            (
+                "products/sales-order/product.yaml",
+                "products/sales-order/sources/product/product.html",
+            )
+        )
+    ).run("origin/main", "HEAD")
+
+    assert result.outputs["product_key"] == "sales-order"
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ("products/sales-order/product.yaml",),
+        (
+            "products/finance-order/product.yaml",
+            "products/sales-order/sources/product/product.html",
+        ),
+    ],
+)
+def test_detect_product_rejects_config_without_same_product_sources(
+    tmp_path: Path,
+    paths: tuple[str, ...],
+) -> None:
+    with pytest.raises(WorkflowValidationError, match="CHANGESET_CONFIG_PRODUCT_MISMATCH"):
+        DetectProductService(RepositoryPaths(tmp_path), FakeGit(paths)).run(
+            "origin/main", "HEAD"
+        )
+
+
+def test_detect_product_rejects_mixed_code_and_data(tmp_path: Path) -> None:
     git = FakeGit(("README.md", "products/sales/sources/product.html"))
 
     with pytest.raises(WorkflowValidationError, match="MIXED_CODE_AND_ARD_CHANGES"):
-        DetectProductService(git).run("origin/main", "HEAD")
+        DetectProductService(RepositoryPaths(tmp_path), git).run("origin/main", "HEAD")
 
 
 def test_source_check_is_read_only_and_secret_free(
@@ -241,6 +323,42 @@ def test_source_check_is_read_only_and_secret_free(
         for path in tmp_path.rglob("*")
         if path.is_file() and not path.is_relative_to(tmp_path / ".ard")
     } == before
+
+
+def test_direct_update_config_and_sources_validate_against_existing_registry(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    registry = tmp_path / "registry"
+    process_product(product, registry_root=registry)
+    config_path = product / "product.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["operation"] = "update"
+    config["base_version"] = 1
+    config["version"] = 2
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    product_html = product / "sources" / "product-info" / "product.html"
+    product_html.write_text(
+        product_html.read_text(encoding="utf-8").replace(
+            "Order analytics",
+            "Order insights",
+        ),
+        encoding="utf-8",
+    )
+
+    detected = DetectProductService(
+        RepositoryPaths(tmp_path),
+        FakeGit(
+            (
+                "products/sales-order/product.yaml",
+                "products/sales-order/sources/product-info/product.html",
+            )
+        ),
+    ).run("origin/main", "HEAD")
+    checked = SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+
+    assert detected.outputs["product_key"] == "sales-order"
+    assert checked.status is WorkflowStatus.SUCCESS
 
 
 def test_source_check_treats_absent_registry_as_empty_without_creating_it(
@@ -479,9 +597,8 @@ def test_source_check_maps_provider_failure_kind_to_workflow_exit_contract(
     assert captured.value.exit_code == expected_exit_code
 
 
-def test_source_check_requires_marker_and_product_config_binding(tmp_path: Path) -> None:
+def test_detect_product_requires_changed_marker_config_binding(tmp_path: Path) -> None:
     product = create_product_fixture(tmp_path)
-    (tmp_path / "registry").mkdir()
     marker = product / "changesets" / (
         "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2.json"
     )
@@ -489,7 +606,39 @@ def test_source_check_requires_marker_and_product_config_binding(tmp_path: Path)
     marker.write_text("{}", encoding="utf-8")
 
     with pytest.raises(WorkflowSecurityError, match="CHANGESET_BINDING_REQUIRED"):
-        SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+        DetectProductService(
+            RepositoryPaths(tmp_path),
+            FakeGit(
+                (
+                    marker.relative_to(tmp_path).as_posix(),
+                    "products/sales-order/product.yaml",
+                    "products/sales-order/sources/product-info/product.html",
+                )
+            ),
+        ).run("origin/main", "HEAD")
+
+
+def test_source_check_accepts_historical_marker_without_active_binding(tmp_path: Path) -> None:
+    changeset_id = "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2"
+    product = create_product_fixture(tmp_path)
+    (tmp_path / "registry").mkdir()
+    config = yaml.safe_load((product / "product.yaml").read_text(encoding="utf-8"))
+    marker = product / "changesets" / f"{changeset_id}.json"
+    marker.parent.mkdir()
+    marker.write_text(
+        json.dumps(
+            {
+                "changeset_id": changeset_id,
+                "product_id": config["product_id"],
+                "status": "required",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = SourceCheckService(RepositoryPaths(tmp_path)).run("sales-order", SHA)
+
+    assert "changeset_id" not in result.outputs
 
 
 def test_source_check_accepts_exact_changeset_binding(tmp_path: Path) -> None:
