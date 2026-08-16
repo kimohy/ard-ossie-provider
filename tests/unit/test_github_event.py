@@ -259,15 +259,25 @@ def test_download_accepts_canonical_github_file_upload_redirect(tmp_path: Path) 
     assert target.is_file()
 
 
-def test_download_authenticates_github_without_leaking_token_to_storage(
+@pytest.mark.parametrize(
+    "storage_url",
+    [
+        "https://objects.githubusercontent.com/download/1?signature=value",
+        (
+            "https://github-production-user-asset-6210df.s3.amazonaws.com/"
+            "asset.xlsx?X-Amz-Signature=value"
+        ),
+    ],
+)
+def test_download_authenticates_github_without_leaking_credentials_to_storage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    storage_url: str,
 ) -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("[Content_Types].xml", "types")
         archive.writestr("xl/workbook.xml", "workbook")
-    storage_url = "https://objects.githubusercontent.com/download/1?signature=value"
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -290,6 +300,7 @@ def test_download_authenticates_github_without_leaking_token_to_storage(
     with httpx.Client(
         transport=httpx.MockTransport(handler),
         headers={"Authorization": "Bearer client-default"},
+        auth=httpx.BasicAuth("client-user", "client-password"),
     ) as client:
         result = download_attachment(attachment, target, client=client)
 

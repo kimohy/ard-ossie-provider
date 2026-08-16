@@ -284,6 +284,7 @@ def download_attachment(
                 active_client.send(
                     request,
                     stream=True,
+                    auth=None,
                     follow_redirects=False,
                 )
             ) as response:
