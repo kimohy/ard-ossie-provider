@@ -75,6 +75,10 @@ class FakeGitHub:
     def __init__(self) -> None:
         self.pull_request: PullRequestState | None = None
         self.created = 0
+        self.remote_sha = SHA
+
+    def branch_sha(self, branch: str) -> str | None:
+        return self.remote_sha
 
     def find_open_pr(self, branch: str) -> PullRequestState | None:
         return self.pull_request
@@ -681,11 +685,11 @@ def test_ensure_product_pr_is_idempotent_for_exact_remote_head() -> None:
 
 
 def test_ensure_product_pr_rejects_stale_remote_head() -> None:
-    git = FakeGit()
-    git.remote_sha = "c" * 40
+    github = FakeGitHub()
+    github.remote_sha = "c" * 40
 
     with pytest.raises(WorkflowSecurityError, match="DIRECT_BRANCH_HEAD_MISMATCH"):
-        EnsureProductPrService(git, FakeGitHub()).run(
+        EnsureProductPrService(FakeGit(), github).run(
             "feature/sales",
             "sales-order",
             SHA,

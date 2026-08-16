@@ -76,6 +76,18 @@ class GitHubCli:
             permission=permission,
         )
 
+    def branch_sha(self, branch: str) -> str | None:
+        _validate_name(branch, "branch")
+        result = self._api(
+            "GET",
+            f"repos/{self.repository_name}/branches/{quote(branch, safe='')}",
+        )
+        if _is_not_found(result):
+            return None
+        payload = self._decode(result, "GITHUB_API_FAILED")
+        commit = _mapping(payload.get("commit"))
+        return _validated_sha(_string(commit, "sha"))
+
     def collaborator_permission(self, login: str) -> str:
         _validate_name(login, "login")
         payload = self._api_json(
