@@ -829,6 +829,8 @@ class GitHubCli:
             if not isinstance(page, (dict, list)):
                 raise GitHubConflict("INVALID_GITHUB_JSON", "expected object or array")
             pages.append(page)
+        if not pages:
+            raise GitHubConflict("INVALID_GITHUB_JSON", "expected at least one JSON document")
         if len(pages) == 1:
             return pages[0]
         return pages

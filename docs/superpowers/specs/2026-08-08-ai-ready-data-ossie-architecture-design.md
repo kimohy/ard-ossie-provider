@@ -208,7 +208,7 @@ ai-ready-data-registry/
 - PDF, DOCX, XLSX는 Git LFS를 사용한다.
 - 생성 파일명에는 실행시각, 랜덤 ID 또는 임시 경로를 넣지 않는다.
 - 과거 버전은 제품·테이블 tag와 Git history로 조회하고 저장소 내부에 버전별 디렉터리를 복제하지 않는다.
-- GitHub Release asset에는 해당 tag의 비공개 산출물, manifest와 검증 보고서를 묶어 게시한다. 별도의 승인된 export 절차 없이는 외부 공개하지 않는다.
+- 현재 public GitHub Release asset에는 해당 tag에서 공개가 승인된 합성·비기밀 산출물, manifest와 검증 보고서만 묶어 게시한다. Secret, 개인정보, 고객 데이터와 내부 문서는 포함하지 않는다. 향후 private Enterprise로 이전하기 전에는 대상 제품의 Release visibility와 접근 통제를 별도로 재검증한다.
 
 ## 6. ID 및 다대다 매핑
 

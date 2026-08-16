@@ -641,6 +641,16 @@ def test_paginated_api_decodes_concatenated_pages() -> None:
     assert set(labels) == {"ard:submission", "ard:approved"}
 
 
+@pytest.mark.parametrize("stdout", ["", " \n\t"])
+def test_paginated_api_rejects_missing_json_documents(stdout: str) -> None:
+    runner = RecordingRunner([CommandResult(returncode=0, stdout=stdout, stderr="")])
+
+    with pytest.raises(GitHubConflict) as captured:
+        GitHubCli(REPOSITORY, runner).list_labels()
+
+    assert captured.value.code == "INVALID_GITHUB_JSON"
+
+
 def test_environment_secret_names_and_variable_scope_are_exact() -> None:
     """Bootstrap must distinguish protected environment resources from repository variables."""
     runner = RecordingRunner(
