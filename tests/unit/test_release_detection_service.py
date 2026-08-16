@@ -44,20 +44,25 @@ def request(tmp_path: Path) -> ReleaseDetectionRequest:
     )
 
 
-def build_repository(tmp_path: Path, *, stale: bool = False) -> None:
+def build_repository(
+    tmp_path: Path,
+    *,
+    current_versions: tuple[int, int] = (1, 1),
+    readiness_versions: tuple[int, int] = (1, 1),
+) -> None:
     registry = Registry.load(tmp_path / "registry")
     registry.write_product(
         ProductRecord(
             product_id=SALES_ID,
             product_key="sales-order",
-            version=2 if stale else 1,
+            version=current_versions[0],
         )
     )
     registry.write_product(
         ProductRecord(
             product_id=FINANCE_ID,
             product_key="finance-order",
-            version=1,
+            version=current_versions[1],
         )
     )
     registry.write_table(
@@ -77,12 +82,22 @@ def build_repository(tmp_path: Path, *, stale: bool = False) -> None:
         [SALES_ID, FINANCE_ID],
         changeset_id=CHANGESET_ID,
     )
-    changeset.mark_ready(SALES_ID, version=1, pr_number=7, head_sha="c" * 40)
-    changeset.mark_ready(FINANCE_ID, version=1, pr_number=8, head_sha="d" * 40)
+    changeset.mark_ready(
+        SALES_ID,
+        version=readiness_versions[0],
+        pr_number=7,
+        head_sha="c" * 40,
+    )
+    changeset.mark_ready(
+        FINANCE_ID,
+        version=readiness_versions[1],
+        pr_number=8,
+        head_sha="d" * 40,
+    )
     registry.write_changeset(changeset)
-    for product_key, product_id in (
-        ("sales-order", SALES_ID),
-        ("finance-order", FINANCE_ID),
+    for product_key, product_id, version in (
+        ("sales-order", SALES_ID, current_versions[0]),
+        ("finance-order", FINANCE_ID, current_versions[1]),
     ):
         product = tmp_path / "products" / product_key
         (product / "generated").mkdir(parents=True)
@@ -92,7 +107,7 @@ def build_repository(tmp_path: Path, *, stale: bool = False) -> None:
                 (
                     f"product_id: {product_id}",
                     f"product_key: {product_key}",
-                    "version: 1",
+                    f"version: {version}",
                     f"changeset_id: {CHANGESET_ID}",
                     "",
                 )
@@ -115,7 +130,11 @@ def test_detect_expands_completed_changeset_products(tmp_path: Path) -> None:
 
 
 def test_detect_rejects_stale_readiness_version(tmp_path: Path) -> None:
-    build_repository(tmp_path, stale=True)
+    build_repository(
+        tmp_path,
+        current_versions=(2, 1),
+        readiness_versions=(1, 1),
+    )
     service = ReleaseDetectionService(
         RepositoryPaths(tmp_path),
         FakeGit((Path(f"registry/changesets/{CHANGESET_ID}.json"),)),
@@ -123,6 +142,51 @@ def test_detect_rejects_stale_readiness_version(tmp_path: Path) -> None:
 
     with pytest.raises(WorkflowConflict, match="CHANGESET_VERSION_NOT_CURRENT"):
         service.run(request(tmp_path))
+
+
+def test_detect_defers_changeset_when_all_readiness_versions_are_future(
+    tmp_path: Path,
+) -> None:
+    build_repository(
+        tmp_path,
+        current_versions=(1, 1),
+        readiness_versions=(2, 2),
+    )
+    service = ReleaseDetectionService(
+        RepositoryPaths(tmp_path),
+        FakeGit((Path(f"registry/changesets/{CHANGESET_ID}.json"),)),
+    )
+
+    result = service.run(request(tmp_path))
+
+    assert result.status is WorkflowStatus.NOOP
+    assert result.outputs["products"] == []
+    assert result.outputs["tables"] == []
+
+
+def test_detect_defers_whole_changeset_when_one_product_is_future(
+    tmp_path: Path,
+) -> None:
+    build_repository(
+        tmp_path,
+        current_versions=(2, 1),
+        readiness_versions=(2, 2),
+    )
+    service = ReleaseDetectionService(
+        RepositoryPaths(tmp_path),
+        FakeGit(
+            (
+                Path("products/sales-order/generated/ossie-model.json"),
+                Path(f"registry/tables/{TABLE_ID}.json"),
+            )
+        ),
+    )
+
+    result = service.run(request(tmp_path))
+
+    assert result.status is WorkflowStatus.NOOP
+    assert result.outputs["products"] == []
+    assert result.outputs["tables"] == []
 
 
 def test_detect_direct_product_from_current_generated_artifact(tmp_path: Path) -> None:

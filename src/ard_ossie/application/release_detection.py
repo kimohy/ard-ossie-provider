@@ -102,6 +102,7 @@ class ReleaseDetectionService:
                 table_ids.add(table_id)
 
         expanded_products = set(direct_products)
+        deferred_table_ids: set[str] = set()
         for changeset_id in sorted(changeset_ids):
             changeset = registry.get_changeset(changeset_id)
             if changeset is None:
@@ -111,12 +112,16 @@ class ReleaseDetectionService:
                 )
             if changeset.status is not ChangeSetStatus.READY:
                 continue
-            self._expand_changeset(
+            expanded = self._expand_changeset(
                 registry,
                 changeset,
                 expanded_products,
                 table_ids,
             )
+            if not expanded:
+                deferred_table_ids.update(changeset.table_ids)
+
+        table_ids.difference_update(deferred_table_ids)
 
         outputs: dict[str, object] = {
             "before": request.before,
@@ -225,7 +230,9 @@ class ReleaseDetectionService:
         changeset: ChangeSetRecord,
         products: set[str],
         tables: set[str],
-    ) -> None:
+    ) -> bool:
+        resolved_products: list[ProductRecord] = []
+        has_future_version = False
         for product_id in changeset.required_product_ids:
             readiness = changeset.ready_products.get(product_id)
             product = registry.get_product(product_id)
@@ -234,12 +241,21 @@ class ReleaseDetectionService:
                     "CHANGESET_REGISTRY_REFERENCE_MISSING",
                     f"changeset references a missing product: {product_id}",
                 )
-            if readiness.version != product.version:
+            if readiness.version < product.version:
                 raise WorkflowConflict(
                     "CHANGESET_VERSION_NOT_CURRENT",
-                    f"{product_id}:v{readiness.version} != v{product.version}",
+                    f"{product_id}:v{readiness.version} < v{product.version}",
                 )
+            if readiness.version > product.version:
+                has_future_version = True
+            resolved_products.append(product)
+
+        if has_future_version:
+            return False
+
+        for product in resolved_products:
             products.add(product.product_key)
         for table_id in changeset.table_ids:
             ReleaseDetectionService._require_table(registry, table_id)
             tables.add(table_id)
+        return True
