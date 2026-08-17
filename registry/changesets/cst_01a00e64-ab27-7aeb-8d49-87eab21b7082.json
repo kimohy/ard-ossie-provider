@@ -1,0 +1,11 @@
+{
+  "changeset_id": "cst_01a00e64-ab27-7aeb-8d49-87eab21b7082",
+  "ready_products": {},
+  "required_product_ids": [
+    "prd_019ff10c-8be8-79d0-af07-21450abedf9e",
+    "prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d"
+  ],
+  "table_ids": [
+    "tbl_01a00585-94b8-7e49-ac43-97e00a165e26"
+  ]
+}
