@@ -547,6 +547,92 @@ def test_base_sync_populates_pristine_changeset_tracking_pr(tmp_path: Path) -> N
     ]
 
 
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ("{", "ISSUE_BASE_SYNC_TRACKING_MARKER_INVALID"),
+        (
+            json.dumps(
+                {
+                    "changeset_id": CHANGESET_ID,
+                    "product_id": "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632",
+                    "status": "required",
+                }
+            ),
+            "ISSUE_BASE_SYNC_TRACKING_MARKER_MISMATCH",
+        ),
+        (
+            json.dumps(
+                {
+                    "changeset_id": CHANGESET_ID,
+                    "product_id": PRODUCT_ID,
+                    "status": "required",
+                    "extra": True,
+                }
+            ),
+            "ISSUE_BASE_SYNC_TRACKING_MARKER_MISMATCH",
+        ),
+    ],
+)
+def test_base_sync_rejects_invalid_pristine_tracking_marker(
+    tmp_path: Path,
+    payload: str,
+    code: str,
+) -> None:
+    populate_pristine_tracking_candidate(tmp_path)
+    (tmp_path / MARKER_PATH).write_text(payload, encoding="utf-8")
+    git = BaseSyncGit((MARKER_PATH,))
+    git.remotes[TRACKING_BRANCH] = CANDIDATE_SHA
+    git.intake_sha = INTAKE_SHA
+
+    with pytest.raises(WorkflowSecurityError, match=code) as captured:
+        IssueBaseSyncService(
+            RepositoryPaths(tmp_path),
+            git,
+            RouteGitHub(managed_pr(head_branch=TRACKING_BRANCH)),
+            prepare=prepare_changeset_candidate,
+        ).run(
+            context(tmp_path, body=changeset_issue_body()),
+            base_sha=BASE_SHA,
+        )
+
+    assert captured.value.code == code
+    assert not any(
+        isinstance(item, tuple)
+        and item[0] in {"merge_revision", "commit_intake_paths", "push"}
+        for item in git.operations
+    )
+
+
+def test_base_sync_does_not_populate_marker_with_an_extra_path(tmp_path: Path) -> None:
+    populate_pristine_tracking_candidate(tmp_path)
+    git = BaseSyncGit(
+        (
+            MARKER_PATH,
+            Path("products/500138301/quality/quality-report.json"),
+        )
+    )
+    git.remotes[TRACKING_BRANCH] = CANDIDATE_SHA
+    git.intake_sha = INTAKE_SHA
+
+    with pytest.raises(WorkflowSecurityError, match="ISSUE_EXISTING_CONFIG_MISMATCH"):
+        IssueBaseSyncService(
+            RepositoryPaths(tmp_path),
+            git,
+            RouteGitHub(managed_pr(head_branch=TRACKING_BRANCH)),
+            prepare=prepare_changeset_candidate,
+        ).run(
+            context(tmp_path, body=changeset_issue_body()),
+            base_sha=BASE_SHA,
+        )
+
+    assert not any(
+        isinstance(item, tuple)
+        and item[0] in {"merge_revision", "commit_intake_paths", "push"}
+        for item in git.operations
+    )
+
+
 def test_base_sync_preserves_approved_input_and_resets_only_derived_paths(
     tmp_path: Path,
 ) -> None:

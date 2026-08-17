@@ -293,7 +293,7 @@ class IssueBaseSyncService:
         base_sha: str,
         marker_path: Path,
     ) -> WorkflowResult:
-        del marker_path
+        self._require_tracking_marker(request, marker_path)
         product_key = str(request.intake.product_key)
         self._require_same_managed_pr(request, pull_request)
         if self.git.remote_branch_sha(request.branch) != pull_request.head_sha:
@@ -404,6 +404,31 @@ class IssueBaseSyncService:
             },
             mutations=mutations,
         )
+
+    def _require_tracking_marker(
+        self,
+        request: IssueRequest,
+        marker_path: Path,
+    ) -> None:
+        try:
+            marker = json.loads(
+                self.paths.resolve_read(marker_path).read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError, PathPolicyError) as error:
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_TRACKING_MARKER_INVALID",
+                "changeset tracking marker is malformed",
+            ) from error
+        expected_product_id = request.intake.product_id
+        if expected_product_id is None or marker != {
+            "changeset_id": request.intake.changeset_id,
+            "product_id": str(expected_product_id),
+            "status": "required",
+        }:
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_TRACKING_MARKER_MISMATCH",
+                "changeset tracking marker does not match approved issue input",
+            )
 
     def _require_same_managed_pr(
         self,
