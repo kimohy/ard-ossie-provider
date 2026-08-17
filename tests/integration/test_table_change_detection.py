@@ -9,7 +9,13 @@ import yaml
 from openpyxl import Workbook
 
 from ard_ossie.impact import build_changeset
-from ard_ossie.models import ProductRecord, ProductTableRef
+from ard_ossie.models import (
+    ColumnRecord,
+    ProductRecord,
+    ProductTableRef,
+    TableLocator,
+    TableRecord,
+)
 from ard_ossie.pipeline import PipelineValidationError, process_product
 from ard_ossie.registry import Registry
 from tests.integration.test_cli_process import create_product_fixture
@@ -32,6 +38,11 @@ def tree_hash(root: Path) -> str:
 class ProviderMustNotRun:
     def generate_structured(self, **_kwargs):
         raise AssertionError("provider must not run before table baseline validation")
+
+
+class ParserMustNotRun:
+    def parse(self, _source):
+        raise AssertionError("parser must not run before table baseline validation")
 
 
 def write_two_table_dictionary(product: Path, *, order_description: str) -> None:
@@ -136,6 +147,74 @@ def test_existing_product_requires_a_baseline_before_provider_or_mutation(
     assert str(captured.value) == "TABLE_BASELINE_REQUIRED"
     assert tree_hash(product / "generated") == before["generated"]
     assert tree_hash(registry) == before["registry"]
+
+
+def test_new_product_reusing_a_registered_table_requires_authoritative_baseline(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    registry_path = tmp_path / "registry"
+    registry = Registry(registry_path)
+    registry.write_product(
+        ProductRecord(
+            product_id=OTHER_PRODUCT_ID,
+            product_key="finance-order",
+            version=1,
+        )
+    )
+    registry.write_table(
+        TableRecord(
+            table_id=ORDERS_TABLE_ID,
+            locator=TableLocator(
+                source_system_id="erp",
+                catalog="analytics",
+                schema_name="sales",
+                table_name="orders",
+            ),
+            version=1,
+            columns=[
+                ColumnRecord(
+                    column_id="col_0198f6ca-2a11-78d1-8672-67d49e69f14c",
+                    name="order_id",
+                )
+            ],
+            canonical_hash="1" * 64,
+        )
+    )
+    registry.write_mappings(
+        OTHER_PRODUCT_ID,
+        [
+            ProductTableRef(
+                link_id="lnk_0198f6ce-c3d5-7fc8-9401-22fa7b330ec4",
+                product_id=OTHER_PRODUCT_ID,
+                table_id=ORDERS_TABLE_ID,
+                table_version=1,
+                usage="SOURCE",
+            )
+        ],
+    )
+    diagnostics = tmp_path / "semantic-diagnostics"
+    diagnostics.mkdir()
+    (diagnostics / "existing.txt").write_text("preserve", encoding="utf-8")
+    before = {
+        "product": tree_hash(product),
+        "registry": tree_hash(registry_path),
+        "diagnostics": tree_hash(diagnostics),
+    }
+
+    with pytest.raises(PipelineValidationError) as captured:
+        process_product(
+            product,
+            registry_root=registry_path,
+            provider=ProviderMustNotRun(),
+            parser=ParserMustNotRun(),
+            semantic_diagnostics_dir=diagnostics,
+        )
+
+    assert str(captured.value) == "TABLE_BASELINE_REQUIRED"
+    assert tree_hash(product) == before["product"]
+    assert tree_hash(registry_path) == before["registry"]
+    assert tree_hash(diagnostics) == before["diagnostics"]
 
 
 @pytest.mark.parametrize("mutation", ["malformed", "wrong_product", "missing_table"])

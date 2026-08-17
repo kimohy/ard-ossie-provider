@@ -4,7 +4,7 @@ import stat
 from collections.abc import Sequence
 from pathlib import Path
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ard_ossie.canonical import canonical_hash
 from ard_ossie.ir import ColumnIR
@@ -26,15 +26,19 @@ class TableBaselineError(ValueError):
     """A redacted published-dictionary baseline contract failure."""
 
 
-class PublishedColumnBaseline(StrictModel):
+class _StrictBaselineModel(StrictModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, strict=True)
+
+
+class PublishedColumnBaseline(_StrictBaselineModel):
     column_id: ColumnId
     ordinal: int = Field(gt=0)
     name: str
-    logical_name: str | None = None
+    logical_name: str | None
     data_type: str
     nullable: bool
     primary_key: bool
-    description: str | None = None
+    description: str | None
     foreign_key: str | None = None
     formula: str | None = None
     comment: str | None = None
@@ -42,24 +46,28 @@ class PublishedColumnBaseline(StrictModel):
     @field_validator("name", "data_type", mode="before")
     @classmethod
     def require_nonempty(cls, value: object) -> str:
-        normalized = str(value).strip()
+        if not isinstance(value, str):
+            raise ValueError("published column fields must be strings")
+        normalized = value.strip()
         if not normalized:
             raise ValueError("published column fields must be non-empty")
         return normalized
 
 
-class PublishedTableBaseline(StrictModel):
+class PublishedTableBaseline(_StrictBaselineModel):
     table_id: TableId
     table_version: Version
     dataset_name: str
     source: str
-    description: str | None = None
+    description: str | None
     columns: list[PublishedColumnBaseline] = Field(min_length=1)
 
     @field_validator("dataset_name", "source", mode="before")
     @classmethod
     def require_nonempty(cls, value: object) -> str:
-        normalized = str(value).strip()
+        if not isinstance(value, str):
+            raise ValueError("published table fields must be strings")
+        normalized = value.strip()
         if not normalized:
             raise ValueError("published table fields must be non-empty")
         return normalized
@@ -78,7 +86,7 @@ class PublishedTableBaseline(StrictModel):
         return self
 
 
-class PublishedDictionaryBaseline(StrictModel):
+class PublishedDictionaryBaseline(_StrictBaselineModel):
     product_id: ProductId
     product_version: Version
     tables: list[PublishedTableBaseline] = Field(min_length=1)

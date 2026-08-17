@@ -54,7 +54,8 @@ static verifier.
 Create baseline fixtures matching `render_dictionary_json`: product ID/version, table ID/version,
 dataset name, source, description, and rendered column fields. Test valid parsing and parameterize
 invalid UTF-8, unknown fields, duplicate table IDs, duplicate column IDs, duplicate ordinals, and
-duplicate case-folded column names.
+duplicate case-folded column names. Also reject omitted renderer-required nullable fields and wrong
+scalar types rather than allowing Pydantic coercion.
 
 The public assertion must be code-only:
 
@@ -210,7 +211,10 @@ Assert:
 
 For an existing product, pass `None`, malformed bytes, wrong product/version, incomplete table set,
 and mismatched locator baselines. Assert `TABLE_BASELINE_REQUIRED` or `TABLE_BASELINE_INVALID`, no
-provider call, no generated/Registry change, and no input text in the exception.
+provider call, no generated/Registry change, and no input text in the exception. Also test a new
+product linking an already registered shared table: until authoritative owner-baseline lookup
+exists, it must fail closed with `TABLE_BASELINE_REQUIRED` instead of comparing a legacy Registry
+hash with the new projection.
 
 - [ ] **Step 7: Run pipeline and atomic-promotion tests**
 

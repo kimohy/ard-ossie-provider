@@ -189,6 +189,55 @@ def test_parse_table_baseline_rejects_unknown_fields() -> None:
     assert_invalid(baseline_bytes(payload))
 
 
+@pytest.mark.parametrize(
+    ("scope", "field"),
+    [
+        ("table", "description"),
+        ("column", "logical_name"),
+        ("column", "description"),
+    ],
+)
+def test_parse_table_baseline_requires_nullable_renderer_fields(
+    scope: str,
+    field: str,
+) -> None:
+    payload = baseline_payload()
+    target = payload["tables"][0]
+    if scope == "column":
+        target = target["columns"][0]
+    del target[field]
+
+    assert_invalid(baseline_bytes(payload))
+
+
+@pytest.mark.parametrize(
+    ("scope", "field", "value"),
+    [
+        ("table", "dataset_name", 7),
+        ("table", "source", {"secret marker": "do-not-log"}),
+        ("table", "description", 12),
+        ("column", "name", ["order_id"]),
+        ("column", "logical_name", 42),
+        ("column", "data_type", 12),
+        ("column", "nullable", "false"),
+        ("column", "primary_key", 1),
+        ("column", "description", {"secret marker": "do-not-log"}),
+    ],
+)
+def test_parse_table_baseline_rejects_coerced_renderer_field_types(
+    scope: str,
+    field: str,
+    value: object,
+) -> None:
+    payload = baseline_payload()
+    target = payload["tables"][0]
+    if scope == "column":
+        target = target["columns"][0]
+    target[field] = value
+
+    assert_invalid(baseline_bytes(payload))
+
+
 def test_parse_table_baseline_rejects_duplicate_table_ids() -> None:
     payload = baseline_payload()
     payload["tables"] = [table_payload(), table_payload()]

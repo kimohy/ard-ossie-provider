@@ -236,6 +236,19 @@ def process_product(
         except TableBaselineError as error:
             raise PipelineValidationError(str(error)) from None
     manifest = source_manifest or scan_sources(root / "sources")
+    dictionary_source = manifest.by_role(SourceRole.DICTIONARY_EXCEL)
+    dictionary = parse_dictionary(
+        dictionary_source.path,
+        source_hash=dictionary_source.sha256,
+        source_bytes=source_bytes(dictionary_source),
+    )
+    product_id = config.product_id
+    table_drafts = _resolve_tables(config, dictionary, registry)
+    if baseline_tables is None and any(
+        registry.get_table(draft.table_id) is not None for draft in table_drafts
+    ):
+        raise PipelineValidationError("TABLE_BASELINE_REQUIRED")
+
     active_parser = _processing_parser(
         provider=provider,
         parser=parser,
@@ -259,15 +272,6 @@ def process_product(
                 configuration_hash=canonical_hash(config.model_dump(mode="json")),
             ),
         )
-    dictionary_source = manifest.by_role(SourceRole.DICTIONARY_EXCEL)
-    dictionary = parse_dictionary(
-        dictionary_source.path,
-        source_hash=dictionary_source.sha256,
-        source_bytes=source_bytes(dictionary_source),
-    )
-
-    product_id = config.product_id
-    table_drafts = _resolve_tables(config, dictionary, registry)
     configured_description = config.description
     suggestion_batch = SuggestionBatch(suggestions=[], metrics=[], product_facts=[])
     prepared_metrics = _PreparedMetrics(
@@ -943,7 +947,7 @@ def _build_table_records(
         if existing is None:
             changed = True
         elif baseline_tables is None:
-            changed = existing.canonical_hash != current_canonical_hash
+            raise TableBaselineError("TABLE_BASELINE_REQUIRED")
         else:
             baseline = baseline_tables.get(draft.table_id)
             if baseline is None:

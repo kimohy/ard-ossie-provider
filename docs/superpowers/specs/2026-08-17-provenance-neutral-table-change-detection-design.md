@@ -70,7 +70,8 @@ pipeline does not discover a trusted baseline from its local product directory.
 
 Before it can influence version decisions, the pipeline validates all of the following:
 
-1. the baseline is valid UTF-8 JSON with the expected strict structure;
+1. the baseline is valid UTF-8 JSON with the expected strict structure and scalar types, including
+   every nullable field that the renderer always emits;
 2. its `product_id` matches the configured and existing Registry product;
 3. its `product_version` equals the existing Registry product version;
 4. table IDs are unique;
@@ -79,11 +80,14 @@ Before it can influence version decisions, the pipeline validates all of the fol
 7. each table ID, dataset name, and fully qualified source agree with the Registry locator.
 
 An existing product without a readable or consistent baseline fails closed with a stable, redacted
-validation or security code before Registry mutation. A create operation has no prior baseline and
-retains the existing new-table path. Direct pipeline callers must pass an explicit baseline for an
-existing product. The local CLI adapter may snapshot the pre-run local generated dictionary and pass
-it as local comparison input, but protected workflow code must always override that convenience path
-with bytes read from the trusted default-branch revision.
+validation or security code before Registry mutation. A create operation containing only new tables
+has no prior baseline and retains the existing new-table path. A new product that links an already
+registered shared table fails closed with `TABLE_BASELINE_REQUIRED` until an authoritative
+owner-baseline contract is implemented; it cannot compare the Registry's legacy hash with the new
+projection. Direct pipeline callers must pass an explicit baseline for an existing product. The
+local CLI adapter may snapshot the pre-run local generated dictionary and pass it as local comparison
+input, but protected workflow code must always override that convenience path with bytes read from
+the trusted default-branch revision.
 
 The baseline bytes are read before provider execution so the captured default-branch SHA remains the
 comparison authority for the entire processing attempt. A later default-branch movement does not
@@ -143,6 +147,8 @@ an actually changed existing shared table is required to appear in the changeset
   included in logs or workflow result envelopes.
 - Missing baseline data for an existing mapped table cannot fall back to the legacy hash comparison,
   because that would recreate the workbook-wide false positive.
+- A create operation that reuses an already registered table also cannot use that fallback and fails
+  before provider execution or mutation until trusted owner-baseline lookup is supported.
 - Extra, duplicate, or cross-product baseline tables cannot create identity or ownership authority.
 - Candidate content cannot select the baseline revision, product identity, table identity, mapping,
   or current Registry version.
@@ -168,7 +174,8 @@ Trusted-boundary coverage must prove:
   candidate head;
 - missing, malformed, duplicate-ID, wrong-product, wrong-version, wrong-locator, and unmapped-table
   baselines fail before provider execution or writeback as appropriate;
-- create operations remain supported without a baseline; and
+- create operations containing only new tables remain supported without a baseline, while a new
+  product reusing a registered shared table fails closed before provider execution; and
 - a post-processing PR base-branch, identity, or head movement still prevents publication.
 
 Compatibility coverage must prove that an unchanged table with a legacy provenance-sensitive hash
