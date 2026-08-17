@@ -86,6 +86,7 @@ from ard_ossie.semantic.models import (
 )
 from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
+from ard_ossie.semantic.replay import SemanticReplayCatalog
 from ard_ossie.versioning import VersionDecision, VersionOutcome, plan_version
 
 
@@ -200,6 +201,8 @@ def process_product(
     trusted_semantic_repair: dict[str, object] | None = None,
     trusted_semantic_fidelity: dict[str, object] | None = None,
     trusted_semantic_decisions: dict[str, object] | None = None,
+    trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
+    source_manifest: SourceManifest | None = None,
     require_semantic_visual_correction: bool = True,
     propagate_provider_errors: bool = False,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
@@ -210,13 +213,14 @@ def process_product(
     registry_initially_exists, registry_snapshot = _snapshot_registry(registry_path)
     registry = _load_registry_snapshot(registry_snapshot)
     config = _load_config(root / "product.yaml")
-    manifest = scan_sources(root / "sources")
+    manifest = source_manifest or scan_sources(root / "sources")
     active_parser = _processing_parser(
         provider=provider,
         parser=parser,
         trusted_semantic_repair=trusted_semantic_repair,
         trusted_semantic_fidelity=trusted_semantic_fidelity,
         trusted_semantic_decisions=trusted_semantic_decisions,
+        trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
         propagate_provider_errors=propagate_provider_errors,
         semantic_pipeline_mode=semantic_pipeline_mode,
     )
@@ -507,6 +511,7 @@ def _processing_parser(
     trusted_semantic_repair: dict[str, object] | None,
     trusted_semantic_fidelity: dict[str, object] | None,
     trusted_semantic_decisions: dict[str, object] | None = None,
+    trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
     propagate_provider_errors: bool = False,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
 ) -> DoclingParser:
@@ -551,6 +556,7 @@ def _processing_parser(
         semantic_pipeline_mode=semantic_pipeline_mode,
         candidate_provider=provider,
         trusted_candidate_decisions=trusted_decisions,
+        trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
     )
 
 
@@ -1175,6 +1181,22 @@ def _semantic_hard_findings(
 ) -> list[QualityFinding]:
     validation = document.semantic_validation
     if validation is not None:
+        replay_mismatch = next(
+            (
+                finding
+                for finding in validation.findings
+                if finding.code == "SEMANTIC_SOURCE_REPLAY_MISMATCH"
+            ),
+            None,
+        )
+        if replay_mismatch is not None:
+            return [
+                QualityFinding(
+                    code="SEMANTIC_SOURCE_REPLAY_MISMATCH",
+                    message=("Compatible semantic replay failed canonical byte equality"),
+                    path="quality.validation-report.json",
+                )
+            ]
         if validation.status in {
             SemanticPipelineStatus.VERIFIED,
             SemanticPipelineStatus.REVIEW_PENDING,
@@ -2071,10 +2093,7 @@ def _write_quality(
             )
         )
         sibling_payloads.update(
-            {
-                name: payload.decode("utf-8")
-                for name, payload in diagnostic_payloads.items()
-            }
+            {name: payload.decode("utf-8") for name, payload in diagnostic_payloads.items()}
         )
     if semantic_document.semantic_repair is not None:
         sibling_payloads["semantic-structure-repair.json"] = _json_text(

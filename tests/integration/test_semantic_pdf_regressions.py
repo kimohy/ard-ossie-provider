@@ -3,6 +3,39 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ard_ossie.semantic.adjudication import DecisionReport
+from ard_ossie.semantic.replay import (
+    SemanticReplayBaseline,
+    SemanticReplayCatalog,
+    semantic_replay_identity,
+)
+from scripts.verify_issue_3_semantic import ReplayCandidateProvider, run_evidence_replay
+
+
+class BadDefinitionSpacingProvider(ReplayCandidateProvider):
+    def capabilities(self) -> dict[str, object]:
+        return {
+            "provider": "openai_compatible",
+            "model": "gpt-5.6-terra",
+            "structured_output": "json_schema",
+        }
+
+    def generate_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[dict[str, str]],
+    ):
+        del schema
+        self.calls += 1
+        request = json.loads(messages[-1]["content"])
+        bad = next(
+            candidate
+            for candidate in request["candidates"]
+            if "정의 서이며" in candidate.get("rendering", "")
+        )
+        return self._result({"candidate_id": bad["candidate_id"], "confidence": 0.99})
+
 
 def _table_rows(result, region_id: str) -> list[list[str]]:
     block = next(item for item in result.canonical.blocks if item.region_id == region_id)
@@ -19,20 +52,14 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
     )
     headings = [block.text for block in result.canonical.blocks if block.kind == "heading"]
     heading_levels = [
-        block.heading_level
-        for block in result.canonical.blocks
-        if block.kind == "heading"
+        block.heading_level for block in result.canonical.blocks if block.kind == "heading"
     ]
     table_dimensions = [
         [block.row_count, block.column_count]
         for block in result.canonical.blocks
         if block.kind == "table"
     ]
-    plain_text = "\n".join(
-        cell.text
-        for block in result.canonical.blocks
-        for cell in block.cells
-    )
+    plain_text = "\n".join(cell.text for block in result.canonical.blocks for cell in block.cells)
 
     assert result.validation.status == "verified"
     assert result.validation.character_coverage == 1.0
@@ -46,9 +73,7 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
     cell_texts = [cell.text for block in result.canonical.blocks for cell in block.cells]
     assert all(value in cell_texts for value in golden["required_repaired_table_cells"])
     assert all(value in cell_texts for value in golden["required_unchanged_table_cells"])
-    assert all(
-        fragment not in plain_text for fragment in golden["forbidden_table_cell_fragments"]
-    )
+    assert all(fragment not in plain_text for fragment in golden["forbidden_table_cell_fragments"])
     assert all(value not in result.markdown for value in golden["forbidden_strings"])
     assert "<pre" not in result.markdown
     table_decisions = [
@@ -62,8 +87,7 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
     table_spacing_sets = [
         candidate_set
         for candidate_set in result.candidate_sets
-        if candidate_set.decision_type == "spacing"
-        and candidate_set.region_id in table_region_ids
+        if candidate_set.decision_type == "spacing" and candidate_set.region_id in table_region_ids
     ]
     assert table_spacing_sets
     assert all(
@@ -78,6 +102,36 @@ def test_issue_3_replay_is_verified_without_korean_corruption(issue_3_replay) ->
         assert block.text == "\n".join("\t".join(row) for row in expected_rows)
     assert result.validation.canonical_hash == repeated.validation.canonical_hash
     assert repeated_provider.calls == 0
+
+
+def test_issue_3_same_source_catalog_blocks_korean_word_boundary_drift() -> None:
+    decisions = DecisionReport.model_validate_json(
+        Path("products/500138301/quality/decision-report.json").read_text(encoding="utf-8")
+    )
+    baseline_markdown = Path("products/500138301/generated/data-semantic.md").read_bytes()
+    catalog = SemanticReplayCatalog.build(
+        (
+            SemanticReplayBaseline(
+                product_key="500138301",
+                identity=semantic_replay_identity(decisions),
+                canonical_markdown=baseline_markdown,
+                decisions=decisions,
+            ),
+        )
+    )
+    provider = BadDefinitionSpacingProvider()
+
+    replayed, active_provider = run_evidence_replay(
+        Path("tests/fixtures/semantic/issue-3-evidence.json"),
+        trusted_semantic_replay_catalog=catalog,
+        provider=provider,
+    )
+
+    assert active_provider is provider
+    assert provider.calls == 0
+    assert replayed.canonical_markdown.encode("utf-8") == baseline_markdown
+    assert "정의서이며" in replayed.canonical_markdown
+    assert "정의 서이며" not in replayed.canonical_markdown
 
 
 def test_issue_3_capture_is_public_metadata_only() -> None:

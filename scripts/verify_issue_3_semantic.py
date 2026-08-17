@@ -27,6 +27,7 @@ from ard_ossie.semantic.evidence import ExtractedEvidence
 from ard_ossie.semantic.evidence_sources import extract_pdf_evidence
 from ard_ossie.semantic.models import ExtractionMode, SemanticFidelityReport
 from ard_ossie.semantic.pipeline_v2 import SemanticPipelineResult, parse_semantic_pdf_v2
+from ard_ossie.semantic.replay import SemanticReplayCatalog
 from ard_ossie.semantic.structure import (
     StructureBlock,
     StructureCell,
@@ -52,16 +53,11 @@ class _ProviderMustNotRun:
         model: str | None = None,
     ) -> None:
         reusable = next(
-            (
-                page
-                for page in fidelity.ocr_corrections
-                if page.outcome in {"applied", "reused"}
-            ),
+            (page for page in fidelity.ocr_corrections if page.outcome in {"applied", "reused"}),
             None,
         )
-        self.provider = (
-            provider
-            or (reusable.provider if reusable is not None else "acceptance-stub")
+        self.provider = provider or (
+            reusable.provider if reusable is not None else "acceptance-stub"
         )
         self.model = model or (reusable.model if reusable is not None else "acceptance-stub")
 
@@ -123,9 +119,7 @@ class ReplayCandidateProvider:
                 self.table_spacing_generation_calls += 1
             anchor_id = request["anchor_candidate_id"]
             anchor = next(
-                candidate
-                for candidate in candidates
-                if candidate["candidate_id"] == anchor_id
+                candidate for candidate in candidates if candidate["candidate_id"] == anchor_id
             )
             structured = {
                 "rendered_text": anchor["rendered_text"],
@@ -150,8 +144,7 @@ class ReplayCandidateProvider:
 
         phase = request["phase"]
         table_composite = any(
-            "table_cell_composite" in candidate.get("features", {})
-            for candidate in candidates
+            "table_cell_composite" in candidate.get("features", {}) for candidate in candidates
         )
         if table_composite:
             self.table_spacing_candidate_sets.add(candidate_set_id)
@@ -254,9 +247,7 @@ def _decision_replay_matches(
             return False
         if replayed.model_dump(
             exclude={"decision_id", "source", "generated_candidate"}
-        ) != trusted.model_dump(
-            exclude={"decision_id", "source", "generated_candidate"}
-        ):
+        ) != trusted.model_dump(exclude={"decision_id", "source", "generated_candidate"}):
             return False
     return True
 
@@ -265,9 +256,7 @@ def _verify_correction_reuse(
     fidelity: SemanticFidelityReport,
     reused_fidelity: SemanticFidelityReport,
 ) -> int:
-    applied_pages = {
-        page.page for page in fidelity.ocr_corrections if page.outcome == "applied"
-    }
+    applied_pages = {page.page for page in fidelity.ocr_corrections if page.outcome == "applied"}
     reused_pages = {
         page.page for page in reused_fidelity.ocr_corrections if page.outcome == "reused"
     }
@@ -365,9 +354,11 @@ def run_evidence_replay(
     path: Path,
     *,
     trusted_decisions: tuple[DecisionRecord, ...] = (),
+    trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
+    provider: ReplayCandidateProvider | None = None,
 ) -> tuple[SemanticPipelineResult, ReplayCandidateProvider]:
     evidence = load_evidence_replay(path)
-    provider = ReplayCandidateProvider()
+    active_provider = provider or ReplayCandidateProvider()
     source = SourceFile.model_construct(
         role=SourceRole.SEMANTIC_DOCUMENT,
         path=Path("issue-3.pdf"),
@@ -380,11 +371,12 @@ def run_evidence_replay(
         source,
         hints=load_structure_replay(path),
         mode="candidate",
-        provider=provider,
+        provider=active_provider,
         trusted_decisions=trusted_decisions,
+        trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
         extracted_evidence=evidence,
     )
-    return result, provider
+    return result, active_provider
 
 
 def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, object]:
@@ -396,9 +388,7 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
     )
     headings = [block.text for block in result.canonical.blocks if block.kind == "heading"]
     heading_levels = [
-        block.heading_level
-        for block in result.canonical.blocks
-        if block.kind == "heading"
+        block.heading_level for block in result.canonical.blocks if block.kind == "heading"
     ]
     tables = [
         [block.row_count, block.column_count]
@@ -408,18 +398,10 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
     plain_text = "\n".join(
         [
             *(block.text for block in result.canonical.blocks),
-            *(
-                cell.text
-                for block in result.canonical.blocks
-                for cell in block.cells
-            ),
+            *(cell.text for block in result.canonical.blocks for cell in block.cells),
         ]
     )
-    cell_texts = [
-        cell.text
-        for block in result.canonical.blocks
-        for cell in block.cells
-    ]
+    cell_texts = [cell.text for block in result.canonical.blocks for cell in block.cells]
     _require(result.validation.status == "verified", "EVIDENCE_REPLAY_NOT_VERIFIED")
     _require(result.validation.character_coverage == 1.0, "EVIDENCE_REPLAY_COVERAGE")
     _require(result.validation.missing_atom_count == 0, "EVIDENCE_REPLAY_MISSING")
@@ -445,10 +427,7 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "EVIDENCE_REPLAY_UNCHANGED_TABLE_CELL",
     )
     _require(
-        all(
-            fragment not in plain_text
-            for fragment in golden["forbidden_table_cell_fragments"]
-        ),
+        all(fragment not in plain_text for fragment in golden["forbidden_table_cell_fragments"]),
         "EVIDENCE_REPLAY_TABLE_CELL_FRAGMENT",
     )
     _require(
@@ -483,8 +462,7 @@ def verify_evidence_replay(evidence_path: Path, golden_path: Path) -> dict[str, 
         "EVIDENCE_REPLAY_TABLE_SPACING_GENERATION_MISSING",
     )
     _require(
-        provider.table_spacing_verification_calls
-        == provider.table_spacing_generation_calls,
+        provider.table_spacing_verification_calls == provider.table_spacing_generation_calls,
         "EVIDENCE_REPLAY_TABLE_SPACING_VERIFICATION_MISMATCH",
     )
     _require(repeated_provider.calls == 0, "EVIDENCE_REPLAY_CACHE_MISS")
@@ -544,9 +522,7 @@ def _structure_block_payload(block: StructureBlock) -> dict[str, object]:
                         "text_hint": cell.text_hint,
                         "column_header": cell.column_header,
                         "bbox": (
-                            cell.bbox.model_dump(mode="json")
-                            if cell.bbox is not None
-                            else None
+                            cell.bbox.model_dump(mode="json") if cell.bbox is not None else None
                         ),
                     }
                     for cell in block.table.cells
@@ -589,22 +565,14 @@ def _structure_block_from_payload(payload: dict[str, object]) -> StructureBlock:
         order=int(payload["order"]),
         page=int(payload["page"]) if payload.get("page") is not None else None,
         bbox=(
-            SourceBox.model_validate(payload["bbox"])
-            if payload.get("bbox") is not None
-            else None
+            SourceBox.model_validate(payload["bbox"]) if payload.get("bbox") is not None else None
         ),
         text_hint=str(payload["text_hint"]),
         heading_level=(
-            int(payload["heading_level"])
-            if payload.get("heading_level") is not None
-            else None
+            int(payload["heading_level"]) if payload.get("heading_level") is not None else None
         ),
         list_kind=payload.get("list_kind"),
-        list_depth=(
-            int(payload["list_depth"])
-            if payload.get("list_depth") is not None
-            else None
-        ),
+        list_depth=(int(payload["list_depth"]) if payload.get("list_depth") is not None else None),
         table=table,
     )
 
@@ -663,9 +631,7 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
     _require(isinstance(quality_hashes, dict), "ISSUE_3_QUALITY_HASHES_MISSING")
     manifest_mode: str | None = None
     if "manifest.json" in quality_hashes:
-        manifest = json.loads(
-            _quality_artifact_bytes(root, quality_report, "manifest.json")
-        )
+        manifest = json.loads(_quality_artifact_bytes(root, quality_report, "manifest.json"))
         _require(isinstance(manifest, dict), "ISSUE_3_MANIFEST_INVALID")
         manifest_mode = manifest.get("mode")
         _require(
@@ -702,8 +668,7 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
             "ISSUE_3_SOURCE_HASH_MISMATCH",
         )
         _require(
-            validation.status is SemanticPipelineStatus.VERIFIED
-            and validation.publishable,
+            validation.status is SemanticPipelineStatus.VERIFIED and validation.publishable,
             "ISSUE_3_VALIDATION_NOT_VERIFIED",
         )
         _require(not fidelity.ocr_corrections, "ISSUE_3_CORRECTION_MODE_INVALID")
@@ -713,8 +678,7 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
         _require(
             decision_report.source_hash == source.sha256
             and all(
-                decision.source_hash == source.sha256
-                for decision in decision_report.decisions
+                decision.source_hash == source.sha256 for decision in decision_report.decisions
             ),
             "ISSUE_3_DECISION_SOURCE_MISMATCH",
         )
@@ -724,10 +688,7 @@ def verify_issue_3(product_root: Path) -> dict[str, object]:
             "ISSUE_3_DECISIONS_UNRESOLVED",
         )
         _require(
-            {
-                (decision.provider, decision.model)
-                for decision in decision_report.decisions
-            }
+            {(decision.provider, decision.model) for decision in decision_report.decisions}
             == {(provider_name, model)},
             "ISSUE_3_DECISION_PROVIDER_INVALID",
         )

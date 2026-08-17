@@ -62,6 +62,7 @@ from ard_ossie.semantic.structure import (
 if TYPE_CHECKING:
     from ard_ossie.docling_parser import Evidence
     from ard_ossie.semantic.correction import OcrCorrectionPlanner
+    from ard_ossie.semantic.replay import SemanticReplayCatalog
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ def parse_semantic_document(
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
     candidate_provider: Any | None = None,
     trusted_candidate_decisions: tuple[Any, ...] = (),
+    trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
 ) -> SemanticParseResult:
     """Parse a PDF or DOCX without allowing structural hints to author text."""
     mode = SemanticPipelineMode(semantic_pipeline_mode)
@@ -104,6 +106,7 @@ def parse_semantic_document(
             mode=mode,
             provider=candidate_provider,
             trusted_decisions=trusted_candidate_decisions,
+            trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
             pdfium=pdfium,
         )
         fidelity = canonical_fidelity_report(
@@ -166,6 +169,7 @@ def parse_semantic_document(
                 legacy_markdown=markdown,
                 provider=candidate_provider,
                 trusted_decisions=trusted_candidate_decisions,
+                trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
                 pdfium=pdfium,
             )
         except (SemanticSourceError, ValueError):
@@ -353,10 +357,7 @@ def _repair_and_degrade(
     }
     used_orders = {block.order for block in blocks}
     native_table_ids = {
-        span_id
-        for table in native.tables
-        for cell in table.cells
-        for span_id in cell.span_ids
+        span_id for table in native.tables for cell in table.cells for span_id in cell.span_ids
     }
 
     for preferred, paragraph_ids in _ordinary_paragraphs(
@@ -485,8 +486,7 @@ def _enforce_native_tables(
 
         region_ids = set(crossing or _native_table_span_ids(table))
         if any(
-            isinstance(block, LosslessBlock)
-            and region_ids.issubset(block.span_ids)
+            isinstance(block, LosslessBlock) and region_ids.issubset(block.span_ids)
             for block in active
         ):
             continue
@@ -505,12 +505,8 @@ def _enforce_native_tables(
         if len(touching_indices) == 1 and touching_indices == valid_indices:
             continue
 
-        active = [
-            block for index, block in enumerate(active) if index not in touching_indices
-        ]
-        active_excluded = [
-            item for item in active_excluded if item.span_id not in region_ids
-        ]
+        active = [block for index, block in enumerate(active) if index not in touching_indices]
+        active_excluded = [item for item in active_excluded if item.span_id not in region_ids]
         used_orders = {block.order for block in active}
         ordered_region = tuple(
             span.span_id
@@ -519,9 +515,7 @@ def _enforce_native_tables(
         )
         if ordered_region:
             order = _available_order(_native_table_group_order(native, table.order), used_orders)
-            active.append(
-                LosslessBlock(order=order, span_ids=ordered_region, reason=reason)
-            )
+            active.append(LosslessBlock(order=order, span_ids=ordered_region, reason=reason))
             used_orders.add(order)
 
     return active, active_excluded
@@ -697,8 +691,7 @@ def _ordinary_paragraphs(
         and span.span_id not in grouped_ids
     ]
     paragraphs.extend(
-        (catalog[span_ids[0]].ordinal, span_ids)
-        for span_ids in _contiguous_span_ids(orphan_spans)
+        (catalog[span_ids[0]].ordinal, span_ids) for span_ids in _contiguous_span_ids(orphan_spans)
     )
     return paragraphs
 
@@ -752,9 +745,7 @@ def _completed_document_and_repair(
                 paired_plan_to_final[plan_index] = final_index
                 claimed_final.add(final_index)
 
-    entries: list[tuple[str, int]] = [
-        ("final", index) for index in range(len(blocks))
-    ]
+    entries: list[tuple[str, int]] = [("final", index) for index in range(len(blocks))]
     if plan is not None:
         entries.extend(
             ("plan", index)
@@ -793,17 +784,11 @@ def _completed_document_and_repair(
     remapped_blocks: list[RepairBlock] = []
     for plan_index, repair_block in enumerate(plan.blocks):
         final_index = paired_plan_to_final.get(plan_index)
-        entry = (
-            ("final", final_index)
-            if final_index is not None
-            else ("plan", plan_index)
-        )
+        entry = ("final", final_index) if final_index is not None else ("plan", plan_index)
         remapped_order = entry_orders[entry]
         plan_order_by_old[repair_block.order] = remapped_order
         remapped_blocks.append(repair_block.model_copy(update={"order": remapped_order}))
-    remapped_plan = RepairPlan(
-        blocks=sorted(remapped_blocks, key=lambda item: item.order)
-    )
+    remapped_plan = RepairPlan(blocks=sorted(remapped_blocks, key=lambda item: item.order))
     payload = repair_record.model_dump(mode="python")
     payload.update(
         {
@@ -900,9 +885,7 @@ def _build_fidelity(
             for patch in page.patches
         ),
         ocr_correction_rejected_count=sum(
-            patch.outcome == "rejected"
-            for page in correction_audits
-            for patch in page.patches
+            patch.outcome == "rejected" for page in correction_audits for patch in page.patches
         ),
         warning_codes=list(dict.fromkeys(correction_warnings)),
     )
@@ -933,9 +916,7 @@ def _table_fidelity_results(
         )
         block_ids = set(_block_span_ids((block,)))
         for table in native.tables:
-            if block_ids == {
-                span_id for cell in table.cells for span_id in cell.span_ids
-            }:
+            if block_ids == {span_id for cell in table.cells for span_id in cell.span_ids}:
                 represented_native_tables.add(table.order)
 
     for table in native.tables:
@@ -943,11 +924,7 @@ def _table_fidelity_results(
             continue
         table_ids = set(_native_table_span_ids(table))
         degraded_block = next(
-            (
-                block
-                for block in lossless
-                if table_ids and table_ids.issubset(block.span_ids)
-            ),
+            (block for block in lossless if table_ids and table_ids.issubset(block.span_ids)),
             None,
         )
         if degraded_block is None:

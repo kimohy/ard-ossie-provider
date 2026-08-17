@@ -11,7 +11,20 @@ from typer.testing import CliRunner
 
 import ard_ossie.pipeline as pipeline_module
 from ard_ossie.cli import app
+from ard_ossie.docling_parser import ParsedDocument
+from ard_ossie.ingestion import SourceFile, SourceRole
 from ard_ossie.pipeline import PipelineSecurityError, PipelineValidationError, process_product
+from ard_ossie.semantic.adjudication import DecisionReport
+from ard_ossie.semantic.pipeline_v2 import (
+    SemanticPipelineResult,
+    canonical_fidelity_report,
+)
+from ard_ossie.semantic.replay import (
+    SemanticReplayBaseline,
+    SemanticReplayCatalog,
+    semantic_replay_identity,
+)
+from scripts.verify_issue_3_semantic import ReplayCandidateProvider, run_evidence_replay
 from tests.integration.test_cli_process import (
     DatasetSafetyProvider,
     FidelityParser,
@@ -20,6 +33,26 @@ from tests.integration.test_cli_process import (
     create_product_fixture,
     degraded_fidelity_report,
 )
+
+
+class ReplayMismatchParser(FidelityParser):
+    def __init__(self, result: SemanticPipelineResult) -> None:
+        super().__init__(
+            canonical_fidelity_report(result.evidence, result.canonical, result.validation)
+        )
+        self.result = result
+
+    def parse(self, source: SourceFile) -> ParsedDocument:
+        if source.role is SourceRole.PRODUCT_HTML:
+            return super().parse(source)
+        return ParsedDocument(
+            role=source.role,
+            source_hash=source.sha256,
+            markdown=self.result.markdown,
+            semantic_fidelity=self.fidelity,
+            semantic_validation=self.result.validation,
+            semantic_pipeline_result=self.result,
+        )
 
 
 def tree_hash(directory: Path) -> str:
@@ -45,6 +78,85 @@ def test_hard_quality_error_keeps_previous_generated_directory(tmp_path: Path) -
 
     assert result.exit_code == 2
     assert tree_hash(product / "generated") == before
+
+
+def test_semantic_replay_mismatch_writes_diagnostics_without_promotion(
+    tmp_path: Path,
+) -> None:
+    product = create_product_fixture(tmp_path)
+    add_complete_dictionary_descriptions(product)
+    registry = tmp_path / "registry"
+    process_product(product, registry_root=registry)
+    before = {
+        "generated": tree_hash(product / "generated"),
+        "registry": tree_hash(registry),
+    }
+    config_path = product / "product.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["operation"] = "update"
+    config["base_version"] = 1
+    config["version"] = 2
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    product_html = product / "sources" / "product-info" / "product.html"
+    product_html.write_text(
+        product_html.read_text(encoding="utf-8").replace(
+            "Order analytics",
+            "Order replay analytics",
+        ),
+        encoding="utf-8",
+    )
+    decisions = DecisionReport.model_validate_json(
+        Path("products/500138301/quality/decision-report.json").read_text(encoding="utf-8")
+    )
+    catalog = SemanticReplayCatalog.build(
+        (
+            SemanticReplayBaseline(
+                product_key="500138301",
+                identity=semantic_replay_identity(decisions),
+                canonical_markdown=b"different-but-hash-verified-base\n",
+                decisions=decisions,
+            ),
+        )
+    )
+    failed, provider = run_evidence_replay(
+        Path("tests/fixtures/semantic/issue-3-evidence.json"),
+        trusted_semantic_replay_catalog=catalog,
+        provider=_StoredDecisionIdentityProvider(),
+    )
+
+    assert provider.calls == 0
+    assert failed.validation.status == "failed"
+    with pytest.raises(
+        PipelineValidationError,
+        match="SEMANTIC_SOURCE_REPLAY_MISMATCH",
+    ):
+        process_product(
+            product,
+            registry_root=registry,
+            parser=ReplayMismatchParser(failed),
+        )
+
+    assert tree_hash(product / "generated") == before["generated"]
+    assert tree_hash(registry) == before["registry"]
+    quality = json.loads((product / "quality/quality-report.json").read_text())
+    validation = json.loads((product / "quality/validation-report.json").read_text())
+    application = json.loads((product / "quality/application-report.json").read_text())
+    assert [item["code"] for item in quality["hard_errors"]] == ["SEMANTIC_SOURCE_REPLAY_MISMATCH"]
+    assert validation["publishable"] is False
+    assert "SEMANTIC_SOURCE_REPLAY_MISMATCH" in application["applications"][0]["invariant_codes"]
+
+
+class _StoredDecisionIdentityProvider(ReplayCandidateProvider):
+    def capabilities(self) -> dict[str, object]:
+        return {
+            "provider": "openai_compatible",
+            "model": "gpt-5.6-terra",
+            "structured_output": "json_schema",
+        }
+
+    def generate_structured(self, **_kwargs: object) -> object:
+        self.calls += 1
+        raise AssertionError("trusted same-source decisions must be reused")
 
 
 def test_promotion_failure_rolls_back_registry_generated_and_quality(
@@ -270,13 +382,12 @@ def test_semantic_structure_warning_blocks_strict_promotion(tmp_path: Path) -> N
     assert not registry.exists()
     fidelity_path = product / "quality" / "semantic-fidelity.json"
     report = json.loads((product / "quality" / "quality-report.json").read_text())
-    assert [finding["code"] for finding in report["warnings"]] == [
-        "SEMANTIC_STRUCTURE_DEGRADED"
-    ]
+    assert [finding["code"] for finding in report["warnings"]] == ["SEMANTIC_STRUCTURE_DEGRADED"]
     assert report["status"] == "FAIL"
-    assert report["quality_artifact_hashes"][fidelity_path.name] == hashlib.sha256(
-        fidelity_path.read_bytes()
-    ).hexdigest()
+    assert (
+        report["quality_artifact_hashes"][fidelity_path.name]
+        == hashlib.sha256(fidelity_path.read_bytes()).hexdigest()
+    )
 
 
 def _process_semantic_strict_failure(product: Path, registry: Path) -> None:
@@ -457,11 +568,7 @@ def test_validation_failure_rejects_quality_directory_replacement_before_open(
 
     def replace_quality_before_open(path, flags, *args, **kwargs):
         nonlocal replaced
-        if (
-            not replaced
-            and path == "quality"
-            and kwargs.get("dir_fd") is not None
-        ):
+        if not replaced and path == "quality" and kwargs.get("dir_fd") is not None:
             replaced = True
             pipeline_module.os.replace(quality, moved)
             quality.mkdir()
@@ -495,11 +602,7 @@ def test_validation_failure_classifies_quality_symlink_race(
 
     def replace_quality_with_symlink_before_open(path, flags, *args, **kwargs):
         nonlocal replaced
-        if (
-            not replaced
-            and path == "quality"
-            and kwargs.get("dir_fd") is not None
-        ):
+        if not replaced and path == "quality" and kwargs.get("dir_fd") is not None:
             replaced = True
             pipeline_module.os.replace(quality, moved)
             quality.symlink_to(outside, target_is_directory=True)
@@ -750,11 +853,7 @@ def test_validation_failure_classifies_child_change_before_replace(
 
     def change_destination_before_replace(source, target, *args, **kwargs):
         nonlocal changed
-        if (
-            not changed
-            and target == destination_name
-            and kwargs.get("dst_dir_fd") is not None
-        ):
+        if not changed and target == destination_name and kwargs.get("dst_dir_fd") is not None:
             changed = True
             descriptor = kwargs["dst_dir_fd"]
             real_unlink(destination_name, dir_fd=descriptor)
@@ -772,9 +871,7 @@ def test_validation_failure_classifies_child_change_before_replace(
     monkeypatch.setattr(pipeline_module.os, "replace", change_destination_before_replace)
 
     expected_code = (
-        "READ_PATH_TYPE_NOT_ALLOWED"
-        if replacement_kind == "directory"
-        else "SYMLINK_NOT_ALLOWED"
+        "READ_PATH_TYPE_NOT_ALLOWED" if replacement_kind == "directory" else "SYMLINK_NOT_ALLOWED"
     )
     with pytest.raises(PipelineSecurityError, match=expected_code):
         _process_semantic_strict_failure(product, tmp_path / "registry")
@@ -799,11 +896,7 @@ def test_validation_failure_preserves_unrelated_replace_io_error(
 
     def fail_quality_replace(source, target, *args, **kwargs):
         nonlocal failed
-        if (
-            not failed
-            and target == destination_name
-            and kwargs.get("dst_dir_fd") is not None
-        ):
+        if not failed and target == destination_name and kwargs.get("dst_dir_fd") is not None:
             failed = True
             raise OSError(errno.EIO, "simulated unrelated replace failure")
         return real_replace(source, target, *args, **kwargs)
@@ -921,9 +1014,5 @@ def test_metric_exclusion_warning_blocks_update_promotion_in_strict_mode(
     assert tree_hash(registry) == before["registry"]
     assert tree_hash(product / "generated") == before["generated"]
     report = json.loads((product / "quality" / "quality-report.json").read_text())
-    assert [finding["code"] for finding in report["hard_errors"]] == [
-        "WARNINGS_AS_ERRORS"
-    ]
-    assert "METRIC_MULTI_DATASET_UNSUPPORTED" in {
-        finding["code"] for finding in report["warnings"]
-    }
+    assert [finding["code"] for finding in report["hard_errors"]] == ["WARNINGS_AS_ERRORS"]
+    assert "METRIC_MULTI_DATASET_UNSUPPORTED" in {finding["code"] for finding in report["warnings"]}

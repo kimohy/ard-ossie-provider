@@ -26,8 +26,14 @@ from ard_ossie.semantic.models import (
 )
 from ard_ossie.semantic.pipeline_v2 import (
     SemanticPipelineMode,
+    SemanticPipelineResult,
     canonical_fidelity_report,
     parse_semantic_pdf_v2,
+)
+from ard_ossie.semantic.replay import (
+    SemanticReplayBaseline,
+    SemanticReplayCatalog,
+    semantic_replay_identity,
 )
 from ard_ossie.semantic.structure import StructureDocument
 
@@ -140,6 +146,158 @@ class DeferredSpacingProvider:
                 elapsed_ms=0,
             ),
         )
+
+
+class AcceptedSpacingProvider:
+    def __init__(self, *, model: str = "semantic-fixture") -> None:
+        self.model = model
+        self.calls = 0
+
+    def capabilities(self) -> dict[str, object]:
+        return {"provider": "openai_compatible", "model": self.model}
+
+    def generate_structured(
+        self,
+        *,
+        schema: dict[str, object],
+        messages: list[dict[str, str]],
+    ) -> LLMResult:
+        del schema
+        self.calls += 1
+        request = json.loads(messages[-1]["content"])
+        selected = max(
+            request["candidates"],
+            key=lambda candidate: (candidate["score"], candidate["candidate_id"]),
+        )
+        structured = {
+            "candidate_id": selected["candidate_id"],
+            "confidence": 0.99,
+        }
+        return LLMResult(
+            text=json.dumps(structured),
+            structured=structured,
+            metadata=LLMMetadata(
+                profile="semantic-fixture",
+                provider="openai_compatible",
+                model=self.model,
+                elapsed_ms=0,
+            ),
+        )
+
+
+def _replay_catalog(
+    result: SemanticPipelineResult,
+    *,
+    markdown: bytes | None = None,
+) -> SemanticReplayCatalog:
+    return SemanticReplayCatalog.build(
+        (
+            SemanticReplayBaseline(
+                product_key="base-product",
+                identity=semantic_replay_identity(result.decisions),
+                canonical_markdown=(
+                    result.canonical_markdown.encode() if markdown is None else markdown
+                ),
+                decisions=result.decisions,
+            ),
+        )
+    )
+
+
+def _ambiguous_candidate_run(
+    tmp_path: Path,
+    *,
+    provider: AcceptedSpacingProvider,
+    catalog: SemanticReplayCatalog | None = None,
+) -> SemanticPipelineResult:
+    return parse_semantic_pdf_v2(
+        _source(tmp_path),
+        hints=StructureDocument(blocks=()),
+        mode="candidate",
+        provider=provider,
+        trusted_semantic_replay_catalog=catalog,
+        extracted_evidence=_extracted(),
+        spacing_scorer=AmbiguousSpacingScorer(),
+    )
+
+
+def test_replay_catalog_reuses_compatible_decisions_without_provider_calls(
+    tmp_path: Path,
+) -> None:
+    first_provider = AcceptedSpacingProvider()
+    first = _ambiguous_candidate_run(tmp_path, provider=first_provider)
+    replay_provider = AcceptedSpacingProvider()
+
+    replayed = _ambiguous_candidate_run(
+        tmp_path,
+        provider=replay_provider,
+        catalog=_replay_catalog(first),
+    )
+
+    assert first_provider.calls == 1
+    assert replay_provider.calls == 0
+    assert replayed.canonical_markdown.encode() == first.canonical_markdown.encode()
+    assert replayed.validation.status == "verified"
+    assert {decision.source for decision in replayed.decisions.decisions} == {
+        "cache",
+        "deterministic",
+    }
+
+
+def test_replay_catalog_rejects_compatible_canonical_byte_mismatch(
+    tmp_path: Path,
+) -> None:
+    first = _ambiguous_candidate_run(tmp_path, provider=AcceptedSpacingProvider())
+
+    replayed = _ambiguous_candidate_run(
+        tmp_path,
+        provider=AcceptedSpacingProvider(),
+        catalog=_replay_catalog(first, markdown=b"different canonical bytes\n"),
+    )
+
+    assert replayed.validation.status == "failed"
+    assert replayed.validation.publishable is False
+    assert [finding.code for finding in replayed.validation.findings] == [
+        "SEMANTIC_SOURCE_REPLAY_MISMATCH"
+    ]
+    fidelity = canonical_fidelity_report(
+        replayed.evidence,
+        replayed.canonical,
+        replayed.validation,
+    )
+    parsed = ParsedDocument(
+        role=SourceRole.SEMANTIC_DOCUMENT,
+        source_hash=SOURCE_HASH,
+        markdown=replayed.markdown,
+        semantic_fidelity=fidelity,
+        semantic_validation=replayed.validation,
+        semantic_pipeline_result=replayed,
+    )
+    assert [finding.code for finding in _semantic_hard_findings(parsed)] == [
+        "SEMANTIC_SOURCE_REPLAY_MISMATCH"
+    ]
+
+
+def test_replay_catalog_does_not_freeze_changed_provider_identity(
+    tmp_path: Path,
+) -> None:
+    first = _ambiguous_candidate_run(tmp_path, provider=AcceptedSpacingProvider())
+    changed_provider = AcceptedSpacingProvider(model="changed-semantic-policy")
+
+    replayed = _ambiguous_candidate_run(
+        tmp_path,
+        provider=changed_provider,
+        catalog=_replay_catalog(first),
+    )
+
+    assert changed_provider.calls == 1
+    assert replayed.validation.status == "verified"
+    assert all(
+        finding.code != "SEMANTIC_SOURCE_REPLAY_MISMATCH"
+        for finding in replayed.validation.findings
+    )
+
+
 @pytest.mark.parametrize(
     ("mode", "expected_markdown"),
     [
@@ -297,6 +455,49 @@ def test_candidate_mode_never_invokes_legacy_free_form_repair(
     assert correction.calls == 0
 
 
+def test_docling_parser_forwards_replay_catalog_to_candidate_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source(tmp_path)
+    pipeline_result = parse_semantic_pdf_v2(
+        source,
+        hints=StructureDocument(blocks=()),
+        mode="candidate",
+        extracted_evidence=_extracted(),
+        spacing_scorer=StableSpacingScorer(),
+    )
+    catalog = _replay_catalog(pipeline_result)
+    native = NativeDocument(
+        source_hash=SOURCE_HASH,
+        extraction_mode=ExtractionMode.PDF_EMBEDDED,
+        page_count=1,
+        parser_versions={},
+        spans=(),
+        groups=(),
+        tables=(),
+    )
+    monkeypatch.setattr(
+        semantic_parser,
+        "_native_and_structure",
+        lambda *_args, **_kwargs: (native, StructureDocument(blocks=())),
+    )
+
+    def candidate_pipeline(*_args: object, **kwargs: object) -> SemanticPipelineResult:
+        assert kwargs["trusted_semantic_replay_catalog"] is catalog
+        return pipeline_result
+
+    monkeypatch.setattr(semantic_parser, "parse_semantic_pdf_v2", candidate_pipeline)
+
+    parsed = DoclingParser(
+        semantic_pipeline_mode="candidate",
+        trusted_semantic_replay_catalog=catalog,
+    ).parse(source)
+
+    assert parsed.markdown == pipeline_result.canonical_markdown
+    assert parsed.semantic_validation.status == "verified"
+
+
 def test_docx_ignores_candidate_pdf_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -368,9 +569,7 @@ def test_unavailable_spacing_provider_continues_with_deferred_review_debt(
     findings = _semantic_hard_findings(parsed)
 
     deferred = [
-        decision
-        for decision in result.decisions.decisions
-        if decision.outcome == "deferred_review"
+        decision for decision in result.decisions.decisions if decision.outcome == "deferred_review"
     ]
     assert result.validation.status == "review_pending"
     assert result.validation.publishable is True
@@ -396,9 +595,7 @@ def test_deferred_spacing_review_keeps_candidate_markdown_publishable(
     )
 
     deferred = [
-        decision
-        for decision in result.decisions.decisions
-        if decision.outcome == "deferred_review"
+        decision for decision in result.decisions.decisions if decision.outcome == "deferred_review"
     ]
     assert result.validation.status == "review_pending"
     assert result.validation.publishable is True

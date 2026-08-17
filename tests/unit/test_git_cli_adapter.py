@@ -10,7 +10,7 @@ from ard_ossie.adapters.git_cli import GitCli
 from ard_ossie.adapters.subprocess import SubprocessRunner
 from ard_ossie.ports.filesystem import PathPolicyError
 from ard_ossie.ports.git import CommitResult, GitConflict, GitTransientError
-from ard_ossie.ports.process import CommandRequest, CommandResult
+from ard_ossie.ports.process import BinaryCommandResult, CommandRequest, CommandResult
 
 SHA = "a" * 40
 NEW_SHA = "b" * 40
@@ -72,9 +72,7 @@ def test_worktree_integrity_check_includes_untracked_paths(tmp_path: Path) -> No
 
     assert GitCli(tmp_path, clean_runner).is_worktree_clean() is True
     assert GitCli(tmp_path, dirty_runner).is_worktree_clean() is False
-    assert clean_runner.argv == [
-        ("git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
-    ]
+    assert clean_runner.argv == [("git", "status", "--porcelain=v1", "-z", "--untracked-files=all")]
 
 
 def test_commit_allowed_paths_rejects_unexpected_status(tmp_path: Path) -> None:
@@ -230,9 +228,7 @@ def test_remote_branch_sha_resolves_exact_head_without_checkout(tmp_path: Path) 
     runner = RecordingRunner([ok(f"{SHA}\trefs/heads/feature/sales\n")])
 
     assert GitCli(tmp_path, runner).remote_branch_sha("feature/sales") == SHA
-    assert runner.argv == [
-        ("git", "ls-remote", "--heads", "origin", "refs/heads/feature/sales")
-    ]
+    assert runner.argv == [("git", "ls-remote", "--heads", "origin", "refs/heads/feature/sales")]
 
 
 def test_remote_branch_sha_returns_none_for_missing_branch(tmp_path: Path) -> None:
@@ -269,9 +265,7 @@ def test_read_text_at_uses_validated_revision_and_repository_path(tmp_path: Path
     )
 
     assert value == '{"version":2}\n'
-    assert runner.argv == [
-        ("git", "show", f"{SHA}:registry/products/prd_example.json")
-    ]
+    assert runner.argv == [("git", "show", f"{SHA}:registry/products/prd_example.json")]
 
 
 def test_read_bytes_at_returns_real_git_blob_over_generic_runner_limit(tmp_path: Path) -> None:
@@ -295,6 +289,70 @@ def test_read_bytes_at_returns_real_git_blob_over_generic_runner_limit(tmp_path:
     actual = GitCli(tmp_path, SubprocessRunner()).read_bytes_at(revision, "large.json")
 
     assert actual == payload
+
+
+def test_read_bytes_at_distinguishes_unknown_revision_from_missing_file(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    (tmp_path / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "fixture"], check=True)
+    revision = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    adapter = GitCli(tmp_path, SubprocessRunner())
+
+    with pytest.raises(GitConflict) as missing_file:
+        adapter.read_bytes_at(revision, "missing.txt")
+    with pytest.raises(GitConflict) as missing_revision:
+        adapter.read_bytes_at("f" * 40, "missing.txt")
+
+    assert missing_file.value.code == "REVISION_FILE_NOT_FOUND"
+    assert missing_revision.value.code == "REVISION_NOT_FOUND"
+
+
+def test_read_bytes_at_does_not_hide_existing_blob_read_failure(tmp_path: Path) -> None:
+    class FailingBlobRunner:
+        def run_bytes(
+            self,
+            request: CommandRequest,
+            *,
+            max_output_bytes: int,
+        ) -> BinaryCommandResult:
+            del request, max_output_bytes
+            return BinaryCommandResult(
+                returncode=128,
+                stdout=b"",
+                stderr=b"fatal: unable to read blob",
+            )
+
+        def run(self, request: CommandRequest) -> CommandResult:
+            assert request.argv == (
+                "git",
+                "ls-tree",
+                "-z",
+                SHA,
+                "--",
+                "registry/indexes/product-keys.json",
+            )
+            return ok("100644 blob deadbeef\tregistry/indexes/product-keys.json\x00")
+
+    with pytest.raises(GitTransientError) as captured:
+        GitCli(tmp_path, FailingBlobRunner()).read_bytes_at(
+            SHA,
+            "registry/indexes/product-keys.json",
+        )
+
+    assert captured.value.code == "REVISION_READ_FAILED"
 
 
 def test_merge_revision_creates_an_explicit_non_fast_forward_merge(

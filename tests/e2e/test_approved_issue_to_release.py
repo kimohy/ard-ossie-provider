@@ -34,6 +34,7 @@ from ard_ossie.ports.github import (
     PullRequestState,
     ReleaseAssetState,
     ReleaseState,
+    RepositoryState,
 )
 from ard_ossie.registry import Registry
 
@@ -148,6 +149,19 @@ class LifecycleGit:
             raise GitConflict("REVISION_FILE_NOT_FOUND", result.stderr)
         return result.stdout
 
+    def read_bytes_at(self, revision: str, path: str | Path) -> bytes:
+        result = subprocess.run(
+            ["git", "show", f"{revision}:{Path(path).as_posix()}"],
+            cwd=self.repository,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise GitConflict(
+                "REVISION_FILE_NOT_FOUND",
+                result.stderr.decode("utf-8", errors="replace"),
+            )
+        return result.stdout
+
     def commit_intake_paths(self, product_key: str, message: str) -> CommitResult:
         return self._commit(message, f"products/{product_key}")
 
@@ -213,6 +227,15 @@ class LifecycleGitHub:
         self.comments: dict[str, str] = {}
         self.releases: dict[str, ReleaseState] = {}
         self.dispatches: list[tuple[str, dict[str, object]]] = []
+
+    def repository(self) -> RepositoryState:
+        return RepositoryState(
+            full_name="owner/repository",
+            public=True,
+            archived=False,
+            default_branch="main",
+            permission="admin",
+        )
 
     def collaborator_permission(self, login: str) -> str:
         assert login == "maintainer"

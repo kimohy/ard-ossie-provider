@@ -24,8 +24,13 @@ from ard_ossie.application.contracts import (
     WorkflowTransientError,
     WorkflowValidationError,
 )
+from ard_ossie.application.semantic_replay import load_semantic_replay_catalog
 from ard_ossie.application.source_check import validate_changeset_binding
-from ard_ossie.ingestion import SourceValidationError
+from ard_ossie.ingestion import (
+    SourceRole,
+    SourceValidationError,
+    scan_sources,
+)
 from ard_ossie.models import StrictModel
 from ard_ossie.pipeline import (
     PipelineSecurityError,
@@ -112,8 +117,13 @@ class ProcessingService:
                 "PROCESSING_REPOSITORY_MISMATCH",
                 "processing request repository does not match the filesystem port",
             )
+        default_branch = self.github.repository().default_branch
         pull_request = self.github.get_pr(request.pr_number)
-        processing_head = self._require_expected_head(request, pull_request)
+        processing_head = self._require_expected_head(
+            request,
+            pull_request,
+            expected_base_branch=default_branch,
+        )
 
         product = self.paths.resolve_read(Path("products") / request.product_key)
         registry = self.paths.resolve_directory("registry", allow_missing=True)
@@ -131,7 +141,7 @@ class ProcessingService:
                 "changeset processing requires the canonical tracking branch",
             )
         try:
-            base_sha = self.git.remote_branch_sha(pull_request.base_branch)
+            base_sha = self.git.remote_branch_sha(default_branch)
             (
                 trusted_semantic_repair,
                 trusted_semantic_fidelity,
@@ -140,6 +150,14 @@ class ProcessingService:
                 self.git,
                 base_sha=base_sha,
                 product_key=request.product_key,
+            )
+            source_manifest = scan_sources(product / "sources")
+            semantic_source_hash = source_manifest.by_role(SourceRole.SEMANTIC_DOCUMENT).sha256
+            trusted_semantic_replay_catalog = load_semantic_replay_catalog(
+                self.git,
+                base_sha=base_sha,
+                product_key=request.product_key,
+                semantic_source_hash=semantic_source_hash,
             )
             provider = self.provider_factory()
             processed = self.processor(
@@ -151,6 +169,8 @@ class ProcessingService:
                 trusted_semantic_repair=trusted_semantic_repair,
                 trusted_semantic_fidelity=trusted_semantic_fidelity,
                 trusted_semantic_decisions=trusted_semantic_decisions,
+                trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
+                source_manifest=source_manifest,
                 semantic_pipeline_mode=request.semantic_pipeline_mode,
             )
         except PipelineSecurityError as error:
@@ -189,7 +209,11 @@ class ProcessingService:
                 "processing changed the product changeset binding",
             )
         if (
-            self._require_expected_head(request, self.github.get_pr(request.pr_number))
+            self._require_expected_head(
+                request,
+                self.github.get_pr(request.pr_number),
+                expected_base_branch=default_branch,
+            )
             != processing_head
         ):
             raise WorkflowSecurityError(
@@ -248,7 +272,7 @@ class ProcessingService:
                 mutations.append(
                     self.github.dispatch_workflow(
                         "ard-changeset.yml",
-                        pull_request.base_branch,
+                        default_branch,
                         {
                             "changeset_id": changeset_id,
                             "head_sha": current_head,
@@ -301,6 +325,8 @@ class ProcessingService:
         self,
         request: ProcessingRequest,
         pull_request: PullRequestState,
+        *,
+        expected_base_branch: str,
     ) -> str:
         current = self.git.current_sha()
         remote = self.git.remote_branch_sha(request.branch)
@@ -314,6 +340,11 @@ class ProcessingService:
             raise WorkflowSecurityError(
                 "PROCESSING_HEAD_MISMATCH",
                 "checkout, remote branch, and pull request head must match the validated SHA",
+            )
+        if pull_request.base_branch != expected_base_branch:
+            raise WorkflowSecurityError(
+                "PROCESSING_BASE_BRANCH_MISMATCH",
+                "pull request base must match the repository default branch",
             )
         return current
 
