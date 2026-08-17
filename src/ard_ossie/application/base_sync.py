@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,14 +12,20 @@ from ard_ossie.application.contracts import (
     WorkflowResult,
     WorkflowSecurityError,
     WorkflowStatus,
+    WorkflowValidationError,
 )
 from ard_ossie.application.intake import (
     IssueRequest,
+    _error_code,
     load_issue_request,
     prepare_existing_intake,
     require_managed_pr,
 )
-from ard_ossie.github_event import IntakeManifest, prepare_issue_event
+from ard_ossie.github_event import (
+    AttachmentSecurityError,
+    IntakeManifest,
+    prepare_issue_event,
+)
 from ard_ossie.models import ProductRecord, ProductTableRef, TableRecord
 from ard_ossie.ports.filesystem import FileSystemPort, PathPolicyError
 from ard_ossie.ports.git import GitPort
@@ -114,6 +121,24 @@ class IssueBaseSyncService:
             )
 
         changed = self.git.changed_paths(base_sha, pull_request.head_sha)
+        product_key = str(request.intake.product_key)
+        marker_path = (
+            Path("products")
+            / product_key
+            / "changesets"
+            / f"{request.intake.changeset_id}.json"
+            if request.intake.changeset_id is not None
+            else None
+        )
+        if marker_path is not None and set(changed.paths) == {marker_path}:
+            return self._populate_pristine_tracking(
+                context,
+                request,
+                pull_request,
+                base_sha=base_sha,
+                marker_path=marker_path,
+            )
+
         manifest = prepare_existing_intake(
             self.paths,
             request,
@@ -121,7 +146,6 @@ class IssueBaseSyncService:
             event_path=context.event_path,
             runner_temp=context.runner_temp,
         )
-        product_key = str(request.intake.product_key)
         reset_paths = tuple(
             path
             for path in changed.paths
@@ -248,6 +272,127 @@ class IssueBaseSyncService:
             status=(
                 WorkflowStatus.SUCCESS
                 if merge.created or reset.created
+                else WorkflowStatus.NOOP
+            ),
+            outputs={
+                "branch": request.branch,
+                "product_key": product_key,
+                "pr_number": pull_request.number,
+                "expected_head": final_sha,
+                "product_id": str(manifest.product_id),
+            },
+            mutations=mutations,
+        )
+
+    def _populate_pristine_tracking(
+        self,
+        context: WorkflowContext,
+        request: IssueRequest,
+        pull_request: PullRequestState,
+        *,
+        base_sha: str,
+        marker_path: Path,
+    ) -> WorkflowResult:
+        del marker_path
+        product_key = str(request.intake.product_key)
+        self._require_same_managed_pr(request, pull_request)
+        if self.git.remote_branch_sha(request.branch) != pull_request.head_sha:
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_HEAD_MISMATCH",
+                "remote branch moved during candidate validation",
+            )
+        if self.git.remote_branch_sha(request.event.default_branch) != base_sha:
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_BASE_MOVED",
+                "default branch moved during candidate validation",
+            )
+
+        merge = self.git.merge_revision(
+            base_sha,
+            f"chore({product_key}): merge main before reprocessing",
+        )
+        if context.event_path is None:
+            raise WorkflowValidationError(
+                "ISSUE_EVENT_REQUIRED",
+                "issue event path is missing",
+            )
+        try:
+            manifest = self.prepare(context.event_path, self.paths.root)
+        except AttachmentSecurityError as error:
+            raise WorkflowSecurityError(
+                _error_code(error),
+                "unsafe issue attachment",
+            ) from error
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+            raise WorkflowValidationError(
+                _error_code(error),
+                "invalid issue intake",
+            ) from error
+        if (
+            manifest.issue_number != request.event.number
+            or str(manifest.product_key) != product_key
+            or manifest.version != request.intake.version
+            or manifest.product_id != request.intake.product_id
+        ):
+            raise WorkflowSecurityError(
+                "ISSUE_MANIFEST_MISMATCH",
+                "prepared intake does not match the trusted issue event",
+            )
+
+        intake = self.git.commit_intake_paths(
+            product_key,
+            f"data({product_key}): ingest approved changeset intake",
+        )
+        prepare_existing_intake(
+            self.paths,
+            request,
+            self.prepare,
+            event_path=context.event_path,
+            runner_temp=context.runner_temp,
+        )
+        final_sha = intake.sha
+        if not self.git.is_ancestor(base_sha, final_sha):
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_ANCESTRY_MISMATCH",
+                "trusted base is not an ancestor of synchronized head",
+            )
+        if not self.git.is_worktree_clean():
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_WORKTREE_DIRTY",
+                "candidate worktree is dirty after synchronization",
+            )
+        self._require_same_managed_pr(request, pull_request)
+        if self.git.remote_branch_sha(request.branch) != pull_request.head_sha:
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_HEAD_MISMATCH",
+                "remote branch moved during synchronization",
+            )
+        if self.git.remote_branch_sha(request.event.default_branch) != base_sha:
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_BASE_MOVED",
+                "default branch moved during synchronization",
+            )
+        self.git.push(request.branch, lfs=True)
+        if self.git.remote_branch_sha(request.branch) != final_sha:
+            raise WorkflowSecurityError(
+                "ISSUE_BASE_SYNC_HEAD_MISMATCH",
+                "published branch does not match synchronized head",
+            )
+
+        mutations = [
+            MutationRecord(
+                resource="commit",
+                target=result.sha,
+                action="create",
+            )
+            for result in (merge, intake)
+            if result.created
+        ]
+        return WorkflowResult(
+            command="workflow.issue-base-sync",
+            status=(
+                WorkflowStatus.SUCCESS
+                if merge.created or intake.created
                 else WorkflowStatus.NOOP
             ),
             outputs={
