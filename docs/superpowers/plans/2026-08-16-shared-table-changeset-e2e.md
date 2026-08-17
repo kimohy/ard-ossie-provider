@@ -86,8 +86,8 @@ uv sync --frozen
 uv run --frozen pytest -q
 uv run --frozen ruff check src tests
 uv run --frozen ard workflow repository-check \
-  --base-ref origin/main \
-  --head-ref HEAD \
+  --base-ref "$(git rev-parse origin/main)" \
+  --head-ref "$(git rev-parse HEAD)" \
   --head-sha "$(git rev-parse HEAD)" \
   --repository . \
   --verification-group static
@@ -939,8 +939,8 @@ uv run --frozen pytest \
 uv run --frozen pytest -q
 uv run --frozen ruff check src tests
 uv run --frozen ard workflow repository-check \
-  --base-ref origin/main \
-  --head-ref HEAD \
+  --base-ref "$(git rev-parse origin/main)" \
+  --head-ref "$(git rev-parse HEAD)" \
   --head-sha "$(git rev-parse HEAD)" \
   --repository . \
   --verification-group static

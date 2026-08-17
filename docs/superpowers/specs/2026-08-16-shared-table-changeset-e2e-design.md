@@ -212,7 +212,7 @@ Run at minimum:
 uv run --frozen pytest tests/unit/test_changeset_service.py tests/unit/test_release_detection_service.py tests/integration/test_workflow_changeset_cli.py tests/integration/test_workflow_release_detect_cli.py tests/integration/test_workflow_contracts.py -q
 uv run --frozen pytest -q
 uv run --frozen ruff check src tests
-uv run --frozen ard workflow repository-check --base-ref origin/main --head-ref HEAD --head-sha "$(git rev-parse HEAD)" --repository . --verification-group static
+uv run --frozen ard workflow repository-check --base-ref "$(git rev-parse origin/main)" --head-ref "$(git rev-parse HEAD)" --head-sha "$(git rev-parse HEAD)" --repository . --verification-group static
 ```
 
 ### Production evidence
