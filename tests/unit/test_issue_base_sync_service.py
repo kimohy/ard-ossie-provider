@@ -36,6 +36,10 @@ MERGE_SHA = "d" * 40
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
 LINK_ID = "lnk_0198f6ca-2a11-78d1-8672-67d49e69f14d"
+CHANGESET_ID = "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2"
+TRACKING_BRANCH = f"ard/{CHANGESET_ID}-500138301"
+MARKER_PATH = Path(f"products/500138301/changesets/{CHANGESET_ID}.json")
+INTAKE_SHA = "9" * 40
 
 
 def issue_body() -> str:
@@ -68,13 +72,46 @@ Reprocess with the current trusted processor
 """
 
 
-def context(tmp_path: Path) -> WorkflowContext:
+def changeset_issue_body() -> str:
+    return f"""### Operation
+update
+
+### Product key
+500138301
+
+### Existing product ID
+{PRODUCT_ID}
+
+### Requested version
+2
+
+### Display name
+Marketing Insight
+
+### Changeset ID
+{CHANGESET_ID}
+
+### Product HTML
+[product.html](https://github.com/user-attachments/assets/11111111-1111-1111-1111-111111111111)
+
+### Semantic document
+[semantic.pdf](https://github.com/user-attachments/assets/22222222-2222-2222-2222-222222222222)
+
+### Data dictionary
+[dictionary.xlsx](https://github.com/user-attachments/assets/33333333-3333-3333-3333-333333333333)
+
+### Change reason
+Coordinate the shared table update
+"""
+
+
+def context(tmp_path: Path, *, body: str | None = None) -> WorkflowContext:
     event = tmp_path / "event.json"
     event.write_text(
         json.dumps(
             {
                 "action": "labeled",
-                "issue": {"number": 3, "body": issue_body()},
+                "issue": {"number": 3, "body": body or issue_body()},
                 "label": {"name": "ard:approved"},
                 "repository": {
                     "default_branch": "main",
@@ -246,39 +283,7 @@ def registry_output(
 
 def populate_candidate(root: Path) -> IntakeManifest:
     product = root / "products" / "500138301"
-    source_specs = {
-        "product_html": (
-            "product.html",
-            "sources/product-info/product.html",
-            "https://github.com/user-attachments/assets/11111111-1111-1111-1111-111111111111",
-        ),
-        "semantic_document": (
-            "semantic.pdf",
-            "sources/semantic/semantic.pdf",
-            "https://github.com/user-attachments/assets/22222222-2222-2222-2222-222222222222",
-        ),
-        "dictionary_excel": (
-            "dictionary.xlsx",
-            "sources/dictionary/dictionary.xlsx",
-            "https://github.com/user-attachments/assets/33333333-3333-3333-3333-333333333333",
-        ),
-    }
-    files: list[DownloadedAttachment] = []
-    for role, (filename, relative, url) in source_specs.items():
-        content = f"approved {role}\n".encode()
-        target = product / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        files.append(
-            DownloadedAttachment(
-                role=role,
-                filename=filename,
-                relative_path=relative,
-                sha256=hashlib.sha256(content).hexdigest(),
-                size_bytes=len(content),
-                source_url=url,
-            )
-        )
+    files = _write_sources(product)
     manifest = IntakeManifest(
         issue_number=3,
         product_key="500138301",
@@ -320,11 +325,97 @@ def populate_candidate(root: Path) -> IntakeManifest:
         root / "registry" / "mappings" / f"{PRODUCT_ID}.json": [
             registry_mapping.model_dump(mode="json")
         ],
-        root / "registry" / "tables" / f"{TABLE_ID}.json": (registry_table.model_dump(mode="json")),
+        root / "registry" / "tables" / f"{TABLE_ID}.json": (
+            registry_table.model_dump(mode="json")
+        ),
     }
     for path, payload in registry_payloads.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload), encoding="utf-8")
+    return manifest
+
+
+def _write_sources(product: Path) -> list[DownloadedAttachment]:
+    source_specs = {
+        "product_html": (
+            "product.html",
+            "sources/product-info/product.html",
+            "https://github.com/user-attachments/assets/11111111-1111-1111-1111-111111111111",
+        ),
+        "semantic_document": (
+            "semantic.pdf",
+            "sources/semantic/semantic.pdf",
+            "https://github.com/user-attachments/assets/22222222-2222-2222-2222-222222222222",
+        ),
+        "dictionary_excel": (
+            "dictionary.xlsx",
+            "sources/dictionary/dictionary.xlsx",
+            "https://github.com/user-attachments/assets/33333333-3333-3333-3333-333333333333",
+        ),
+    }
+    files: list[DownloadedAttachment] = []
+    for role, (filename, relative, url) in source_specs.items():
+        content = f"approved {role}\n".encode()
+        target = product / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        files.append(
+            DownloadedAttachment(
+                role=role,
+                filename=filename,
+                relative_path=relative,
+                sha256=hashlib.sha256(content).hexdigest(),
+                size_bytes=len(content),
+                source_url=url,
+            )
+        )
+    return files
+
+
+def populate_pristine_tracking_candidate(root: Path) -> None:
+    populate_candidate(root)
+    marker = root / MARKER_PATH
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "changeset_id": CHANGESET_ID,
+                "product_id": PRODUCT_ID,
+                "status": "required",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def prepare_changeset_candidate(_: Path, workspace: Path) -> IntakeManifest:
+    product = workspace / "products" / "500138301"
+    files = _write_sources(product)
+    manifest = IntakeManifest(
+        issue_number=3,
+        product_key="500138301",
+        product_id=PRODUCT_ID,
+        version=2,
+        files=files,
+    )
+    product.mkdir(parents=True, exist_ok=True)
+    (product / "product.yaml").write_text(
+        "operation: update\n"
+        f"product_id: {PRODUCT_ID}\n"
+        "product_key: '500138301'\n"
+        "base_version: 1\n"
+        "version: 2\n"
+        "display_name: Marketing Insight\n"
+        "description: null\n"
+        f"changeset_id: {CHANGESET_ID}\n"
+        "tables: []\n",
+        encoding="utf-8",
+    )
+    (product / "intake-manifest.json").write_text(
+        manifest.model_dump_json(),
+        encoding="utf-8",
+    )
     return manifest
 
 
@@ -342,6 +433,7 @@ class BaseSyncGit:
         self.remote_results: dict[str, list[str | None]] = {}
         self.ancestor = True
         self.push_updates_remote = True
+        self.intake_sha: str | None = None
         self.operations: list[object] = []
 
     def is_worktree_clean(self) -> bool:
@@ -380,11 +472,15 @@ class BaseSyncGit:
 
     def commit_intake_paths(self, product_key: str, message: str) -> CommitResult:
         self.operations.append(("commit_intake_paths", product_key, message))
+        if self.intake_sha is not None:
+            self.current = self.intake_sha
+            return CommitResult(sha=self.intake_sha, created=True)
         return CommitResult(sha=self.current, created=False)
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
         self.operations.append(("is_ancestor", ancestor, descendant))
-        return self.ancestor and ancestor == BASE_SHA and descendant == RESET_SHA
+        expected = self.intake_sha or RESET_SHA
+        return self.ancestor and ancestor == BASE_SHA and descendant == expected
 
     def push(self, branch: str, *, lfs: bool = False) -> None:
         self.operations.append(("push", branch, lfs))
@@ -406,6 +502,132 @@ def candidate_paths() -> tuple[Path, ...]:
         Path(f"registry/products/{PRODUCT_ID}.json"),
         Path(f"registry/mappings/{PRODUCT_ID}.json"),
         Path(f"registry/tables/{TABLE_ID}.json"),
+    )
+
+
+def test_base_sync_populates_pristine_changeset_tracking_pr(tmp_path: Path) -> None:
+    populate_pristine_tracking_candidate(tmp_path)
+    git = BaseSyncGit((MARKER_PATH,))
+    git.remotes[TRACKING_BRANCH] = CANDIDATE_SHA
+    git.intake_sha = INTAKE_SHA
+    pull_request = managed_pr(head_branch=TRACKING_BRANCH)
+
+    result = IssueBaseSyncService(
+        RepositoryPaths(tmp_path),
+        git,
+        RouteGitHub(pull_request),
+        prepare=prepare_changeset_candidate,
+    ).run(
+        context(tmp_path, body=changeset_issue_body()),
+        base_sha=BASE_SHA,
+    )
+
+    assert result.outputs == {
+        "branch": TRACKING_BRANCH,
+        "product_key": "500138301",
+        "pr_number": 5,
+        "expected_head": INTAKE_SHA,
+        "product_id": PRODUCT_ID,
+    }
+    assert (
+        "merge_revision",
+        BASE_SHA,
+        "chore(500138301): merge main before reprocessing",
+    ) in git.operations
+    assert (
+        "commit_intake_paths",
+        "500138301",
+        "data(500138301): ingest approved changeset intake",
+    ) in git.operations
+    assert git.operations[-4:] == [
+        ("remote_branch_sha", TRACKING_BRANCH),
+        ("remote_branch_sha", "main"),
+        ("push", TRACKING_BRANCH, True),
+        ("remote_branch_sha", TRACKING_BRANCH),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ("{", "ISSUE_BASE_SYNC_TRACKING_MARKER_INVALID"),
+        (
+            json.dumps(
+                {
+                    "changeset_id": CHANGESET_ID,
+                    "product_id": "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a632",
+                    "status": "required",
+                }
+            ),
+            "ISSUE_BASE_SYNC_TRACKING_MARKER_MISMATCH",
+        ),
+        (
+            json.dumps(
+                {
+                    "changeset_id": CHANGESET_ID,
+                    "product_id": PRODUCT_ID,
+                    "status": "required",
+                    "extra": True,
+                }
+            ),
+            "ISSUE_BASE_SYNC_TRACKING_MARKER_MISMATCH",
+        ),
+    ],
+)
+def test_base_sync_rejects_invalid_pristine_tracking_marker(
+    tmp_path: Path,
+    payload: str,
+    code: str,
+) -> None:
+    populate_pristine_tracking_candidate(tmp_path)
+    (tmp_path / MARKER_PATH).write_text(payload, encoding="utf-8")
+    git = BaseSyncGit((MARKER_PATH,))
+    git.remotes[TRACKING_BRANCH] = CANDIDATE_SHA
+    git.intake_sha = INTAKE_SHA
+
+    with pytest.raises(WorkflowSecurityError, match=code) as captured:
+        IssueBaseSyncService(
+            RepositoryPaths(tmp_path),
+            git,
+            RouteGitHub(managed_pr(head_branch=TRACKING_BRANCH)),
+            prepare=prepare_changeset_candidate,
+        ).run(
+            context(tmp_path, body=changeset_issue_body()),
+            base_sha=BASE_SHA,
+        )
+
+    assert captured.value.code == code
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"merge_revision", "commit_intake_paths", "push"}
+        for item in git.operations
+    )
+
+
+def test_base_sync_does_not_populate_marker_with_an_extra_path(tmp_path: Path) -> None:
+    populate_pristine_tracking_candidate(tmp_path)
+    git = BaseSyncGit(
+        (
+            MARKER_PATH,
+            Path("products/500138301/quality/quality-report.json"),
+        )
+    )
+    git.remotes[TRACKING_BRANCH] = CANDIDATE_SHA
+    git.intake_sha = INTAKE_SHA
+
+    with pytest.raises(WorkflowSecurityError, match="ISSUE_EXISTING_CONFIG_MISMATCH"):
+        IssueBaseSyncService(
+            RepositoryPaths(tmp_path),
+            git,
+            RouteGitHub(managed_pr(head_branch=TRACKING_BRANCH)),
+            prepare=prepare_changeset_candidate,
+        ).run(
+            context(tmp_path, body=changeset_issue_body()),
+            base_sha=BASE_SHA,
+        )
+
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"merge_revision", "commit_intake_paths", "push"}
+        for item in git.operations
     )
 
 
