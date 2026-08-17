@@ -1,0 +1,22 @@
+{
+  "files": [
+    {
+      "relative_path": "dictionary/dictionary.xlsx",
+      "role": "dictionary_excel",
+      "sha256": "10310e99c8a76b4b030935c432e6f879ac4c56361ee4a6d52d6a17b2726c306a",
+      "size_bytes": 14813
+    },
+    {
+      "relative_path": "product-info/product.html",
+      "role": "product_html",
+      "sha256": "b39248654c0cd9b6f3f28111a6c44036d86a2440a1d7dc2c9bfd7bd40281d7f9",
+      "size_bytes": 656045
+    },
+    {
+      "relative_path": "semantic/semantic.pdf",
+      "role": "semantic_document",
+      "sha256": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6",
+      "size_bytes": 114912
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "artifact_hashes": {
+    "data-dictionary.json": "b561beed30dd1161ce44967c9547305bceb641157aa8bb47d016b3e1fe414057",
+    "data-product.md": "82a3c90c8083605550d31de5caf0cb2b8b26864b35986b175bb19c08179789ac",
+    "data-semantic.md": "97e7dae822a5e459bde624b78dde85f4aa8b651913211d4bfa138db7307c852b",
+    "ossie-model.json": "211f2bf7ead9c81c646b7b7dc3fb14fcd59c05f1ffe26a15e6ea55f173cf8f23",
+    "source-manifest.json": "cc860b76c740b3dc15775e8dcef5f4d4bb129c62b54a9957c80b6fce9c7d9299"
+  },
+  "completeness": 1.0,
+  "hard_errors": [],
+  "llm_provenance": {
+    "elapsed_ms": 20643,
+    "finish_reason": "stop",
+    "input_tokens": 32555,
+    "model": "gpt-5.6-terra",
+    "output_tokens": 3273,
+    "profile": "openai-compatible-default",
+    "provider": "openai_compatible",
+    "repair_count": 0,
+    "request_id": "chatcmpl-EDiUdvgu6QEVFIsROZdGolzynkUad",
+    "retry_count": 0
+  },
+  "product_id": "prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d",
+  "product_version": 1,
+  "quality_artifact_hashes": {
+    "application-report.json": "45371768068d349b1276e712b9b5422c6ec4187ba9ccc778f9ef2ce60fa8ce20",
+    "candidate-report.json": "785cc9fd8596ac9f7e16aafae890b4960a4dbc8bd4bead5d1b051b736c755eee",
+    "decision-report.json": "8b8bd21cc47a811d8afbbd1a9763c87b9d697f34f98dc47c00c29559bf9a91ac",
+    "duplicate-report.json": "810597cf92dada893b02d0dc5a70450905501fcf52ef6d1abc8e9245a7366246",
+    "evidence-summary.json": "40a2b2016093875267681ed01f103cd94a04fc115b03969078fe1e8ada1d8c83",
+    "failure-report.json": "8ba5996c9cd33e269ba9f64a0cb7f9b3342e857be4a9f565a9bbfd26afe8b013",
+    "impact-report.json": "b7be788ffd2f8152e62001e6cb0ace662876d890c07e7ec2e56ca124dc9b645c",
+    "llm-suggestions.json": "61d1c333859590e31cdc17677f71d0a828da0a02a6e7b6ba9ce2db9a179d14df",
+    "manifest.json": "a7382193af431c77be306d37e05259a37b2ea8a6f147c9eacb483fcc2f3e6614",
+    "semantic-fidelity.json": "1d62615d3423fdc76aaebd90b6f741a42db871de28eeec72b8375cc8c729d360",
+    "validation-report.json": "f2549ccd5c6eb9fca8298f6ce004e298cc39fcd33f74c9fd05b682f2c1fb1214",
+    "version-report.json": "b238184e582e6b14c6c01c12c7b9c3a29ce2a68442c70cfeeb743e6c8b5a1f8f"
+  },
+  "status": "PASS",
+  "warnings": []
+}

@@ -1,0 +1,78 @@
+{
+  "aliases": [],
+  "canonical_hash": "5de0a8a7e82efa4423a8588f7a96d30ece9d85c8019b78c264b9ccf28b290d02",
+  "display_name": "Campaign Governance Monitor",
+  "metrics": [
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-732a-8150-2ed0f6955c33",
+      "name": "Active Campaign Count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7385-9e76-d3eb515eb6ce",
+      "name": "Engagements",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7430-bd1e-4fd3ab9adb26",
+      "name": "Spend Units",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7495-9a01-f173f111e984",
+      "name": "Campaign Count",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7655-81d3-89e43c1dd90d",
+      "name": "Action Signals",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7695-a55b-514f451ab49f",
+      "name": "Engagement Rate",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7786-9d8b-a5fb779c6c16",
+      "name": "Modeled Value Units",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7b89-9e43-2d24a92d4212",
+      "name": "Impressions",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7c9f-bb28-055595665193",
+      "name": "Interest Signals",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7d8b-a3cd-1d1609a4d013",
+      "name": "Cost per Engagement",
+      "status": "active"
+    },
+    {
+      "aliases": [],
+      "metric_id": "met_01a00dce-5b9b-7da9-926b-15297d8a94c6",
+      "name": "Creative Count",
+      "status": "active"
+    }
+  ],
+  "product_id": "prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d",
+  "product_key": "500138302",
+  "relationships": [],
+  "status": "active",
+  "version": 1
+}
