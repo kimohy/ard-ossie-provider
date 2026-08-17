@@ -181,7 +181,14 @@ def _load_matching_baseline(
         raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
     if quality.hard_errors or validation.status is not SemanticPipelineStatus.VERIFIED:
         return None
-    if not validation.publishable:
+    if (
+        not validation.publishable
+        or validation.findings
+        or validation.character_coverage != 1.0
+        or validation.missing_atom_count != 0
+        or validation.duplicate_atom_count != 0
+        or validation.degraded_block_count != 0
+    ):
         raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
     return SemanticReplayBaseline(
         product_key=product_key,

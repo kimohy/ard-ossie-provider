@@ -17,6 +17,7 @@ from ard_ossie.semantic.adjudication import DecisionRecord, DecisionReport
 from ard_ossie.semantic.canonical import (
     SemanticPipelineStatus,
     SemanticValidationReport,
+    ValidationFinding,
 )
 
 BASE_SHA = "1" * 40
@@ -34,7 +35,9 @@ class FakeGit:
     def read_bytes_at(self, revision: str, path: str | Path) -> bytes:
         relative = Path(path).as_posix()
         self.reads.append((revision, relative))
-        if revision != BASE_SHA or relative not in self.files:
+        if revision != BASE_SHA:
+            raise WorkflowConflict("REVISION_NOT_FOUND", revision)
+        if relative not in self.files:
             raise WorkflowConflict("REVISION_FILE_NOT_FOUND", relative)
         return self.files[relative]
 
@@ -194,6 +197,20 @@ def test_loader_returns_empty_catalog_when_base_has_no_product_index() -> None:
     assert git.reads == [(BASE_SHA, "registry/indexes/product-keys.json")]
 
 
+def test_loader_rejects_unavailable_base_revision() -> None:
+    git = FakeGit({})
+
+    with pytest.raises(WorkflowSecurityError) as captured:
+        _loader().load_semantic_replay_catalog(
+            git,
+            base_sha="2" * 40,
+            product_key="first-product",
+            semantic_source_hash=SOURCE_HASH,
+        )
+
+    assert captured.value.code == "SEMANTIC_REPLAY_TRUST_MISMATCH"
+
+
 def test_loader_skips_complete_history_for_different_semantic_source() -> None:
     git = FakeGit(_verified_tree("alpha", source_hash=OTHER_SOURCE_HASH))
 
@@ -244,6 +261,8 @@ def test_loader_ignores_matching_manifest_when_quality_tree_is_wholly_absent() -
         "decision_report_source_mismatch",
         "validation_source_mismatch",
         "verified_not_publishable",
+        "verified_with_finding",
+        "verified_with_failed_metrics",
     ],
 )
 def test_loader_rejects_untrusted_matching_history(mutation: str) -> None:
@@ -299,6 +318,43 @@ def test_loader_rejects_untrusted_matching_history(mutation: str) -> None:
             product_key="current",
             name="validation-report.json",
             payload=_json_bytes(_validation().model_copy(update={"publishable": False})),
+            generated=False,
+        )
+    elif mutation == "verified_with_finding":
+        _replace_hashed_payload(
+            files,
+            product_key="current",
+            name="validation-report.json",
+            payload=_json_bytes(
+                _validation().model_copy(
+                    update={
+                        "findings": [
+                            ValidationFinding(
+                                code="INVARIANT_SOURCE_CONSERVATION",
+                                message="source characters changed",
+                                region_id=None,
+                            )
+                        ]
+                    }
+                )
+            ),
+            generated=False,
+        )
+    elif mutation == "verified_with_failed_metrics":
+        _replace_hashed_payload(
+            files,
+            product_key="current",
+            name="validation-report.json",
+            payload=_json_bytes(
+                _validation().model_copy(
+                    update={
+                        "character_coverage": 0.5,
+                        "missing_atom_count": 1,
+                        "duplicate_atom_count": 1,
+                        "degraded_block_count": 1,
+                    }
+                )
+            ),
             generated=False,
         )
 
