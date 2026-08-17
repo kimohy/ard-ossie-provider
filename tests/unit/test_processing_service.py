@@ -40,6 +40,7 @@ from ard_ossie.pipeline import (
 )
 from ard_ossie.ports.git import ChangedPaths, CommitResult, GitConflict, GitTransientError
 from ard_ossie.ports.github import GitHubTransientError, PullRequestState
+from ard_ossie.semantic.replay import SemanticReplayCatalog
 from tests.integration.test_cli_process import create_product_fixture
 
 OLD_SHA = "a" * 40
@@ -47,6 +48,8 @@ NEW_SHA = "b" * 40
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 CHANGESET_ID = "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2"
 INVOCATION_ID = "31543231017-1"
+SEMANTIC_SOURCE_BYTES = b"%PDF-1.7 same semantic source"
+SEMANTIC_SOURCE_HASH = hashlib.sha256(SEMANTIC_SOURCE_BYTES).hexdigest()
 
 
 class FakeGit:
@@ -59,7 +62,10 @@ class FakeGit:
         self.sha = OLD_SHA
         self.remote_sha = OLD_SHA
         self.base_sha = base_sha
-        self.revision_files = revision_files or {}
+        self.revision_files = {
+            "registry/indexes/product-keys.json": json.dumps({"sales-order": PRODUCT_ID}),
+            **(revision_files or {}),
+        }
         self.revision_reads: list[tuple[str, str]] = []
         self.pushes: list[tuple[str, bool]] = []
 
@@ -280,7 +286,91 @@ def repository(tmp_path: Path) -> None:
         f"product_id: {PRODUCT_ID}\nversion: 1\nchangeset_id:\n",
         encoding="utf-8",
     )
+    for directory, name, payload in (
+        ("product-info", "product.html", b"<h1>Product</h1>"),
+        ("semantic", "semantic.pdf", SEMANTIC_SOURCE_BYTES),
+        ("dictionary", "dictionary.xlsx", b"PK\x03\x04dictionary"),
+    ):
+        target = product / "sources" / directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
     (tmp_path / "registry").mkdir()
+
+
+def replay_revision_files(product_key: str = "base-product") -> dict[str, str | bytes]:
+    manifest = (
+        json.dumps(
+            {
+                "files": [
+                    {
+                        "role": "semantic_document",
+                        "relative_path": "semantic/semantic.pdf",
+                        "sha256": SEMANTIC_SOURCE_HASH,
+                        "size_bytes": len(SEMANTIC_SOURCE_BYTES),
+                    }
+                ]
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    markdown = "Data Semantics 정의서이며\n".encode()
+    decisions = (
+        json.dumps(
+            {"source_hash": SEMANTIC_SOURCE_HASH, "decisions": []},
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    validation = (
+        json.dumps(
+            {
+                "status": "verified",
+                "publishable": True,
+                "source_hash": SEMANTIC_SOURCE_HASH,
+                "canonical_hash": "c" * 64,
+                "findings": [],
+                "character_coverage": 1.0,
+                "missing_atom_count": 0,
+                "duplicate_atom_count": 0,
+                "degraded_block_count": 0,
+                "model_call_count": 0,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    quality = (
+        json.dumps(
+            {
+                "status": "PASS",
+                "product_id": PRODUCT_ID,
+                "product_version": 1,
+                "completeness": 1.0,
+                "hard_errors": [],
+                "warnings": [],
+                "artifact_hashes": {
+                    "source-manifest.json": hashlib.sha256(manifest).hexdigest(),
+                    "data-semantic.md": hashlib.sha256(markdown).hexdigest(),
+                },
+                "quality_artifact_hashes": {
+                    "decision-report.json": hashlib.sha256(decisions).hexdigest(),
+                    "validation-report.json": hashlib.sha256(validation).hexdigest(),
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    root = f"products/{product_key}"
+    return {
+        "registry/indexes/product-keys.json": json.dumps({product_key: PRODUCT_ID}),
+        f"{root}/generated/source-manifest.json": manifest,
+        f"{root}/generated/data-semantic.md": markdown,
+        f"{root}/quality/quality-report.json": quality,
+        f"{root}/quality/decision-report.json": decisions,
+        f"{root}/quality/validation-report.json": validation,
+    }
 
 
 def valid_repair_record() -> dict[str, object]:
@@ -364,6 +454,25 @@ def capturing_processing_service(
     )
 
 
+def test_processing_passes_matching_base_replay_catalog_to_processor(
+    tmp_path: Path,
+) -> None:
+    git = FakeGit.with_revision_files(
+        base_sha=NEW_SHA,
+        files=replay_revision_files(),
+    )
+    service, captured = capturing_processing_service(tmp_path, git=git)
+
+    service.run(request(tmp_path))
+
+    catalog = captured["trusted_semantic_replay_catalog"]
+    assert isinstance(catalog, SemanticReplayCatalog)
+    assert len(catalog.baselines) == 1
+    assert catalog.baselines[0].product_key == "base-product"
+    assert catalog.baselines[0].identity.source_hash == SEMANTIC_SOURCE_HASH
+    assert all(revision == NEW_SHA for revision, _path in git.revision_reads)
+
+
 def test_processing_passes_none_when_base_quality_has_no_repair_hash_or_file(
     tmp_path: Path,
 ) -> None:
@@ -390,12 +499,8 @@ def test_processing_passes_only_hash_verified_base_semantic_artifacts_to_process
     quality_text = json.dumps(
         {
             "quality_artifact_hashes": {
-                "semantic-structure-repair.json": hashlib.sha256(
-                    repair_text.encode()
-                ).hexdigest(),
-                "semantic-fidelity.json": hashlib.sha256(
-                    fidelity_text.encode()
-                ).hexdigest(),
+                "semantic-structure-repair.json": hashlib.sha256(repair_text.encode()).hexdigest(),
+                "semantic-fidelity.json": hashlib.sha256(fidelity_text.encode()).hexdigest(),
             }
         }
     )
@@ -426,6 +531,8 @@ def test_processing_passes_only_hash_verified_base_semantic_artifacts_to_process
             NEW_SHA,
             "products/sales-order/quality/semantic-fidelity.json",
         ),
+        (NEW_SHA, "registry/indexes/product-keys.json"),
+        (NEW_SHA, "products/sales-order/generated/source-manifest.json"),
     ]
 
 
@@ -558,6 +665,8 @@ def test_processing_never_reads_repair_from_mutable_checkout(tmp_path: Path) -> 
         (OLD_SHA, "products/sales-order/quality/quality-report.json"),
         (OLD_SHA, "products/sales-order/quality/semantic-structure-repair.json"),
         (OLD_SHA, "products/sales-order/quality/semantic-fidelity.json"),
+        (OLD_SHA, "registry/indexes/product-keys.json"),
+        (OLD_SHA, "products/sales-order/generated/source-manifest.json"),
     ]
 
 
@@ -565,13 +674,7 @@ def test_processing_never_reads_repair_from_mutable_checkout(tmp_path: Path) -> 
     ("quality_text", "repair_text"),
     [
         pytest.param(
-            json.dumps(
-                {
-                    "quality_artifact_hashes": {
-                        "semantic-structure-repair.json": "0" * 64
-                    }
-                }
-            ),
+            json.dumps({"quality_artifact_hashes": {"semantic-structure-repair.json": "0" * 64}}),
             json.dumps(valid_repair_record()),
             id="digest-mismatch",
         ),
@@ -589,35 +692,17 @@ def test_processing_never_reads_repair_from_mutable_checkout(tmp_path: Path) -> 
         ),
         pytest.param(None, json.dumps(valid_repair_record()), id="missing-quality"),
         pytest.param(
-            json.dumps(
-                {
-                    "quality_artifact_hashes": {
-                        "semantic-structure-repair.json": None
-                    }
-                }
-            ),
+            json.dumps({"quality_artifact_hashes": {"semantic-structure-repair.json": None}}),
             None,
             id="null-digest-without-repair",
         ),
         pytest.param(
-            json.dumps(
-                {
-                    "quality_artifact_hashes": {
-                        "semantic-structure-repair.json": 7
-                    }
-                }
-            ),
+            json.dumps({"quality_artifact_hashes": {"semantic-structure-repair.json": 7}}),
             json.dumps(valid_repair_record()),
             id="non-string-digest-with-repair",
         ),
         pytest.param(
-            json.dumps(
-                {
-                    "quality_artifact_hashes": {
-                        "semantic-structure-repair.json": "0" * 64
-                    }
-                }
-            ),
+            json.dumps({"quality_artifact_hashes": {"semantic-structure-repair.json": "0" * 64}}),
             None,
             id="missing-repair",
         ),
@@ -803,8 +888,12 @@ def test_processing_accepts_historical_changeset_marker_without_active_binding(
     tmp_path: Path,
 ) -> None:
     repository(tmp_path)
-    marker = tmp_path / "products" / "sales-order" / "changesets" / (
-        "cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2.json"
+    marker = (
+        tmp_path
+        / "products"
+        / "sales-order"
+        / "changesets"
+        / ("cst_0198f6cf-c3d5-7fc8-9401-22fa7b330ec2.json")
     )
     marker.parent.mkdir()
     marker.write_text("{}", encoding="utf-8")
@@ -878,9 +967,7 @@ def test_processing_maps_provider_failure_kind_to_workflow_exit_contract(
         ).run(request(tmp_path))
 
     assert captured.value.exit_code == expected_exit_code
-    assert "sentinel-provider-response" not in "".join(
-        traceback.format_exception(captured.value)
-    )
+    assert "sentinel-provider-response" not in "".join(traceback.format_exception(captured.value))
 
 
 def test_processing_status_failure_after_push_is_partial(tmp_path: Path) -> None:
@@ -1001,9 +1088,7 @@ def test_processing_reconcile_uses_same_job_partial_envelope(tmp_path: Path) -> 
                     "message": "PROCESSING_POST_COMMIT_FAILED",
                 }
             ],
-            mutations=[
-                MutationRecord(resource="commit", target=NEW_SHA, action="create")
-            ],
+            mutations=[MutationRecord(resource="commit", target=NEW_SHA, action="create")],
         ).model_dump_json(),
         encoding="utf-8",
     )
@@ -1168,9 +1253,7 @@ def test_processing_reconcile_rejects_malformed_partial_envelope(
                 "version": 1,
             },
             findings=findings,
-            mutations=[
-                MutationRecord(resource="commit", target=NEW_SHA, action="create")
-            ],
+            mutations=[MutationRecord(resource="commit", target=NEW_SHA, action="create")],
         ).model_dump_json(),
         encoding="utf-8",
     )
@@ -1366,9 +1449,7 @@ def test_processing_reconcile_retries_consecutive_transient_failures(
                     "message": "PROCESSING_POST_COMMIT_FAILED",
                 }
             ],
-            mutations=[
-                MutationRecord(resource="commit", target=NEW_SHA, action="create")
-            ],
+            mutations=[MutationRecord(resource="commit", target=NEW_SHA, action="create")],
         ).model_dump_json(),
         encoding="utf-8",
     )

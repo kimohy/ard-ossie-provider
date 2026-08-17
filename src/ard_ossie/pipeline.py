@@ -86,6 +86,7 @@ from ard_ossie.semantic.models import (
 )
 from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
+from ard_ossie.semantic.replay import SemanticReplayCatalog
 from ard_ossie.versioning import VersionDecision, VersionOutcome, plan_version
 
 
@@ -200,11 +201,13 @@ def process_product(
     trusted_semantic_repair: dict[str, object] | None = None,
     trusted_semantic_fidelity: dict[str, object] | None = None,
     trusted_semantic_decisions: dict[str, object] | None = None,
+    trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
     require_semantic_visual_correction: bool = True,
     propagate_provider_errors: bool = False,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
     semantic_diagnostics_dir: str | Path | None = None,
 ) -> ProcessResult:
+    del trusted_semantic_replay_catalog
     root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
     registry_initially_exists, registry_snapshot = _snapshot_registry(registry_path)
@@ -2071,10 +2074,7 @@ def _write_quality(
             )
         )
         sibling_payloads.update(
-            {
-                name: payload.decode("utf-8")
-                for name, payload in diagnostic_payloads.items()
-            }
+            {name: payload.decode("utf-8") for name, payload in diagnostic_payloads.items()}
         )
     if semantic_document.semantic_repair is not None:
         sibling_payloads["semantic-structure-repair.json"] = _json_text(

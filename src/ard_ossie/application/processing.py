@@ -24,8 +24,13 @@ from ard_ossie.application.contracts import (
     WorkflowTransientError,
     WorkflowValidationError,
 )
+from ard_ossie.application.semantic_replay import load_semantic_replay_catalog
 from ard_ossie.application.source_check import validate_changeset_binding
-from ard_ossie.ingestion import SourceValidationError
+from ard_ossie.ingestion import (
+    SourceRole,
+    SourceValidationError,
+    scan_sources,
+)
 from ard_ossie.models import StrictModel
 from ard_ossie.pipeline import (
     PipelineSecurityError,
@@ -141,6 +146,15 @@ class ProcessingService:
                 base_sha=base_sha,
                 product_key=request.product_key,
             )
+            semantic_source_hash = (
+                scan_sources(product / "sources").by_role(SourceRole.SEMANTIC_DOCUMENT).sha256
+            )
+            trusted_semantic_replay_catalog = load_semantic_replay_catalog(
+                self.git,
+                base_sha=base_sha,
+                product_key=request.product_key,
+                semantic_source_hash=semantic_source_hash,
+            )
             provider = self.provider_factory()
             processed = self.processor(
                 product,
@@ -151,6 +165,7 @@ class ProcessingService:
                 trusted_semantic_repair=trusted_semantic_repair,
                 trusted_semantic_fidelity=trusted_semantic_fidelity,
                 trusted_semantic_decisions=trusted_semantic_decisions,
+                trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
                 semantic_pipeline_mode=request.semantic_pipeline_mode,
             )
         except PipelineSecurityError as error:
