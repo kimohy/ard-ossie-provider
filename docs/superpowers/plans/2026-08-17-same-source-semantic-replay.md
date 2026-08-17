@@ -48,7 +48,7 @@
 - Consumes: `DecisionReport` and `DecisionRecord` from `ard_ossie.semantic.adjudication`.
 - Produces: `SemanticDecisionIdentity`, `SemanticReplayIdentity`, `SemanticReplayBaseline`, `SemanticReplayCatalog`, `semantic_replay_identity(report)`, `trusted_decisions(source_hash)`, and `canonical_markdown_for(report)`.
 
-- [ ] **Step 1: Write failing identity tests**
+- [x] **Step 1: Write failing identity tests**
 
 ```python
 SOURCE_HASH = "a" * 64
@@ -110,13 +110,13 @@ def test_replay_identity_rejects_decision_source_mismatch() -> None:
         semantic_replay_identity(report)
 ```
 
-- [ ] **Step 2: Run the identity tests and confirm the missing module failure**
+- [x] **Step 2: Run the identity tests and confirm the missing module failure**
 
 Run: `uv run pytest tests/unit/test_semantic_replay.py -q`
 
 Expected: collection fails because `ard_ossie.semantic.replay` does not exist.
 
-- [ ] **Step 3: Implement immutable replay identities**
+- [x] **Step 3: Implement immutable replay identities**
 
 ```python
 class SemanticDecisionIdentity(ImmutableStrictModel):
@@ -158,13 +158,13 @@ def semantic_replay_identity(report: DecisionReport) -> SemanticReplayIdentity:
     return SemanticReplayIdentity(source_hash=report.source_hash, decisions=identities)
 ```
 
-- [ ] **Step 4: Run identity tests and confirm they pass**
+- [x] **Step 4: Run identity tests and confirm they pass**
 
 Run: `uv run pytest tests/unit/test_semantic_replay.py -q`
 
 Expected: all identity tests pass.
 
-- [ ] **Step 5: Write failing catalog convergence and conflict tests**
+- [x] **Step 5: Write failing catalog convergence and conflict tests**
 
 ```python
 def test_catalog_converges_identical_duplicate_baselines() -> None:
@@ -202,7 +202,7 @@ def test_catalog_returns_none_for_incompatible_request_identity() -> None:
     assert catalog.canonical_markdown_for(changed) is None
 ```
 
-- [ ] **Step 6: Implement deterministic baseline grouping and lookup**
+- [x] **Step 6: Implement deterministic baseline grouping and lookup**
 
 ```python
 @dataclass(frozen=True)
@@ -247,7 +247,7 @@ class SemanticReplayCatalog:
         )
 ```
 
-- [ ] **Step 7: Run the domain tests and commit**
+- [x] **Step 7: Run the domain tests and commit**
 
 Run: `uv run pytest tests/unit/test_semantic_replay.py -q`
 
@@ -269,7 +269,7 @@ git commit -m "feat: define semantic replay catalog"
 - Produces: `load_semantic_replay_catalog(git, *, base_sha, product_key, semantic_source_hash) -> SemanticReplayCatalog`.
 - Raises: `WorkflowSecurityError("SEMANTIC_REPLAY_TRUST_MISMATCH", bounded_message)` or `WorkflowValidationError("SEMANTIC_REPLAY_BASELINE_CONFLICT", bounded_message)`.
 
-- [ ] **Step 1: Write exact-revision success tests**
+- [x] **Step 1: Write exact-revision success tests**
 
 ```python
 BASE_SHA = "1" * 40
@@ -508,13 +508,13 @@ def conflicting_verified_tree() -> dict[str, bytes]:
     return files
 ```
 
-- [ ] **Step 2: Run loader tests and confirm the missing module failure**
+- [x] **Step 2: Run loader tests and confirm the missing module failure**
 
 Run: `uv run pytest tests/unit/test_semantic_replay_loader.py -q`
 
 Expected: collection fails because the application loader does not exist.
 
-- [ ] **Step 3: Add strict stored-manifest models and revision readers**
+- [x] **Step 3: Add strict stored-manifest models and revision readers**
 
 ```python
 class StoredSourceFile(ImmutableStrictModel):
@@ -552,7 +552,7 @@ def _verify_hash(hashes: Mapping[str, Sha256], name: str, payload: bytes) -> Non
         raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
 ```
 
-- [ ] **Step 4: Implement strict artifact and hash validation**
+- [x] **Step 4: Implement strict artifact and hash validation**
 
 ```python
 def _load_matching_baseline(
@@ -601,7 +601,7 @@ def _load_matching_baseline(
     )
 ```
 
-- [ ] **Step 5: Implement index ordering and bounded error translation**
+- [x] **Step 5: Implement index ordering and bounded error translation**
 
 ```python
 def load_semantic_replay_catalog(
@@ -643,7 +643,7 @@ def load_semantic_replay_catalog(
         ) from None
 ```
 
-- [ ] **Step 6: Add tampering, partial-tree, invalid UTF-8, and conflict tests**
+- [x] **Step 6: Add tampering, partial-tree, invalid UTF-8, and conflict tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -697,7 +697,7 @@ def test_loader_ignores_complete_but_unverified_history() -> None:
     assert catalog.baselines == ()
 ```
 
-- [ ] **Step 7: Run loader tests and commit**
+- [x] **Step 7: Run loader tests and commit**
 
 Run: `uv run pytest tests/unit/test_semantic_replay_loader.py -q`
 
@@ -718,7 +718,7 @@ git commit -m "feat: load trusted semantic replay baselines"
 - Consumes: `scan_sources(product / "sources")`, `SourceRole.SEMANTIC_DOCUMENT`, and `load_semantic_replay_catalog`.
 - Produces: processor keyword `trusted_semantic_replay_catalog: SemanticReplayCatalog` in addition to the existing product-local repair/fidelity/decision keywords.
 
-- [ ] **Step 1: Write failing service wiring tests**
+- [x] **Step 1: Write failing service wiring tests**
 
 ```python
 class FakeGit:
@@ -798,13 +798,13 @@ Update the two existing exact `revision_reads` assertions to retain their curren
 
 This keeps all pre-existing service tests on the exact-revision path while making an absent replay manifest an eligible empty catalog, not a checkout fallback.
 
-- [ ] **Step 2: Run the focused service tests and confirm they fail**
+- [x] **Step 2: Run the focused service tests and confirm they fail**
 
 Run: `uv run pytest tests/unit/test_processing_service.py -q -k 'replay_catalog or replay_trust'`
 
 Expected: failures because the processor does not receive the catalog.
 
-- [ ] **Step 3: Scan the semantic source and pass the catalog to the processor**
+- [x] **Step 3: Scan the semantic source and pass the catalog to the processor**
 
 ```python
 base_sha = self.git.remote_branch_sha(pull_request.base_branch)
@@ -833,7 +833,7 @@ processed = self.processor(
 )
 ```
 
-- [ ] **Step 4: Run all processing-service tests and commit**
+- [x] **Step 4: Run all processing-service tests and commit**
 
 Run: `uv run pytest tests/unit/test_processing_service.py -q`
 
@@ -857,7 +857,7 @@ git commit -m "feat: supply cross-product replay catalog"
 - Consumes: `SemanticReplayCatalog.trusted_decisions(source.sha256)` and `canonical_markdown_for(decision_report)`.
 - Produces: `ValidationFinding(code="SEMANTIC_SOURCE_REPLAY_MISMATCH", ...)` with `status=failed` and `publishable=false` on a compatible byte mismatch.
 
-- [ ] **Step 1: Write failing pipeline replay tests**
+- [x] **Step 1: Write failing pipeline replay tests**
 
 ```python
 def test_compatible_catalog_reuses_decisions_without_provider_calls(tmp_path: Path) -> None:
@@ -995,13 +995,13 @@ def run_fixture(
 
 Use `ChangedIdentityProvider` in `test_changed_request_identity_uses_fresh_adjudication`; its changed model capability changes the request identity while retaining valid structured responses.
 
-- [ ] **Step 2: Run the focused semantic tests and confirm they fail**
+- [x] **Step 2: Run the focused semantic tests and confirm they fail**
 
 Run: `uv run pytest tests/integration/test_semantic_pdf_v2.py -q -k 'catalog or request_identity'`
 
 Expected: failures because the replay catalog is not accepted or enforced.
 
-- [ ] **Step 3: Thread the typed catalog through public parser boundaries**
+- [x] **Step 3: Thread the typed catalog through public parser boundaries**
 
 ```python
 def process_product(
@@ -1067,7 +1067,7 @@ At the `parse_semantic_document` call in `DoclingParser.parse`, forward the stor
 trusted_semantic_replay_catalog=self._trusted_semantic_replay_catalog,
 ```
 
-- [ ] **Step 4: Flatten trusted decisions before adjudication**
+- [x] **Step 4: Flatten trusted decisions before adjudication**
 
 ```python
 catalog_decisions = (
@@ -1083,7 +1083,7 @@ adjudicator = CandidateAdjudicator(
 
 Preserve product-local decisions first so an update of the same product retains its existing deterministic precedence; cross-product decisions are fallback authority and still pass `_trusted_decision_matches`.
 
-- [ ] **Step 5: Enforce the final byte invariant**
+- [x] **Step 5: Enforce the final byte invariant**
 
 ```python
 decision_report = DecisionReport(source_hash=evidence.source_hash, decisions=decisions)
@@ -1111,7 +1111,7 @@ if expected is not None and canonical_markdown.encode("utf-8") != expected:
 
 Use `decision_report` in the returned `SemanticPipelineResult` so lookup and diagnostics observe the identical object.
 
-- [ ] **Step 6: Preserve the exact mismatch code in the quality report**
+- [x] **Step 6: Preserve the exact mismatch code in the quality report**
 
 ```python
 replay_mismatch = next(
@@ -1134,7 +1134,7 @@ if replay_mismatch is not None:
 
 Keep the existing generic candidate-validation finding for all other failed invariants.
 
-- [ ] **Step 7: Run semantic pipeline and existing parser tests, then commit**
+- [x] **Step 7: Run semantic pipeline and existing parser tests, then commit**
 
 Run: `uv run pytest tests/integration/test_semantic_pdf_v2.py tests/unit/test_pipeline.py -q`
 
@@ -1155,7 +1155,7 @@ git commit -m "fix: enforce same-source semantic replay"
 - Consumes: session fixture `issue_3_replay`, `tests/fixtures/semantic/issue-3-evidence.json`, and `SemanticReplayCatalog`.
 - Produces: regression proof for `정의서이며`, zero cross-product adjudication calls, replay mismatch diagnostics, and unchanged generated/Registry state.
 
-- [ ] **Step 1: Add the exact Issue #3 same-source regression**
+- [x] **Step 1: Add the exact Issue #3 same-source regression**
 
 ```python
 def test_issue_3_same_source_catalog_blocks_korean_word_boundary_drift(issue_3_replay) -> None:
@@ -1226,13 +1226,13 @@ def run_evidence_replay(
 
 Preserve the helper's current default behavior and return tuple.
 
-- [ ] **Step 2: Run the regression and confirm it passes through trusted reuse**
+- [x] **Step 2: Run the regression and confirm it passes through trusted reuse**
 
 Run: `uv run pytest tests/integration/test_semantic_pdf_regressions.py -q -k 'same_source_catalog'`
 
 Expected: pass with zero provider calls and exact Markdown equality.
 
-- [ ] **Step 3: Add replay-specific atomic promotion failure test**
+- [x] **Step 3: Add replay-specific atomic promotion failure test**
 
 ```python
 def test_semantic_replay_mismatch_writes_diagnostics_without_promotion(tmp_path: Path) -> None:
@@ -1298,7 +1298,7 @@ class ReplayMismatchParser(FidelityParser):
         )
 ```
 
-- [ ] **Step 4: Run the integration tests and commit**
+- [x] **Step 4: Run the integration tests and commit**
 
 Run: `uv run pytest tests/integration/test_semantic_pdf_regressions.py tests/integration/test_atomic_promotion.py -q`
 
@@ -1318,7 +1318,7 @@ git commit -m "test: prevent same-source spacing drift"
 - Consumes: all commits from Tasks 1-5.
 - Produces: a clean, reviewed branch ready for a code-only PR into `main`.
 
-- [ ] **Step 1: Run focused replay tests together**
+- [x] **Step 1: Run focused replay tests together**
 
 Run:
 
@@ -1334,7 +1334,7 @@ uv run pytest \
 
 Expected: all focused tests pass.
 
-- [ ] **Step 2: Run lint and formatting checks on changed Python files**
+- [x] **Step 2: Run lint and formatting checks on changed Python files**
 
 Run:
 
@@ -1371,7 +1371,7 @@ uv run ruff format --check \
 
 Expected: both commands exit 0.
 
-- [ ] **Step 3: Run model/schema verification and the complete test suite**
+- [x] **Step 3: Run model/schema verification and the complete test suite**
 
 Run:
 
@@ -1382,7 +1382,7 @@ uv run pytest -q
 
 Expected: model/schema verification succeeds and at least the 1,183-test baseline plus new tests passes.
 
-- [ ] **Step 4: Check diff hygiene and inspect the branch delta**
+- [x] **Step 4: Check diff hygiene and inspect the branch delta**
 
 Run:
 
@@ -1395,7 +1395,7 @@ git log --oneline origin/main..HEAD
 
 Expected: no whitespace errors, no uncommitted files, and only the design, plan, implementation, and tests listed above.
 
-- [ ] **Step 5: Perform pre-landing review and publish the code-only PR**
+- [x] **Step 5: Perform pre-landing review and publish the code-only PR**
 
 Use the repository review workflow on `origin/main...HEAD`. Resolve every blocker, rerun the affected focused tests, then push `fix/same-source-semantic-replay` and open a PR targeting `main`. Do not modify or merge product PR #49 in this task.
 
@@ -1408,15 +1408,15 @@ Use the repository review workflow on `origin/main...HEAD`. Resolve every blocke
 - Consumes: merged code PR SHA, Issue #46, product branch `ard/issue-46-500138302`, and PR #49.
 - Produces: a regenerated product PR whose exact head contains current `main`, contains `정의서이며`, and has successful protected statuses.
 
-- [ ] **Step 1: Wait for the code PR protected checks and merge it to `main`**
+- [x] **Step 1: Wait for the code PR protected checks and merge it to `main`**
 
 Expected checks: repository change gate, model/schema verification, full pytest, wheel build, and any configured security checks all report success on the code PR exact head.
 
-- [ ] **Step 2: Trigger trusted base sync for Issue #46**
+- [x] **Step 2: Trigger trusted base sync for Issue #46**
 
 Remove `ard:approved` from Issue #46 and reapply it once. This uses the existing trusted `base_sync` flow to merge current `main`, clear only allowed derived output, and re-run processing.
 
-- [ ] **Step 3: Verify regenerated PR #49 content and ancestry**
+- [x] **Step 3: Verify regenerated PR #49 content and ancestry**
 
 Run against the refreshed local branch or equivalent exact GitHub refs:
 
@@ -1427,10 +1427,12 @@ git show origin/ard/issue-46-500138302:products/500138302/generated/data-semanti
 
 Expected: the ancestry command exits 0; output contains `정의서이며` and does not contain `정의 서이며`.
 
-- [ ] **Step 4: Verify PR #49 exact-head statuses**
+- [x] **Step 4: Verify PR #49 exact-head statuses**
 
 Read the new PR #49 head SHA and require `ard/quality-gate=success` and `ard/changeset=success` on that exact SHA. Confirm the PR is no longer behind `main` and no replay mismatch or trust error appears in the redacted result envelope.
 
-- [ ] **Step 5: Record rollout evidence**
+- [x] **Step 5: Record rollout evidence**
 
 Capture the merged code PR URL/SHA, Issue #46 workflow run URL, refreshed PR #49 head SHA, exact-head status results, and the line proving `정의서이며`. Only then mark PR #49 ready for its normal review/merge process.
+
+완료 증거는 [Issue #46 same-source replay 및 v1 release 검증 기록](../../acceptance/issue-46-same-source-replay-release.md)에 있습니다. Fix PR #51은 `51989c1e67b2f024e3cab6cfc1d7c61cff1e2018`로 병합됐고, Issue #46 재처리 run `31991352055`가 refreshed PR #49 head `721a143a2ffc0183bab418dd9448543b82e912b8`에 두 required status를 success로 게시했습니다. PR #49는 `282228635a36e8709ef8cb01fc0bfba4259ed01b`로 병합됐으며 product v1 release와 downstream linkage까지 완료됐습니다.
