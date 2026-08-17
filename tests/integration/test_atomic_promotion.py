@@ -24,6 +24,7 @@ from ard_ossie.semantic.replay import (
     SemanticReplayCatalog,
     semantic_replay_identity,
 )
+from ard_ossie.table_baseline import read_local_table_baseline
 from scripts.verify_issue_3_semantic import ReplayCandidateProvider, run_evidence_replay
 from tests.integration.test_cli_process import (
     DatasetSafetyProvider,
@@ -62,6 +63,12 @@ def tree_hash(directory: Path) -> str:
             digest.update(path.relative_to(directory).as_posix().encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def table_baseline(product: Path) -> bytes:
+    baseline = read_local_table_baseline(product)
+    assert baseline is not None
+    return baseline
 
 
 def test_hard_quality_error_keeps_previous_generated_directory(tmp_path: Path) -> None:
@@ -134,6 +141,7 @@ def test_semantic_replay_mismatch_writes_diagnostics_without_promotion(
             product,
             registry_root=registry,
             parser=ReplayMismatchParser(failed),
+            table_baseline=table_baseline(product),
         )
 
     assert tree_hash(product / "generated") == before["generated"]
@@ -200,7 +208,11 @@ def test_promotion_failure_rolls_back_registry_generated_and_quality(
     monkeypatch.setattr(pipeline_module.os, "replace", fail_generated_install)
 
     with pytest.raises(OSError, match="simulated promotion failure"):
-        process_product(product, registry_root=registry)
+        process_product(
+            product,
+            registry_root=registry,
+            table_baseline=table_baseline(product),
+        )
 
     assert tree_hash(registry) == before["registry"]
     assert tree_hash(product / "generated") == before["generated"]
@@ -274,7 +286,11 @@ def test_existing_registry_is_not_dereferenced_again_after_snapshot(
         reject_authoritative_registry_copy,
     )
 
-    result = process_product(product, registry_root=registry)
+    result = process_product(
+        product,
+        registry_root=registry,
+        table_baseline=table_baseline(product),
+    )
 
     assert result.product_version == 2
 
@@ -293,7 +309,11 @@ def test_registry_snapshot_uses_portable_path_when_nofollow_flags_are_unavailabl
     )
 
     first = process_product(product, registry_root=registry)
-    second = process_product(product, registry_root=registry)
+    second = process_product(
+        product,
+        registry_root=registry,
+        table_baseline=table_baseline(product),
+    )
 
     assert first.product_version == 1
     assert second.product_version == 1
@@ -1009,6 +1029,7 @@ def test_metric_exclusion_warning_blocks_update_promotion_in_strict_mode(
             registry_root=registry,
             provider=DatasetSafetyProvider(),
             warnings_as_errors=True,
+            table_baseline=table_baseline(product),
         )
 
     assert tree_hash(registry) == before["registry"]

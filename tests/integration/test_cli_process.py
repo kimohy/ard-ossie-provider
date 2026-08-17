@@ -29,6 +29,7 @@ from ard_ossie.semantic.models import (
     SemanticFidelityReport,
     SemanticStructureRepairRecord,
 )
+from ard_ossie.table_baseline import read_local_table_baseline
 
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
 TABLE_ID = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c"
@@ -76,6 +77,12 @@ def create_product_fixture(root: Path, *, valid_dictionary: bool = True) -> Path
     }
     (product / "product.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     return product
+
+
+def published_table_baseline(product: Path) -> bytes:
+    baseline = read_local_table_baseline(product)
+    assert baseline is not None
+    return baseline
 
 
 def add_complete_dictionary_descriptions(product: Path) -> None:
@@ -1015,6 +1022,7 @@ def test_reprocessing_ignores_unsafe_metric_without_retiring_existing_record(
         product,
         registry_root=registry,
         provider=UnsafeMetricProvider(),
+        table_baseline=published_table_baseline(product),
     )
 
     updated_record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -1071,6 +1079,7 @@ def test_reprocessing_removes_newly_unsupported_metric_from_current_registry(
         product,
         registry_root=registry,
         provider=DatasetSafetyProvider(),
+        table_baseline=published_table_baseline(product),
     )
 
     product_record = json.loads(
@@ -1133,11 +1142,20 @@ def test_pipeline_builds_stable_metric_and_fk_relationship_ids(tmp_path: Path) -
     )
     registry = tmp_path / "registry"
 
-    process_product(product, registry_root=registry, provider=FakeMetricProvider())
+    process_product(
+        product,
+        registry_root=registry,
+        provider=FakeMetricProvider(),
+    )
     first = json.loads((product / "generated" / "ossie-model.json").read_text())
     first_record = json.loads((registry / "products" / f"{PRODUCT_ID}.json").read_text())
 
-    process_product(product, registry_root=registry, provider=FakeMetricProvider())
+    process_product(
+        product,
+        registry_root=registry,
+        provider=FakeMetricProvider(),
+        table_baseline=published_table_baseline(product),
+    )
     second = json.loads((product / "generated" / "ossie-model.json").read_text())
     second_record = json.loads((registry / "products" / f"{PRODUCT_ID}.json").read_text())
 

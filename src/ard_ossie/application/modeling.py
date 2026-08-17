@@ -18,6 +18,7 @@ from ard_ossie.pipeline import (
 )
 from ard_ossie.ports.filesystem import FileSystemPort
 from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
+from ard_ossie.table_baseline import read_local_table_baseline
 
 _PREVIEW_MARKER = ".ard-preview-owned.json"
 _PREVIEW_MARKER_CONTENT = '{"owner":"ard-ossie:model-build","schema_version":1}\n'
@@ -51,12 +52,14 @@ class ModelingService:
         output = self.paths.resolve_write(staging_output)
         self._validate_roots(product, registry, output)
         try:
+            table_baseline = read_local_table_baseline(product)
             with self._staged_state(product, registry) as (staged_product, staged_registry):
                 processed = process_product(
                     staged_product,
                     registry_root=staged_registry,
                     provider=None,
                     semantic_pipeline_mode=semantic_pipeline_mode,
+                    table_baseline=table_baseline,
                 )
                 _replace_directory(processed.generated_dir, output)
                 return ModelingResult(
@@ -91,6 +94,7 @@ class ModelingService:
             else None
         )
         try:
+            table_baseline = read_local_table_baseline(product)
             with self._staged_state(product, registry) as (staged_product, staged_registry):
                 processed = process_product(
                     staged_product,
@@ -100,6 +104,7 @@ class ModelingService:
                     propagate_provider_errors=propagate_provider_errors,
                     semantic_pipeline_mode=semantic_pipeline_mode,
                     semantic_diagnostics_dir=diagnostics,
+                    table_baseline=table_baseline,
                 )
         except PipelineValidationError as error:
             report = error.report
