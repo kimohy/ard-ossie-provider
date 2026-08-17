@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import stat
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import Field, ValidationError, field_validator, model_validator
 
 from ard_ossie.canonical import canonical_hash
+from ard_ossie.ir import ColumnIR
 from ard_ossie.models import (
     ColumnId,
     ProductId,
@@ -185,4 +187,37 @@ def table_content_hash(
                 )
             ],
         }
+    )
+
+
+def published_table_from_ir(
+    *,
+    table_id: TableId,
+    table_version: Version,
+    locator: TableLocator,
+    description: str | None,
+    columns: Sequence[ColumnIR],
+) -> PublishedTableBaseline:
+    return PublishedTableBaseline(
+        table_id=table_id,
+        table_version=table_version,
+        dataset_name=locator.table_name,
+        source=".".join((locator.catalog, locator.schema_name, locator.table_name)),
+        description=description,
+        columns=[
+            PublishedColumnBaseline(
+                column_id=column.column_id,
+                ordinal=column.ordinal,
+                name=column.name,
+                logical_name=column.logical_name,
+                data_type=column.data_type,
+                nullable=column.nullable,
+                primary_key=column.primary_key,
+                description=column.description,
+                foreign_key=column.foreign_key,
+                formula=column.formula,
+                comment=column.comment,
+            )
+            for column in columns
+        ],
     )

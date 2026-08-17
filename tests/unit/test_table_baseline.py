@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from ard_ossie.docling_parser import Evidence
+from ard_ossie.ingestion import SourceRole
+from ard_ossie.ir import ColumnIR
 from ard_ossie.models import (
     ProductRecord,
     ProductTableRef,
@@ -16,6 +19,7 @@ from ard_ossie.registry import Registry
 from ard_ossie.table_baseline import (
     TableBaselineError,
     parse_table_baseline,
+    published_table_from_ir,
     read_local_table_baseline,
     table_content_hash,
     validate_table_baseline,
@@ -300,6 +304,56 @@ def test_table_content_hash_ignores_version_but_detects_content_and_locator_chan
     assert table_content_hash(version_only, locator=locator) == original_hash
     assert table_content_hash(description_change, locator=locator) != original_hash
     assert table_content_hash(first, locator=other_locator) != original_hash
+
+
+def test_published_table_projection_excludes_current_evidence_provenance() -> None:
+    locator = TableLocator(
+        source_system_id="erp",
+        catalog="analytics",
+        schema_name="sales",
+        table_name="orders",
+    )
+
+    def column(source_hash: str) -> ColumnIR:
+        return ColumnIR(
+            column_id=ORDER_ID_COLUMN_ID,
+            ordinal=1,
+            name="order_id",
+            data_type="INT64",
+            nullable=False,
+            primary_key=True,
+            description="Unique order identifier",
+            evidence=[
+                Evidence(
+                    source_hash=source_hash,
+                    role=SourceRole.DICTIONARY_EXCEL,
+                    locator={"sheet": "Dictionary", "range": "A2:I2"},
+                    excerpt="order_id",
+                )
+            ],
+        )
+
+    first = published_table_from_ir(
+        table_id=ORDERS_TABLE_ID,
+        table_version=2,
+        locator=locator,
+        description="Confirmed sales orders",
+        columns=[column("a" * 64)],
+    )
+    second = published_table_from_ir(
+        table_id=ORDERS_TABLE_ID,
+        table_version=2,
+        locator=locator,
+        description="Confirmed sales orders",
+        columns=[column("b" * 64)],
+    )
+
+    assert first == second
+    assert first.source == "analytics.sales.orders"
+    assert table_content_hash(first, locator=locator) == table_content_hash(
+        second,
+        locator=locator,
+    )
 
 
 def test_read_local_table_baseline_returns_none_when_generated_dictionary_is_absent(

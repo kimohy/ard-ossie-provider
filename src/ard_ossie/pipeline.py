@@ -88,10 +88,10 @@ from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 from ard_ossie.semantic.replay import SemanticReplayCatalog
 from ard_ossie.table_baseline import (
-    PublishedColumnBaseline,
     PublishedTableBaseline,
     TableBaselineError,
     parse_table_baseline,
+    published_table_from_ir,
     table_content_hash,
     validate_table_baseline,
 )
@@ -929,34 +929,12 @@ def _build_table_records(
             for item in draft.columns
         ]
         current_schema_hash = schema_hash(physical)
-        current_published = PublishedTableBaseline(
+        current_published = published_table_from_ir(
             table_id=draft.table_id,
             table_version=existing.version if existing is not None else 1,
-            dataset_name=draft.locator.table_name,
-            source=".".join(
-                (
-                    draft.locator.catalog,
-                    draft.locator.schema_name,
-                    draft.locator.table_name,
-                )
-            ),
+            locator=draft.locator,
             description=draft.description,
-            columns=[
-                PublishedColumnBaseline(
-                    column_id=column.column_id,
-                    ordinal=column.ordinal,
-                    name=column.name,
-                    logical_name=column.logical_name,
-                    data_type=column.data_type,
-                    nullable=column.nullable,
-                    primary_key=column.primary_key,
-                    description=column.description,
-                    foreign_key=column.foreign_key,
-                    formula=column.formula,
-                    comment=column.comment,
-                )
-                for column in draft.columns
-            ],
+            columns=draft.columns,
         )
         current_canonical_hash = table_content_hash(
             current_published,
