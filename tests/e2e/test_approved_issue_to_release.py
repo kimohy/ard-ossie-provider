@@ -148,6 +148,19 @@ class LifecycleGit:
             raise GitConflict("REVISION_FILE_NOT_FOUND", result.stderr)
         return result.stdout
 
+    def read_bytes_at(self, revision: str, path: str | Path) -> bytes:
+        result = subprocess.run(
+            ["git", "show", f"{revision}:{Path(path).as_posix()}"],
+            cwd=self.repository,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise GitConflict(
+                "REVISION_FILE_NOT_FOUND",
+                result.stderr.decode("utf-8", errors="replace"),
+            )
+        return result.stdout
+
     def commit_intake_paths(self, product_key: str, message: str) -> CommitResult:
         return self._commit(message, f"products/{product_key}")
 

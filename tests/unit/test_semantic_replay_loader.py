@@ -185,6 +185,15 @@ def test_loader_reads_current_product_then_lexical_keys_from_exact_base() -> Non
     assert all(revision == BASE_SHA for revision, _path in git.reads)
 
 
+def test_loader_returns_empty_catalog_when_base_has_no_product_index() -> None:
+    git = FakeGit({})
+
+    catalog = _load(git, product_key="first-product")
+
+    assert catalog.baselines == ()
+    assert git.reads == [(BASE_SHA, "registry/indexes/product-keys.json")]
+
+
 def test_loader_skips_complete_history_for_different_semantic_source() -> None:
     git = FakeGit(_verified_tree("alpha", source_hash=OTHER_SOURCE_HASH))
 

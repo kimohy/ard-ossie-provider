@@ -64,9 +64,14 @@ def load_semantic_replay_catalog(
     try:
         if re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
             raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
-        index = ProductKeyIndex.model_validate_json(
-            git.read_bytes_at(base_sha, Path("registry/indexes/product-keys.json"))
+        index_bytes = _read_optional(
+            git,
+            base_sha,
+            Path("registry/indexes/product-keys.json"),
         )
+        if index_bytes is None:
+            return SemanticReplayCatalog()
+        index = ProductKeyIndex.model_validate_json(index_bytes)
         ordered_keys = (
             *((product_key,) if product_key in index.root else ()),
             *(key for key in sorted(index.root) if key != product_key),
