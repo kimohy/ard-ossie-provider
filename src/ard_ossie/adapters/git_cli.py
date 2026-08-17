@@ -303,8 +303,9 @@ class GitCli:
         relative = self._repository_relative(path)
         result = self._git("show", f"{revision}:{relative.as_posix()}")
         if result.returncode != 0:
-            raise GitConflict(
-                "REVISION_FILE_NOT_FOUND",
+            self._raise_revision_read_conflict(
+                revision,
+                relative,
                 result.stderr or relative.as_posix(),
             )
         return result.stdout
@@ -314,8 +315,9 @@ class GitCli:
         relative = self._repository_relative(path)
         result = self._git_bytes("show", f"{revision}:{relative.as_posix()}")
         if result.returncode != 0:
-            raise GitConflict(
-                "REVISION_FILE_NOT_FOUND",
+            self._raise_revision_read_conflict(
+                revision,
+                relative,
                 result.stderr.decode("utf-8", errors="replace") or relative.as_posix(),
             )
         if result.stdout_truncated:
@@ -324,6 +326,31 @@ class GitCli:
                 f"revision file exceeds {_MAX_REVISION_FILE_BYTES} bytes",
             )
         return result.stdout
+
+    def _raise_revision_read_conflict(
+        self,
+        revision: str,
+        relative: Path,
+        detail: str,
+    ) -> None:
+        path_check = self._git(
+            "ls-tree",
+            "-z",
+            revision,
+            "--",
+            relative.as_posix(),
+        )
+        if path_check.returncode == 0:
+            if path_check.stdout:
+                raise GitTransientError("REVISION_READ_FAILED", detail)
+            raise GitConflict("REVISION_FILE_NOT_FOUND", detail)
+        revision_check = self._git("cat-file", "-e", f"{revision}^{{commit}}")
+        if revision_check.returncode != 0:
+            raise GitConflict(
+                "REVISION_NOT_FOUND",
+                revision_check.stderr or revision,
+            )
+        raise GitTransientError("REVISION_READ_FAILED", detail)
 
     def _repository_relative(self, value: str | Path) -> Path:
         resolved = self.paths.resolve_write(value)

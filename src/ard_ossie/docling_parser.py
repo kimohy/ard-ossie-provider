@@ -12,6 +12,7 @@ from ard_ossie.semantic.models import SemanticFidelityReport, SemanticStructureR
 if TYPE_CHECKING:
     from ard_ossie.semantic.correction import OcrCorrectionPlanner
     from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
+    from ard_ossie.semantic.replay import SemanticReplayCatalog
 
 
 class Evidence(StrictModel):
@@ -48,6 +49,7 @@ class DoclingParser:
         semantic_pipeline_mode: str = "shadow",
         candidate_provider: Any | None = None,
         trusted_candidate_decisions: tuple[Any, ...] = (),
+        trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
     ) -> None:
         self._converter = converter
         self._full_page_ocr_converter = full_page_ocr_converter
@@ -61,6 +63,7 @@ class DoclingParser:
         self._semantic_pipeline_mode = semantic_pipeline_mode
         self._candidate_provider = candidate_provider
         self._trusted_candidate_decisions = trusted_candidate_decisions
+        self._trusted_semantic_replay_catalog = trusted_semantic_replay_catalog
 
     def parse(self, source: SourceFile) -> ParsedDocument:
         if source.role is SourceRole.DICTIONARY_EXCEL:
@@ -80,6 +83,7 @@ class DoclingParser:
                 semantic_pipeline_mode=self._semantic_pipeline_mode,
                 candidate_provider=self._candidate_provider,
                 trusted_candidate_decisions=self._trusted_candidate_decisions,
+                trusted_semantic_replay_catalog=self._trusted_semantic_replay_catalog,
             )
             return ParsedDocument(
                 role=source.role,
