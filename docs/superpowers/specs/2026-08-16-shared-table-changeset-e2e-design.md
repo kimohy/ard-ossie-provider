@@ -2,7 +2,7 @@
 
 ## Objective
 
-Complete the next unfinished roadmap item by proving the shared-table changeset lifecycle in the production GitHub repository. The acceptance must create a second durable synthetic product, coordinate one shared-table change across both products, publish the products and table atomically after the final product merge, and clear the active changeset binding in later independent product updates without deleting the audit history.
+Complete the next unfinished roadmap item by proving the shared-table changeset lifecycle in the production GitHub repository. The acceptance reuses the two durable synthetic products that now exist, coordinates one shared-table change across both products, publishes the products and table atomically after the final product merge, and clears the active changeset binding in later independent product updates without deleting the audit history.
 
 The test uses only synthetic Marketing Insight material. It must not introduce customer, account, platform, organization, or operational data.
 
@@ -12,48 +12,53 @@ The test uses only synthetic Marketing Insight material. It must not introduce c
 - Existing product key: `500138301`.
 - Existing product ID: `prd_019ff10c-8be8-79d0-af07-21450abedf9e`.
 - Existing product version: `2`.
+- Second product key: `500138302`.
+- Second product ID: `prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d`.
+- Second product version: `1`.
 - Existing physical tables: four version-1 tables under `synthetic_workspace.marketing_insight`.
 - Shared-table target: `marketing_campaign`.
 - Target table ID: `tbl_01a00585-94b8-7e49-ac43-97e00a165e26`.
+- Both products already reuse the same four Registry table IDs.
 - The repository retains merged branches (`deleteBranchOnMerge: false`).
 - `ard-changeset.yml` creates a central coordination PR and one Draft tracking PR per required product.
-- Product and table versions are current-only Registry values. Historical states live in Git commits, immutable numeric tags, Releases, and changeset records.
+- Product and table versions are current-only Registry values. Historical states live in Git commits, conflict-protected numeric tags, Releases, and changeset records.
+- The retained-coordination-branch and future-readiness lifecycle fixes are already on `main` in commits `0f00f91305c0b0ec51e5b5e5371c9e8eb3553096`, `5b481e3a8bc8910ce125f0a1e2d708407a2f9ff4`, and `7d1354cf9af8176c1b6019dd4442a236f74c9515`.
+- The read-only preflight on 2026-08-17 found no open PR, open Issue, changeset workflow run, or retained `cst_` coordination/tracking branch that could collide with this E2E.
 
-The current Marketing Insight source PDF and XLSX are Git LFS objects. Authoring and local validation therefore require materialized binaries, not pointer files. Before modifying either source, the working copy must contain the expected PDF and XLSX signatures and the baseline LFS object IDs recorded by the v2 acceptance report.
+The current PDF and XLSX are Git LFS objects shared by both products. Their pointers have PDF OID `ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6` and XLSX OID `10310e99c8a76b4b030935c432e6f879ac4c56361ee4a6d52d6a17b2726c306a`. Authoring and local validation require independently materialized binaries with those hashes and the expected PDF/XLSX signatures, not pointer files.
 
 ## Scope
 
 ### Included
 
-1. Add lifecycle regression coverage and the minimum implementation needed for a merged coordination branch and future readiness versions.
-2. Create and release a second durable synthetic product.
-3. Reuse the existing four physical table IDs and table versions in the second product.
-4. Create one changeset for the existing `marketing_campaign` table and both products.
-5. Process both tracking PRs with an identical semantic-only table change.
-6. Accumulate exact-head readiness, merge the readiness PR before the product PRs, and publish the entire changeset only after the final product merge.
-7. Perform one later independent update per product that clears `changeset_id` while leaving the historical changeset and markers intact.
-8. Record local and GitHub evidence in a durable acceptance report and update only the completed shared-table roadmap item.
+1. Re-verify the already-landed lifecycle regression contract before production mutation.
+2. Create one changeset for the existing `marketing_campaign` table and both existing products.
+3. Process both tracking PRs with an identical semantic-only table change.
+4. Accumulate exact-head readiness, merge the readiness PR before the product PRs, and publish the entire changeset only after the final product merge.
+5. Perform one later independent update per product that clears `changeset_id` while leaving the historical changeset and markers intact.
+6. Record local and GitHub evidence in a durable acceptance report and update only the completed shared-table roadmap item.
 
 ### Excluded
 
 - Review-protection or `production-linkage` Environment changes.
 - Failure-drill backlog items unrelated to the changeset lifecycle.
 - New physical schemas or new table identities.
+- Creating or releasing a third product.
+- Repeating the already-completed `500138302` create/v1 acceptance.
+- New lifecycle implementation unless preflight exposes a regression.
 - Destructive cleanup of branches, runs, PRs, Releases, tags, changeset records, or tracking markers.
 - Force pushes, tag movement, branch overwrites, generated-artifact hand editing, and Release asset replacement.
 - Retire/tombstone behavior and representative-PDF stabilization work.
 
 ## Chosen approach
 
-Create product key `500138302` with display name `Campaign Governance Monitor`. It uses a distinct product description and product HTML metadata but reuses the existing Marketing Insight semantic PDF, dictionary structure, and all four physical table locators. This gives the product a distinct canonical product identity while exercising locator-based table reuse.
+Reuse product keys `500138301` and `500138302`. The second product is already a permanent acceptance fixture with a distinct product identity and the same four physical table locators, so the shared-table contract can be exercised without another create/intake/release cycle.
 
-The second product is a permanent acceptance fixture. It is not deleted or retired after the E2E.
+Directly authoring the two product branches was rejected because it would bypass the public Issue intake contract that must populate the canonical tracking PRs. Creating a third product was rejected because it adds product creation, LLM, identity, and release variability without improving the shared-table contract under test.
 
-Alternatives that created a new partial schema or two entirely new products were rejected because they add PDF/XLSX authoring and LLM variability without improving the shared-table contract under test.
+## Already-landed lifecycle prerequisites
 
-## Required lifecycle fixes
-
-Production execution is gated on two local regression contracts.
+Production execution is gated on re-verifying two regression contracts that are already implemented on `main`. This E2E does not open another lifecycle code PR unless those checks reveal a new defect.
 
 ### Reusing a merged coordination branch
 
@@ -82,22 +87,6 @@ This behavior preserves stale-state rejection while preventing expected pre-merg
 
 ## Data and version contract
 
-### Seed product
-
-Generate one new UUIDv7 product ID and keep it unchanged for the entire lifecycle.
-
-The initial `500138302` release must satisfy:
-
-- operation `create` and product version `1`;
-- distinct display name, description, product key, and product HTML metadata;
-- the same semantic PDF and dictionary table locators as `500138301`;
-- exactly four mappings to the existing table IDs, all at `table_version: 1`;
-- no new table record, no table version increment, and no table v2 tag;
-- hard errors `0`, verified semantic validation, and `publishable: true`;
-- one immutable product v1 tag and Release.
-
-The second product may have generated prose or metric wording appropriate to its product context, but duplicate checks must not block it as a content copy. Metric SQL remains inside the existing safety boundary.
-
 ### Shared-table changeset
 
 Generate one new UUIDv7 changeset ID and use it for the central record, both tracking markers, both product configs, and every readiness dispatch.
@@ -105,7 +94,7 @@ Generate one new UUIDv7 changeset ID and use it for the central record, both tra
 The changeset definition contains:
 
 - table IDs: only `tbl_01a00585-94b8-7e49-ac43-97e00a165e26`;
-- required products: the existing Marketing Insight product and the new Campaign Governance Monitor product;
+- required products: the existing Marketing Insight and Campaign Governance Monitor products;
 - empty readiness at initial definition time.
 
 The table change updates only the dictionary description for `marketing_campaign.campaign_status` to state that the synthetic status is one of `Draft`, `Active`, `Paused`, or `Closed`. The two product branches must receive byte-identical modified XLSX content and therefore the same new LFS object ID.
@@ -123,17 +112,7 @@ The target table schema hash remains unchanged and its canonical hash changes. T
 
 ## GitHub execution sequence
 
-### Phase A: seed the second product
-
-1. Materialize and verify the baseline LFS sources, then upload the three synthetic source files to a new public ARD Issue for product key `500138302`.
-2. Submit operation `create`, version `1`, the distinct product metadata, an empty Existing product ID, and an empty Changeset ID.
-3. Apply `ard:approved` only after the Issue body and immutable GitHub attachments match the approved payload.
-4. Let the trusted Issue intake and processor author the new product branch, source tree, config, and generated artifacts.
-5. Verify the exact processor head, allowed changed paths, quality reports, mappings, Registry identities, and both required statuses.
-6. Merge the product PR only after the exact head is green.
-7. Verify the v1 product tag, Release bundle, asset digest, and linkage result.
-
-### Phase B: publish the changeset definition
+### Phase A: publish the changeset definition
 
 1. Dispatch `ARD shared-table changeset coordinator` in `create` mode.
 2. Verify one central definition PR and two Draft product tracking PRs.
@@ -142,7 +121,7 @@ The target table schema hash remains unchanged and its canonical hash changes. T
 5. Merge the initial central definition PR after its two required statuses succeed.
 6. Verify the release workflow sees a blocked changeset and produces no product or table Release.
 
-### Phase C: prepare both exact tracking heads
+### Phase B: prepare both exact tracking heads
 
 1. Prepare one public update Issue per product. Each Issue supplies the complete synthetic source set, the exact existing product ID, the current base version, the next product version, and the same Changeset ID.
 2. Upload byte-identical modified XLSX files to both Issues and preserve each product's approved HTML metadata and semantic PDF.
@@ -156,7 +135,7 @@ The target table schema hash remains unchanged and its canonical hash changes. T
 
 Do not merge `main` into the second processed product branch after the first product PR merges. Both product heads are validated against the same table-v1 baseline and carry the same resulting table-v2 blob; changing a recorded head after readiness invalidates the changeset.
 
-### Phase D: readiness and coordinated release
+### Phase C: readiness and coordinated release
 
 1. Dispatch `ready` for the first exact tracking head and verify `ready_count=1`, `required_count=2`, state `blocked`, and both tracking statuses `pending`.
 2. Dispatch `ready` for the second exact tracking head and verify `ready_count=2`, `required_count=2`, state `ready`, and both tracking statuses `success`.
@@ -167,6 +146,14 @@ Do not merge `main` into the second processed product branch after the first pro
 7. Release publication must verify that both recorded tracking PR heads are merged and their merge commits are ancestors of the final `main` commit.
 8. Verify product v3, product v2, and table v2 tags all target the final product merge commit. Verify both product Release assets and downstream dispatches.
 9. Re-run the final release workflow and verify tag, asset, and dispatch operations converge to no-op without changing digests.
+
+The initial definition merge may proceed after its exact head is green because it publishes only a blocked coordination record and must produce an empty release target. Pause for explicit user approval immediately before each of these release-sensitive merges:
+
+1. the completed readiness PR;
+2. the first product tracking PR;
+3. the final product tracking PR.
+
+Also pause before each later independent product-update merge because each publishes a numeric product Release. If a `production-linkage` deployment requests approval, wait for the repository owner rather than attempting to bypass the Environment gate.
 
 ## Clearing the active changeset
 
@@ -188,13 +175,12 @@ The following remain permanently tracked:
 - `registry/changesets/<changeset-id>.json` with its completed readiness evidence;
 - both product tracking markers;
 - coordination, readiness, tracking, and independent-update PRs;
-- workflow runs, immutable tags, Releases, assets, and linkage statuses.
+- workflow runs, conflict-protected numeric tags, Releases, assets, and linkage statuses.
 
 ## Failure handling
 
 Stop before merge if any of the following occurs:
 
-- the seed product creates a fifth table ID or advances an existing table version;
 - either product maps a different target table ID;
 - a managed coordination or tracking branch contains an unexpected path;
 - the first readiness result is not blocked at `1/2`;
@@ -204,13 +190,13 @@ Stop before merge if any of the following occurs:
 - the final merge omits either product or the target table from release detection;
 - clearing the active changeset advances any table version or re-expands the old changeset.
 
-Before merge, preserve the Draft PR and failed run for diagnosis. After an incorrect main merge, use a new revert PR. Never force-update a protected branch or move an immutable tag. If a bad version has already been published, correct it with a new numeric version rather than replacing history.
+Before merge, preserve the Draft PR and failed run for diagnosis. After an incorrect main merge, use a new revert PR. Never force-update a protected branch or move an existing numeric tag. If a bad version has already been published, correct it with a new numeric version rather than replacing history.
 
 ## Verification strategy
 
 ### Local regression coverage
 
-Add focused tests for:
+Re-run the focused tests that cover:
 
 1. a retained coordination branch whose head is an ancestor of the base and has an empty current diff;
 2. rejection of a retained branch that diverges or contains unexpected paths;
@@ -233,10 +219,10 @@ actionlint .github/workflows/*.yml
 
 Record evidence in `docs/acceptance/shared-table-changeset-e2e-verification.md`:
 
-- generated product and changeset IDs;
+- the two fixed product IDs and generated changeset ID;
 - source, table, mapping, Registry, and Release hashes;
 - every relevant branch, commit, PR, run, exact head, status, tag, Release, and asset digest;
-- the seed, tracking-update, and independent-clear Issue numbers, labels, approved payload identities, and attachment hashes;
+- the tracking-update and independent-clear Issue numbers, labels, approved payload identities, and attachment hashes;
 - the `1/2` and `2/2` readiness results;
 - definition, readiness, first-product, final-product, rerun, and independent-update release-detection results;
 - table schema/canonical hash comparison and unchanged-table hashes;
@@ -249,7 +235,7 @@ Update `docs/next-steps.md` only after all five Shared-table changeset E2E bulle
 
 The work is complete only when all of the following are true:
 
-1. Product `500138302` exists as a permanent, verified v1 Release and reuses the four existing v1 tables.
+1. The preflight confirms both fixed products and their four shared version-1 tables at the documented baseline.
 2. One real changeset coordinates the two products and only the `marketing_campaign` table.
 3. Readiness progresses from blocked `1/2` to ready `2/2` using exact immutable tracking heads.
 4. The definition and readiness PRs merge before product PRs without producing premature Releases or failed expected-state release runs.
