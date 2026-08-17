@@ -447,12 +447,16 @@ git commit -m "test: harden marker-only intake transition"
 - [ ] **Step 1: Run formatting and focused static checks**
 
 ```bash
-uv run --frozen ruff format --check src tests
+uv run --frozen ruff format --check \
+  src/ard_ossie/application/base_sync.py \
+  tests/unit/test_issue_base_sync_service.py
 uv run --frozen ruff check src tests
 git diff --check origin/main...HEAD
 ```
 
-Expected: every command exits `0`.
+Expected: every command exits `0`. Do not bulk-format untouched files: the accepted `origin/main`
+baseline contains files that the currently locked formatter would rewrite, while the repository's
+enforced lint and integrated static verifier remain green.
 
 - [ ] **Step 2: Run the full test suite**
 

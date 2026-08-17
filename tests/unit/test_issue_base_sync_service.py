@@ -325,9 +325,7 @@ def populate_candidate(root: Path) -> IntakeManifest:
         root / "registry" / "mappings" / f"{PRODUCT_ID}.json": [
             registry_mapping.model_dump(mode="json")
         ],
-        root / "registry" / "tables" / f"{TABLE_ID}.json": (
-            registry_table.model_dump(mode="json")
-        ),
+        root / "registry" / "tables" / f"{TABLE_ID}.json": (registry_table.model_dump(mode="json")),
     }
     for path, payload in registry_payloads.items():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -598,8 +596,7 @@ def test_base_sync_rejects_invalid_pristine_tracking_marker(
 
     assert captured.value.code == code
     assert not any(
-        isinstance(item, tuple)
-        and item[0] in {"merge_revision", "commit_intake_paths", "push"}
+        isinstance(item, tuple) and item[0] in {"merge_revision", "commit_intake_paths", "push"}
         for item in git.operations
     )
 
@@ -627,8 +624,7 @@ def test_base_sync_does_not_populate_marker_with_an_extra_path(tmp_path: Path) -
         )
 
     assert not any(
-        isinstance(item, tuple)
-        and item[0] in {"merge_revision", "commit_intake_paths", "push"}
+        isinstance(item, tuple) and item[0] in {"merge_revision", "commit_intake_paths", "push"}
         for item in git.operations
     )
 
