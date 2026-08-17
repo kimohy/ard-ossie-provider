@@ -10,7 +10,7 @@ from ard_ossie.adapters.git_cli import GitCli
 from ard_ossie.adapters.subprocess import SubprocessRunner
 from ard_ossie.ports.filesystem import PathPolicyError
 from ard_ossie.ports.git import CommitResult, GitConflict, GitTransientError
-from ard_ossie.ports.process import CommandRequest, CommandResult
+from ard_ossie.ports.process import BinaryCommandResult, CommandRequest, CommandResult
 
 SHA = "a" * 40
 NEW_SHA = "b" * 40
@@ -318,6 +318,41 @@ def test_read_bytes_at_distinguishes_unknown_revision_from_missing_file(
 
     assert missing_file.value.code == "REVISION_FILE_NOT_FOUND"
     assert missing_revision.value.code == "REVISION_NOT_FOUND"
+
+
+def test_read_bytes_at_does_not_hide_existing_blob_read_failure(tmp_path: Path) -> None:
+    class FailingBlobRunner:
+        def run_bytes(
+            self,
+            request: CommandRequest,
+            *,
+            max_output_bytes: int,
+        ) -> BinaryCommandResult:
+            del request, max_output_bytes
+            return BinaryCommandResult(
+                returncode=128,
+                stdout=b"",
+                stderr=b"fatal: unable to read blob",
+            )
+
+        def run(self, request: CommandRequest) -> CommandResult:
+            assert request.argv == (
+                "git",
+                "ls-tree",
+                "-z",
+                SHA,
+                "--",
+                "registry/indexes/product-keys.json",
+            )
+            return ok("100644 blob deadbeef\tregistry/indexes/product-keys.json\x00")
+
+    with pytest.raises(GitTransientError) as captured:
+        GitCli(tmp_path, FailingBlobRunner()).read_bytes_at(
+            SHA,
+            "registry/indexes/product-keys.json",
+        )
+
+    assert captured.value.code == "REVISION_READ_FAILED"
 
 
 def test_merge_revision_creates_an_explicit_non_fast_forward_merge(
