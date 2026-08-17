@@ -1,32 +1,32 @@
 {
   "files": [
     {
-      "filename": "campaign-governance-monitor.html",
+      "filename": "500138302.html",
       "relative_path": "sources/product-info/product.html",
       "role": "product_html",
       "sha256": "b39248654c0cd9b6f3f28111a6c44036d86a2440a1d7dc2c9bfd7bd40281d7f9",
       "size_bytes": 656045,
-      "source_url": "https://github.com/user-attachments/files/31115989/campaign-governance-monitor.html"
+      "source_url": "https://github.com/user-attachments/files/31132948/500138302.html"
     },
     {
-      "filename": "Marketing.Insight.Data.Semantics.pdf",
+      "filename": "semantic.pdf",
       "relative_path": "sources/semantic/semantic.pdf",
       "role": "semantic_document",
       "sha256": "ca630eac7231e454a2398e2f1e25328490966ab1e110230f1c5eaba6ab367cf6",
       "size_bytes": 114912,
-      "source_url": "https://github.com/user-attachments/files/31115996/Marketing.Insight.Data.Semantics.pdf"
+      "source_url": "https://github.com/user-attachments/files/31132957/semantic.pdf"
     },
     {
-      "filename": "Marketing.Insight.Data.Dictionary.xlsx",
+      "filename": "dictionary-shared-table-v2.xlsx",
       "relative_path": "sources/dictionary/dictionary.xlsx",
       "role": "dictionary_excel",
-      "sha256": "10310e99c8a76b4b030935c432e6f879ac4c56361ee4a6d52d6a17b2726c306a",
-      "size_bytes": 14813,
-      "source_url": "https://github.com/user-attachments/files/31116002/Marketing.Insight.Data.Dictionary.xlsx"
+      "sha256": "eded683826ba55405c4963e5982f554bf86bbae34006c468f9a350c86f937375",
+      "size_bytes": 16699,
+      "source_url": "https://github.com/user-attachments/files/31132968/dictionary-shared-table-v2.xlsx"
     }
   ],
-  "issue_number": 46,
+  "issue_number": 58,
   "product_id": "prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d",
   "product_key": "500138302",
-  "version": 1
+  "version": 2
 }
