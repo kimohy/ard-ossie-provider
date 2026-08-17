@@ -24,6 +24,7 @@ from ard_ossie.semantic.canonical import (
     CanonicalSemanticDocument,
     SemanticPipelineStatus,
     SemanticValidationReport,
+    ValidationFinding,
     assemble_canonical,
 )
 from ard_ossie.semantic.evidence import (
@@ -45,6 +46,7 @@ from ard_ossie.semantic.models import (
     TableFidelityResult,
 )
 from ard_ossie.semantic.render import render_canonical_markdown
+from ard_ossie.semantic.replay import SemanticReplayCatalog
 from ard_ossie.semantic.spacing import (
     KiwiSpacingScorer,
     KoreanSpacingScorer,
@@ -95,6 +97,7 @@ def parse_semantic_pdf_v2(
     legacy_markdown: str = "",
     provider: LLMProvider | None = None,
     trusted_decisions: tuple[DecisionRecord, ...] = (),
+    trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
     pdfium: object | None = None,
     ocr_document: object | None = None,
     extracted_evidence: ExtractedEvidence | None = None,
@@ -108,7 +111,15 @@ def parse_semantic_pdf_v2(
     )
     if extracted.source_hash != source.sha256:
         raise ValueError("SEMANTIC_V2_SOURCE_HASH_MISMATCH")
-    adjudicator = CandidateAdjudicator(provider, trusted=trusted_decisions)
+    replay_decisions = (
+        trusted_semantic_replay_catalog.trusted_decisions(source.sha256)
+        if trusted_semantic_replay_catalog is not None
+        else ()
+    )
+    adjudicator = CandidateAdjudicator(
+        provider,
+        trusted=(*trusted_decisions, *replay_decisions),
+    )
     evidence_hash = canonical_hash(extracted.model_dump(mode="json"))
 
     recognition_sets = build_recognition_candidate_sets(extracted)
@@ -116,9 +127,7 @@ def parse_semantic_pdf_v2(
         adjudicator.decide(candidate_set, evidence_hash=evidence_hash)
         for candidate_set in recognition_sets
     )
-    recognition_by_set = {
-        item.candidate_set_id: item for item in recognition_decisions
-    }
+    recognition_by_set = {item.candidate_set_id: item for item in recognition_decisions}
     selections: dict[str, str] = {}
     for candidate_set in recognition_sets:
         decision = recognition_by_set[candidate_set.candidate_set_id]
@@ -225,10 +234,30 @@ def parse_semantic_pdf_v2(
         decisions=decisions,
     )
     canonical_markdown = render_canonical_markdown(canonical)
+    decision_report = DecisionReport(source_hash=evidence.source_hash, decisions=decisions)
+    expected_markdown = (
+        trusted_semantic_replay_catalog.canonical_markdown_for(decision_report)
+        if trusted_semantic_replay_catalog is not None
+        else None
+    )
+    if expected_markdown is not None and canonical_markdown.encode("utf-8") != expected_markdown:
+        validation = validation.model_copy(
+            update={
+                "status": SemanticPipelineStatus.FAILED,
+                "publishable": False,
+                "findings": [
+                    *validation.findings,
+                    ValidationFinding(
+                        code="SEMANTIC_SOURCE_REPLAY_MISMATCH",
+                        message=(
+                            "Compatible semantic replay differs from the trusted canonical bytes."
+                        ),
+                    ),
+                ],
+            }
+        )
     published = (
-        canonical_markdown
-        if active_mode is SemanticPipelineMode.CANDIDATE
-        else legacy_markdown
+        canonical_markdown if active_mode is SemanticPipelineMode.CANDIDATE else legacy_markdown
     )
     return SemanticPipelineResult(
         mode=active_mode,
@@ -236,7 +265,7 @@ def parse_semantic_pdf_v2(
         canonical_markdown=canonical_markdown,
         canonical=canonical,
         validation=validation,
-        decisions=DecisionReport(source_hash=evidence.source_hash, decisions=decisions),
+        decisions=decision_report,
         candidate_sets=candidate_sets,
         evidence=evidence,
         semantic_diff=SemanticDiffSummary(
@@ -314,11 +343,7 @@ def canonical_fidelity_report(
             )
         )
     warning_codes = list(
-        dict.fromkeys(
-            code
-            for decision in document.decisions
-            for code in decision.validation_codes
-        )
+        dict.fromkeys(code for decision in document.decisions for code in decision.validation_codes)
     )
     extraction_mode = (
         ExtractionMode.PDF_EMBEDDED
@@ -327,10 +352,15 @@ def canonical_fidelity_report(
     )
     if validation.status is SemanticPipelineStatus.FAILED:
         status = "FAIL"
-    elif validation.status in {
-        SemanticPipelineStatus.REVIEW_REQUIRED,
-        SemanticPipelineStatus.REVIEW_PENDING,
-    } or extraction_mode is ExtractionMode.OCR or warning_codes:
+    elif (
+        validation.status
+        in {
+            SemanticPipelineStatus.REVIEW_REQUIRED,
+            SemanticPipelineStatus.REVIEW_PENDING,
+        }
+        or extraction_mode is ExtractionMode.OCR
+        or warning_codes
+    ):
         status = "WARN"
     else:
         status = "PASS"
@@ -357,9 +387,7 @@ def canonical_fidelity_report(
         parser_versions=evidence.parser_versions,
         status=status,
         heading_count=sum(block.kind == "heading" for block in document.blocks),
-        paragraph_count=sum(
-            block.kind in {"paragraph", "caption"} for block in document.blocks
-        ),
+        paragraph_count=sum(block.kind in {"paragraph", "caption"} for block in document.blocks),
         list_item_count=sum(block.kind == "list_item" for block in document.blocks),
         table_count=len(tables),
         row_count=sum(block.row_count or 0 for block in tables),
@@ -370,9 +398,7 @@ def canonical_fidelity_report(
         unmatched_span_count=unmatched,
         duplicated_span_count=duplicated,
         degraded_block_count=len(degraded_blocks),
-        source_text_coverage=(
-            1.0 if total == 0 else (preserved + len(excluded_ids)) / total
-        ),
+        source_text_coverage=(1.0 if total == 0 else (preserved + len(excluded_ids)) / total),
         removed_elements=removed_elements,
         degraded_blocks=degraded_blocks,
         table_results=[
