@@ -148,7 +148,10 @@ class IssueBaseSyncService:
             for path in changed.paths
             if not self.paths.is_intake_write_allowed(path, product_key)
         )
-        if any(not self.paths.is_writeback_allowed(path, product_key) for path in reset_paths):
+        if any(
+            not self.paths.is_writeback_allowed(path, product_key)
+            for path in reset_paths
+        ):
             raise WorkflowSecurityError(
                 "ISSUE_BASE_SYNC_PATH_NOT_ALLOWED",
                 "candidate contains a path outside the reprocessing boundary",
@@ -179,12 +182,17 @@ class IssueBaseSyncService:
             product_root / "intake-manifest.json",
             *(product_root / item.relative_path for item in manifest.files),
         )
-        if any(not self.paths.is_intake_write_allowed(path, product_key) for path in intake_paths):
+        if any(
+            not self.paths.is_intake_write_allowed(path, product_key)
+            for path in intake_paths
+        ):
             raise WorkflowSecurityError(
                 "ISSUE_BASE_SYNC_PATH_NOT_ALLOWED",
                 "approved intake contains a path outside the preservation boundary",
             )
-        intake_paths = tuple(sorted(set(intake_paths), key=lambda path: path.as_posix()))
+        intake_paths = tuple(
+            sorted(set(intake_paths), key=lambda path: path.as_posix())
+        )
         reset_paths = tuple(sorted(reset_paths, key=lambda path: path.as_posix()))
         self._require_same_managed_pr(request, pull_request)
         if self.git.remote_branch_sha(request.branch) != pull_request.head_sha:
@@ -259,7 +267,9 @@ class IssueBaseSyncService:
         return WorkflowResult(
             command="workflow.issue-base-sync",
             status=(
-                WorkflowStatus.SUCCESS if merge.created or reset.created else WorkflowStatus.NOOP
+                WorkflowStatus.SUCCESS
+                if merge.created or reset.created
+                else WorkflowStatus.NOOP
             ),
             outputs={
                 "branch": request.branch,
@@ -445,7 +455,9 @@ class IssueBaseSyncService:
             product_path = self.paths.resolve_read(
                 Path("registry") / "products" / f"{product_id}.json"
             )
-            product = ProductRecord.model_validate_json(product_path.read_text(encoding="utf-8"))
+            product = ProductRecord.model_validate_json(
+                product_path.read_text(encoding="utf-8")
+            )
             mapping_path = self.paths.resolve_read(
                 Path("registry") / "mappings" / f"{product_id}.json"
             )
@@ -478,7 +490,9 @@ class IssueBaseSyncService:
                 table_path = self.paths.resolve_read(
                     Path("registry") / "tables" / f"{table_id}.json"
                 )
-                table = TableRecord.model_validate_json(table_path.read_text(encoding="utf-8"))
+                table = TableRecord.model_validate_json(
+                    table_path.read_text(encoding="utf-8")
+                )
             except (OSError, ValueError, PathPolicyError) as error:
                 raise WorkflowSecurityError(
                     "ISSUE_BASE_SYNC_OUTPUT_REGISTRY_INVALID",

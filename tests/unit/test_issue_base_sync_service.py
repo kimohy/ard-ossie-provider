@@ -325,7 +325,9 @@ def populate_candidate(root: Path) -> IntakeManifest:
         root / "registry" / "mappings" / f"{PRODUCT_ID}.json": [
             registry_mapping.model_dump(mode="json")
         ],
-        root / "registry" / "tables" / f"{TABLE_ID}.json": (registry_table.model_dump(mode="json")),
+        root / "registry" / "tables" / f"{TABLE_ID}.json": (
+            registry_table.model_dump(mode="json")
+        ),
     }
     for path, payload in registry_payloads.items():
         path.parent.mkdir(parents=True, exist_ok=True)
