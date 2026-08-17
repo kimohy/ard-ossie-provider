@@ -17,6 +17,7 @@ from ard_ossie.pipeline import (
     QualityStatus,
     process_product,
 )
+from ard_ossie.table_baseline import read_local_table_baseline
 
 
 def process(
@@ -27,12 +28,14 @@ def process(
     warnings_as_errors: Annotated[bool, typer.Option("--warnings-as-errors")] = False,
 ) -> None:
     try:
+        table_baseline = read_local_table_baseline(product_path)
         result = process_product(
             product_path,
             registry_root=registry,
             provider=_provider_from_environment(),
             pr_number=pr_number,
             warnings_as_errors=warnings_as_errors,
+            table_baseline=table_baseline,
         )
     except (PipelineValidationError, SourceValidationError, ValueError) as error:
         _write_failure_report(product_path, report, error)

@@ -151,6 +151,11 @@ class ProcessingService:
                 base_sha=base_sha,
                 product_key=request.product_key,
             )
+            table_baseline = _trusted_table_baseline(
+                self.git,
+                base_sha=base_sha,
+                product_key=request.product_key,
+            )
             source_manifest = scan_sources(product / "sources")
             semantic_source_hash = source_manifest.by_role(SourceRole.SEMANTIC_DOCUMENT).sha256
             trusted_semantic_replay_catalog = load_semantic_replay_catalog(
@@ -172,6 +177,7 @@ class ProcessingService:
                 trusted_semantic_replay_catalog=trusted_semantic_replay_catalog,
                 source_manifest=source_manifest,
                 semantic_pipeline_mode=request.semantic_pipeline_mode,
+                table_baseline=table_baseline,
             )
         except PipelineSecurityError as error:
             raise WorkflowSecurityError(
@@ -669,6 +675,19 @@ def _trusted_semantic_repair(
         product_key=product_key,
     )
     return repair
+
+
+def _trusted_table_baseline(
+    git: GitPort,
+    *,
+    base_sha: str,
+    product_key: str,
+) -> bytes | None:
+    return _read_revision_bytes_optional(
+        git,
+        base_sha,
+        Path("products") / product_key / "generated" / "data-dictionary.json",
+    )
 
 
 def _trusted_semantic_artifacts(

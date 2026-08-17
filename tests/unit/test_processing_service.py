@@ -516,6 +516,65 @@ def test_processing_passes_matching_base_replay_catalog_to_processor(
     assert all(revision == NEW_SHA for revision, _path in git.revision_reads)
 
 
+def test_processing_passes_table_baseline_from_exact_default_branch_revision(
+    tmp_path: Path,
+) -> None:
+    baseline = (
+        json.dumps(
+            {
+                "product_id": PRODUCT_ID,
+                "product_version": 1,
+                "tables": [
+                    {
+                        "table_id": "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14c",
+                        "table_version": 1,
+                        "dataset_name": "orders",
+                        "source": "analytics.sales.orders",
+                        "description": None,
+                        "columns": [
+                            {
+                                "column_id": "col_0198f6ca-2a11-78d1-8672-67d49e69f14c",
+                                "ordinal": 1,
+                                "name": "order_id",
+                                "logical_name": None,
+                                "data_type": "INT64",
+                                "nullable": False,
+                                "primary_key": True,
+                                "description": None,
+                            }
+                        ],
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    path = "products/sales-order/generated/data-dictionary.json"
+    files = replay_revision_files()
+    files[path] = baseline
+    git = FakeGit.with_revision_files(base_sha=NEW_SHA, files=files)
+    service, captured = capturing_processing_service(tmp_path, git=git)
+
+    service.run(request(tmp_path))
+
+    assert captured["table_baseline"] == baseline
+    assert (NEW_SHA, path) in git.revision_reads
+    assert (OLD_SHA, path) not in git.revision_reads
+
+
+def test_processing_passes_no_table_baseline_when_default_branch_has_none(
+    tmp_path: Path,
+) -> None:
+    git = FakeGit(base_sha=NEW_SHA)
+    service, captured = capturing_processing_service(tmp_path, git=git)
+
+    service.run(request(tmp_path))
+
+    assert "table_baseline" in captured
+    assert captured["table_baseline"] is None
+
+
 def test_processing_ignores_matching_non_candidate_history(tmp_path: Path) -> None:
     files = replay_revision_files()
     root = "products/base-product"
@@ -626,11 +685,12 @@ def test_processing_passes_only_hash_verified_base_semantic_artifacts_to_process
             NEW_SHA,
             "products/sales-order/quality/semantic-structure-repair.json",
         ),
-        (
-            NEW_SHA,
-            "products/sales-order/quality/semantic-fidelity.json",
-        ),
-        (NEW_SHA, "registry/indexes/product-keys.json"),
+            (
+                NEW_SHA,
+                "products/sales-order/quality/semantic-fidelity.json",
+            ),
+            (NEW_SHA, "products/sales-order/generated/data-dictionary.json"),
+            (NEW_SHA, "registry/indexes/product-keys.json"),
         (NEW_SHA, "products/sales-order/generated/source-manifest.json"),
     ]
 
@@ -764,6 +824,7 @@ def test_processing_never_reads_repair_from_mutable_checkout(tmp_path: Path) -> 
         (OLD_SHA, "products/sales-order/quality/quality-report.json"),
         (OLD_SHA, "products/sales-order/quality/semantic-structure-repair.json"),
         (OLD_SHA, "products/sales-order/quality/semantic-fidelity.json"),
+        (OLD_SHA, "products/sales-order/generated/data-dictionary.json"),
         (OLD_SHA, "registry/indexes/product-keys.json"),
         (OLD_SHA, "products/sales-order/generated/source-manifest.json"),
     ]

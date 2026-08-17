@@ -37,6 +37,7 @@ from ard_ossie.ports.github import (
     RepositoryState,
 )
 from ard_ossie.registry import Registry
+from ard_ossie.table_baseline import read_local_table_baseline
 
 FIXTURES = Path("tests/fixtures/github")
 
@@ -477,7 +478,11 @@ def test_approved_public_issue_with_auth_releases_reproducibly_and_traceably(
     first_generated = {
         path.name: path.read_bytes() for path in (product_root / "generated").iterdir()
     }
-    second = process_product(product_root, registry_root=repository / "registry")
+    second = process_product(
+        product_root,
+        registry_root=repository / "registry",
+        table_baseline=read_local_table_baseline(product_root),
+    )
     second_dictionary = json.loads(
         (product_root / "generated" / "data-dictionary.json").read_text(encoding="utf-8")
     )

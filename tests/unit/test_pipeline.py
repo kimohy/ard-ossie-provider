@@ -19,6 +19,7 @@ from ard_ossie.llm import (
     ProductFactSuggestion,
 )
 from ard_ossie.models import (
+    ColumnRecord,
     MetricRecord,
     ProductRecord,
     ProductTableRef,
@@ -28,6 +29,8 @@ from ard_ossie.models import (
 from ard_ossie.pipeline import (
     ProductConfig,
     SuggestionBatch,
+    TableConfig,
+    _build_table_records,
     _resolve_tables,
     _shared_table_findings,
 )
@@ -35,6 +38,7 @@ from ard_ossie.registry import Registry
 from ard_ossie.semantic.correction import OcrCorrectionPlanner
 from ard_ossie.semantic.models import SemanticFidelityReport, SemanticStructureRepairRecord
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
+from ard_ossie.table_baseline import PublishedDictionaryBaseline, validate_table_baseline
 from ard_ossie.versioning import plan_version
 
 PRODUCT_ID = "prd_0198f6c2-8ac7-7f31-a48e-1c3d82e9a631"
@@ -1212,3 +1216,196 @@ def test_dictionary_table_description_seeds_pipeline_draft(tmp_path: Path) -> No
     drafts = _resolve_tables(config(), dictionary, Registry(tmp_path / "registry"))
 
     assert drafts[0].description == "가상 캠페인 합성 테이블"
+
+
+def test_table_records_ignore_workbook_provenance_for_unchanged_tables(
+    tmp_path: Path,
+) -> None:
+    second_table_id = "tbl_0198f6ca-2a11-78d1-8672-67d49e69f14d"
+    first_column_id = "col_0198f6ca-2a11-78d1-8672-67d49e69f14c"
+    second_column_id = "col_0198f6ca-2a11-78d1-8672-67d49e69f14d"
+    registry = Registry(tmp_path / "registry")
+    product = ProductRecord(
+        product_id=PRODUCT_ID,
+        product_key="sales-order",
+        version=1,
+    )
+    registry.write_product(product)
+    existing_first = TableRecord(
+        table_id=TABLE_ID,
+        locator=TableLocator(
+            source_system_id="erp",
+            catalog="analytics",
+            schema_name="sales",
+            table_name="orders",
+        ),
+        version=1,
+        columns=[ColumnRecord(column_id=first_column_id, name="order_id")],
+        canonical_hash="1" * 64,
+    )
+    existing_second = TableRecord(
+        table_id=second_table_id,
+        locator=TableLocator(
+            source_system_id="erp",
+            catalog="analytics",
+            schema_name="sales",
+            table_name="customers",
+        ),
+        version=1,
+        columns=[ColumnRecord(column_id=second_column_id, name="customer_id")],
+        canonical_hash="2" * 64,
+    )
+    registry.write_table(existing_first)
+    registry.write_table(existing_second)
+    registry.write_mappings(
+        PRODUCT_ID,
+        [
+            ProductTableRef(
+                link_id="lnk_0198f6ce-c3d5-7fc8-9401-22fa7b330ec2",
+                product_id=PRODUCT_ID,
+                table_id=TABLE_ID,
+                table_version=1,
+                usage="SOURCE",
+            ),
+            ProductTableRef(
+                link_id="lnk_0198f6ce-c3d5-7fc8-9401-22fa7b330ec3",
+                product_id=PRODUCT_ID,
+                table_id=second_table_id,
+                table_version=1,
+                usage="SOURCE",
+            ),
+        ],
+    )
+    baseline = PublishedDictionaryBaseline.model_validate(
+        {
+            "product_id": PRODUCT_ID,
+            "product_version": 1,
+            "tables": [
+                {
+                    "table_id": TABLE_ID,
+                    "table_version": 1,
+                    "dataset_name": "orders",
+                    "source": "analytics.sales.orders",
+                    "description": "Original order description",
+                    "columns": [
+                        {
+                            "column_id": first_column_id,
+                            "ordinal": 1,
+                            "name": "order_id",
+                            "logical_name": None,
+                            "data_type": "INT64",
+                            "nullable": False,
+                            "primary_key": True,
+                            "description": "Order identifier",
+                        }
+                    ],
+                },
+                {
+                    "table_id": second_table_id,
+                    "table_version": 1,
+                    "dataset_name": "customers",
+                    "source": "analytics.sales.customers",
+                    "description": "Stable customer description",
+                    "columns": [
+                        {
+                            "column_id": second_column_id,
+                            "ordinal": 1,
+                            "name": "customer_id",
+                            "logical_name": None,
+                            "data_type": "INT64",
+                            "nullable": False,
+                            "primary_key": True,
+                            "description": "Customer identifier",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    baseline_tables = validate_table_baseline(
+        baseline,
+        product=product,
+        registry=registry,
+    )
+    current_source_hash = "b" * 64
+    dictionary = ParsedDictionary(
+        source_hash=current_source_hash,
+        tables=[
+            DictionaryTable(
+                locator="erp|analytics|sales|orders",
+                description="Changed order description",
+                columns=[
+                    DictionaryColumn(
+                        ordinal=1,
+                        name="order_id",
+                        data_type="INT64",
+                        nullable=False,
+                        primary_key=True,
+                        description="Order identifier",
+                        evidence=Evidence(
+                            source_hash=current_source_hash,
+                            role=SourceRole.DICTIONARY_EXCEL,
+                            locator={"sheet": "orders", "range": "A2:H2"},
+                            excerpt="order_id",
+                        ),
+                    )
+                ],
+            ),
+            DictionaryTable(
+                locator="erp|analytics|sales|customers",
+                description="Stable customer description",
+                columns=[
+                    DictionaryColumn(
+                        ordinal=1,
+                        name="customer_id",
+                        data_type="INT64",
+                        nullable=False,
+                        primary_key=True,
+                        description="Customer identifier",
+                        evidence=Evidence(
+                            source_hash=current_source_hash,
+                            role=SourceRole.DICTIONARY_EXCEL,
+                            locator={"sheet": "customers", "range": "A2:H2"},
+                            excerpt="customer_id",
+                        ),
+                    )
+                ],
+            ),
+        ],
+    )
+    config = ProductConfig(
+        operation="update",
+        product_id=PRODUCT_ID,
+        product_key="sales-order",
+        version=2,
+        base_version=1,
+        display_name="Sales Order",
+        tables=[
+            TableConfig(
+                locator="erp|analytics|sales|orders",
+                table_id=TABLE_ID,
+                version=2,
+                base_version=1,
+            ),
+            TableConfig(
+                locator="erp|analytics|sales|customers",
+                table_id=second_table_id,
+                version=1,
+                base_version=1,
+            ),
+        ],
+    )
+    drafts = _resolve_tables(config, dictionary, registry)
+
+    records, irs, decisions = _build_table_records(
+        drafts,
+        registry,
+        baseline_tables,
+    )
+
+    assert [decision.changed for decision in decisions] == [True, False]
+    assert records[0].version == 2
+    assert records[0].canonical_hash != existing_first.canonical_hash
+    assert records[1] is existing_second
+    assert records[1].canonical_hash == "2" * 64
+    assert irs[1].columns[0].evidence[0].source_hash == current_source_hash
