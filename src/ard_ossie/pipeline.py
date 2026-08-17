@@ -87,6 +87,14 @@ from ard_ossie.semantic.models import (
 from ard_ossie.semantic.pipeline_v2 import SemanticPipelineMode
 from ard_ossie.semantic.repair import SemanticStructureRepairPlanner
 from ard_ossie.semantic.replay import SemanticReplayCatalog
+from ard_ossie.table_baseline import (
+    PublishedColumnBaseline,
+    PublishedTableBaseline,
+    TableBaselineError,
+    parse_table_baseline,
+    table_content_hash,
+    validate_table_baseline,
+)
 from ard_ossie.versioning import VersionDecision, VersionOutcome, plan_version
 
 
@@ -207,12 +215,26 @@ def process_product(
     propagate_provider_errors: bool = False,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
     semantic_diagnostics_dir: str | Path | None = None,
+    table_baseline: bytes | None = None,
 ) -> ProcessResult:
     root = Path(os.path.abspath(os.fspath(Path(product_path).expanduser())))
     registry_path = _validated_registry_path(registry_root)
     registry_initially_exists, registry_snapshot = _snapshot_registry(registry_path)
     registry = _load_registry_snapshot(registry_snapshot)
     config = _load_config(root / "product.yaml")
+    existing_product = _resolve_existing_product(config, registry)
+    baseline_tables: dict[str, PublishedTableBaseline] | None = None
+    if existing_product is not None:
+        if table_baseline is None:
+            raise PipelineValidationError("TABLE_BASELINE_REQUIRED")
+        try:
+            baseline_tables = validate_table_baseline(
+                parse_table_baseline(table_baseline),
+                product=existing_product,
+                registry=registry,
+            )
+        except TableBaselineError as error:
+            raise PipelineValidationError(str(error)) from None
     manifest = source_manifest or scan_sources(root / "sources")
     active_parser = _processing_parser(
         provider=provider,
@@ -244,7 +266,6 @@ def process_product(
         source_bytes=source_bytes(dictionary_source),
     )
 
-    existing_product = _resolve_existing_product(config, registry)
     product_id = config.product_id
     table_drafts = _resolve_tables(config, dictionary, registry)
     configured_description = config.description
@@ -308,7 +329,11 @@ def process_product(
         )
 
     source_hashes = {item.role.value: item.sha256 for item in manifest.files}
-    table_records, table_irs, table_versions = _build_table_records(table_drafts, registry)
+    table_records, table_irs, table_versions = _build_table_records(
+        table_drafts,
+        registry,
+        baseline_tables,
+    )
     relationships, relationship_records, relationship_findings = _build_relationships(
         table_drafts,
         existing_product,
@@ -884,7 +909,9 @@ def _resolve_tables(
 
 
 def _build_table_records(
-    drafts: list[_TableDraft], registry: Registry
+    drafts: list[_TableDraft],
+    registry: Registry,
+    baseline_tables: dict[str, PublishedTableBaseline] | None = None,
 ) -> tuple[list[TableRecord], list[TableIR], list[VersionDecision]]:
     records: list[TableRecord] = []
     irs: list[TableIR] = []
@@ -902,10 +929,50 @@ def _build_table_records(
             for item in draft.columns
         ]
         current_schema_hash = schema_hash(physical)
-        current_canonical_hash = canonical_hash(
-            {"locator": draft.locator, "columns": draft.columns, "description": draft.description}
+        current_published = PublishedTableBaseline(
+            table_id=draft.table_id,
+            table_version=existing.version if existing is not None else 1,
+            dataset_name=draft.locator.table_name,
+            source=".".join(
+                (
+                    draft.locator.catalog,
+                    draft.locator.schema_name,
+                    draft.locator.table_name,
+                )
+            ),
+            description=draft.description,
+            columns=[
+                PublishedColumnBaseline(
+                    column_id=column.column_id,
+                    ordinal=column.ordinal,
+                    name=column.name,
+                    logical_name=column.logical_name,
+                    data_type=column.data_type,
+                    nullable=column.nullable,
+                    primary_key=column.primary_key,
+                    description=column.description,
+                    foreign_key=column.foreign_key,
+                    formula=column.formula,
+                    comment=column.comment,
+                )
+                for column in draft.columns
+            ],
         )
-        changed = existing is None or existing.canonical_hash != current_canonical_hash
+        current_canonical_hash = table_content_hash(
+            current_published,
+            locator=draft.locator,
+        )
+        if existing is None:
+            changed = True
+        elif baseline_tables is None:
+            changed = existing.canonical_hash != current_canonical_hash
+        else:
+            baseline = baseline_tables.get(draft.table_id)
+            if baseline is None:
+                raise TableBaselineError("TABLE_BASELINE_INVALID")
+            changed = table_content_hash(baseline, locator=existing.locator) != (
+                current_canonical_hash
+            )
         proposed = draft.config.version
         if proposed is None:
             proposed = 1 if existing is None else existing.version + (1 if changed else 0)
@@ -920,14 +987,18 @@ def _build_table_records(
             proposed_version=proposed,
         )
         decisions.append(decision)
-        record = TableRecord(
-            table_id=draft.table_id,
-            locator=draft.locator,
-            version=proposed,
-            aliases=existing.aliases if existing else [],
-            columns=draft.column_records,
-            schema_hash=current_schema_hash,
-            canonical_hash=current_canonical_hash,
+        record = (
+            existing
+            if existing is not None and not changed
+            else TableRecord(
+                table_id=draft.table_id,
+                locator=draft.locator,
+                version=proposed,
+                aliases=existing.aliases if existing else [],
+                columns=draft.column_records,
+                schema_hash=current_schema_hash,
+                canonical_hash=current_canonical_hash,
+            )
         )
         records.append(record)
         irs.append(
