@@ -351,6 +351,23 @@ def replay_revision_files(product_key: str = "base-product") -> dict[str, str | 
         )
         + "\n"
     ).encode()
+    diagnostics_manifest = (
+        json.dumps(
+            {
+                "schema_version": "semantic-diagnostics-v1",
+                "source_hash": SEMANTIC_SOURCE_HASH,
+                "configuration_hash": "f" * 64,
+                "mode": "candidate",
+                "publication_status": "verified",
+                "reports": {
+                    "decision-report.json": hashlib.sha256(decisions).hexdigest(),
+                    "validation-report.json": hashlib.sha256(validation).hexdigest(),
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
     quality = (
         json.dumps(
             {
@@ -366,6 +383,7 @@ def replay_revision_files(product_key: str = "base-product") -> dict[str, str | 
                 },
                 "quality_artifact_hashes": {
                     "decision-report.json": hashlib.sha256(decisions).hexdigest(),
+                    "manifest.json": hashlib.sha256(diagnostics_manifest).hexdigest(),
                     "validation-report.json": hashlib.sha256(validation).hexdigest(),
                 },
             },
@@ -380,6 +398,7 @@ def replay_revision_files(product_key: str = "base-product") -> dict[str, str | 
         f"{root}/generated/data-semantic.md": markdown,
         f"{root}/quality/quality-report.json": quality,
         f"{root}/quality/decision-report.json": decisions,
+        f"{root}/quality/manifest.json": diagnostics_manifest,
         f"{root}/quality/validation-report.json": validation,
     }
 
@@ -485,6 +504,26 @@ def test_processing_passes_matching_base_replay_catalog_to_processor(
         SEMANTIC_SOURCE_HASH
     )
     assert all(revision == NEW_SHA for revision, _path in git.revision_reads)
+
+
+def test_processing_ignores_matching_non_candidate_history(tmp_path: Path) -> None:
+    files = replay_revision_files()
+    root = "products/base-product"
+    del files[f"{root}/quality/manifest.json"]
+    del files[f"{root}/quality/decision-report.json"]
+    del files[f"{root}/quality/validation-report.json"]
+    quality_path = f"{root}/quality/quality-report.json"
+    quality = json.loads(files[quality_path])
+    quality["quality_artifact_hashes"] = {}
+    files[quality_path] = json.dumps(quality, sort_keys=True) + "\n"
+    git = FakeGit.with_revision_files(base_sha=NEW_SHA, files=files)
+    service, captured = capturing_processing_service(tmp_path, git=git)
+
+    service.run(request(tmp_path))
+
+    catalog = captured["trusted_semantic_replay_catalog"]
+    assert isinstance(catalog, SemanticReplayCatalog)
+    assert catalog.baselines == ()
 
 
 def test_processing_replay_trust_failure_stops_before_side_effects(

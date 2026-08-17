@@ -6,6 +6,7 @@ import hashlib
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, RootModel
 
@@ -53,6 +54,15 @@ class StoredSourceManifest(ImmutableStrictModel):
 
 class ProductKeyIndex(RootModel[dict[ProductKey, ProductId]]):
     pass
+
+
+class StoredSemanticDiagnosticsManifest(ImmutableStrictModel):
+    schema_version: Literal["semantic-diagnostics-v1"]
+    source_hash: Sha256
+    configuration_hash: Sha256
+    mode: Literal["legacy", "shadow", "candidate"]
+    publication_status: str = Field(min_length=1)
+    reports: dict[str, Sha256]
 
 
 def load_semantic_replay_catalog(
@@ -141,7 +151,41 @@ def _load_matching_baseline(
         base_sha,
         root / "quality" / "validation-report.json",
     )
-    if quality_bytes is None and decision_bytes is None and validation_bytes is None:
+    diagnostics_manifest_bytes = _read_optional(
+        git,
+        base_sha,
+        root / "quality" / "manifest.json",
+    )
+    if quality_bytes is None:
+        if any(
+            payload is not None
+            for payload in (
+                decision_bytes,
+                validation_bytes,
+                diagnostics_manifest_bytes,
+            )
+        ):
+            raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
+        return None
+    quality = QualityReport.model_validate_json(quality_bytes)
+    manifest_declared = "manifest.json" in quality.quality_artifact_hashes
+    if diagnostics_manifest_bytes is None:
+        if manifest_declared or decision_bytes is not None or validation_bytes is not None:
+            raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
+        return None
+    if not manifest_declared:
+        raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
+    _verify_hash(
+        quality.quality_artifact_hashes,
+        "manifest.json",
+        diagnostics_manifest_bytes,
+    )
+    diagnostics_manifest = StoredSemanticDiagnosticsManifest.model_validate_json(
+        diagnostics_manifest_bytes
+    )
+    if diagnostics_manifest.source_hash != semantic_source_hash:
+        raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
+    if diagnostics_manifest.mode != "candidate":
         return None
     if any(
         payload is None
@@ -159,7 +203,6 @@ def _load_matching_baseline(
     assert validation_bytes is not None
     markdown_bytes.decode("utf-8", errors="strict")
 
-    quality = QualityReport.model_validate_json(quality_bytes)
     decisions = DecisionReport.model_validate_json(decision_bytes)
     validation = SemanticValidationReport.model_validate_json(validation_bytes)
     _verify_hash(quality.artifact_hashes, "source-manifest.json", manifest_bytes)
@@ -174,10 +217,14 @@ def _load_matching_baseline(
         "validation-report.json",
         validation_bytes,
     )
+    _verify_hash(diagnostics_manifest.reports, "decision-report.json", decision_bytes)
+    _verify_hash(diagnostics_manifest.reports, "validation-report.json", validation_bytes)
     if decisions.source_hash != semantic_source_hash:
         raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
     identity = semantic_replay_identity(decisions)
     if validation.source_hash != semantic_source_hash:
+        raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
+    if diagnostics_manifest.publication_status != validation.status.value:
         raise ValueError("SEMANTIC_REPLAY_TRUST_MISMATCH")
     if quality.hard_errors or validation.status is not SemanticPipelineStatus.VERIFIED:
         return None

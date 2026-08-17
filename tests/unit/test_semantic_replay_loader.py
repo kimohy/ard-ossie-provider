@@ -138,6 +138,19 @@ def _verified_tree(
         )
         decisions = _json_bytes(_decision_report(source_hash))
         validation = _json_bytes(_validation(source_hash))
+        diagnostics_manifest = _json_bytes(
+            {
+                "schema_version": "semantic-diagnostics-v1",
+                "source_hash": source_hash,
+                "configuration_hash": "f" * 64,
+                "mode": "candidate",
+                "publication_status": "verified",
+                "reports": {
+                    "decision-report.json": hashlib.sha256(decisions).hexdigest(),
+                    "validation-report.json": hashlib.sha256(validation).hexdigest(),
+                },
+            }
+        )
         quality = QualityReport(
             status=QualityStatus.PASS,
             product_id=PRODUCT_ID,
@@ -151,6 +164,7 @@ def _verified_tree(
             },
             quality_artifact_hashes={
                 "decision-report.json": hashlib.sha256(decisions).hexdigest(),
+                "manifest.json": hashlib.sha256(diagnostics_manifest).hexdigest(),
                 "validation-report.json": hashlib.sha256(validation).hexdigest(),
             },
         )
@@ -161,6 +175,7 @@ def _verified_tree(
                 f"{root}/generated/data-semantic.md": CANONICAL_BYTES,
                 f"{root}/quality/quality-report.json": _json_bytes(quality),
                 f"{root}/quality/decision-report.json": decisions,
+                f"{root}/quality/manifest.json": diagnostics_manifest,
                 f"{root}/quality/validation-report.json": validation,
             }
         )
@@ -235,6 +250,19 @@ def test_loader_ignores_complete_but_unverified_history() -> None:
         payload=_json_bytes(validation),
         generated=False,
     )
+    manifest_path = "products/current/quality/manifest.json"
+    diagnostics_manifest = json.loads(files[manifest_path])
+    diagnostics_manifest["publication_status"] = "review_required"
+    diagnostics_manifest["reports"]["validation-report.json"] = hashlib.sha256(
+        files["products/current/quality/validation-report.json"]
+    ).hexdigest()
+    _replace_hashed_payload(
+        files,
+        product_key="current",
+        name="manifest.json",
+        payload=_json_bytes(diagnostics_manifest),
+        generated=False,
+    )
 
     assert _load(FakeGit(files)).baselines == ()
 
@@ -246,6 +274,37 @@ def test_loader_ignores_matching_manifest_when_quality_tree_is_wholly_absent() -
         for path, payload in files.items()
         if "/quality/" not in path and not path.endswith("generated/data-semantic.md")
     }
+
+    assert _load(FakeGit(files)).baselines == ()
+
+
+def test_loader_ignores_non_candidate_history_with_normal_quality_output() -> None:
+    files = _verified_tree("current")
+    del files["products/current/quality/manifest.json"]
+    del files["products/current/quality/decision-report.json"]
+    del files["products/current/quality/validation-report.json"]
+    quality_path = "products/current/quality/quality-report.json"
+    quality = json.loads(files[quality_path])
+    quality["quality_artifact_hashes"].pop("manifest.json")
+    quality["quality_artifact_hashes"].pop("decision-report.json")
+    quality["quality_artifact_hashes"].pop("validation-report.json")
+    files[quality_path] = _json_bytes(quality)
+
+    assert _load(FakeGit(files)).baselines == ()
+
+
+def test_loader_ignores_hash_verified_shadow_history() -> None:
+    files = _verified_tree("current")
+    manifest_path = "products/current/quality/manifest.json"
+    manifest = json.loads(files[manifest_path])
+    manifest["mode"] = "shadow"
+    _replace_hashed_payload(
+        files,
+        product_key="current",
+        name="manifest.json",
+        payload=_json_bytes(manifest),
+        generated=False,
+    )
 
     assert _load(FakeGit(files)).baselines == ()
 
