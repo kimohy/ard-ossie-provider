@@ -14,6 +14,10 @@ from ard_ossie.semantic.evidence import RegionId
 from ard_ossie.semantic.models import ImmutableStrictModel
 
 
+class SemanticReplayBaselineConflict(ValueError):
+    """Raised when compatible trusted baselines disagree on canonical bytes."""
+
+
 class SemanticDecisionIdentity(ImmutableStrictModel):
     decision_type: str = Field(min_length=1, max_length=40)
     region_id: RegionId
@@ -51,7 +55,7 @@ class SemanticReplayCatalog:
             if existing is None:
                 grouped[entry.identity] = entry
             elif existing.canonical_markdown != entry.canonical_markdown:
-                raise ValueError("SEMANTIC_REPLAY_BASELINE_CONFLICT")
+                raise SemanticReplayBaselineConflict("SEMANTIC_REPLAY_BASELINE_CONFLICT")
         return cls(tuple(grouped.values()))
 
     def trusted_decisions(self, source_hash: Sha256) -> tuple[DecisionRecord, ...]:

@@ -104,7 +104,7 @@ def test_catalog_converges_identical_duplicates_using_input_precedence() -> None
 def test_catalog_rejects_equal_identity_with_different_bytes() -> None:
     replay = _replay_module()
 
-    with pytest.raises(ValueError, match="SEMANTIC_REPLAY_BASELINE_CONFLICT"):
+    with pytest.raises(replay.SemanticReplayBaselineConflict):
         replay.SemanticReplayCatalog.build(
             (
                 _baseline("alpha", b"canonical\n"),

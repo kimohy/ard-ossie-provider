@@ -26,6 +26,7 @@ from ard_ossie.semantic.canonical import (
 from ard_ossie.semantic.models import ImmutableStrictModel
 from ard_ossie.semantic.replay import (
     SemanticReplayBaseline,
+    SemanticReplayBaselineConflict,
     SemanticReplayCatalog,
     semantic_replay_identity,
 )
@@ -92,12 +93,12 @@ def load_semantic_replay_catalog(
         return SemanticReplayCatalog.build(entries)
     except WorkflowConflict:
         raise _trust_mismatch() from None
-    except ValueError as error:
-        if str(error) == "SEMANTIC_REPLAY_BASELINE_CONFLICT":
-            raise WorkflowValidationError(
-                "SEMANTIC_REPLAY_BASELINE_CONFLICT",
-                "trusted semantic replay baselines conflict",
-            ) from None
+    except SemanticReplayBaselineConflict:
+        raise WorkflowValidationError(
+            "SEMANTIC_REPLAY_BASELINE_CONFLICT",
+            "trusted semantic replay baselines conflict",
+        ) from None
+    except ValueError:
         raise _trust_mismatch() from None
 
 

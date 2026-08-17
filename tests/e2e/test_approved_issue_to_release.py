@@ -34,6 +34,7 @@ from ard_ossie.ports.github import (
     PullRequestState,
     ReleaseAssetState,
     ReleaseState,
+    RepositoryState,
 )
 from ard_ossie.registry import Registry
 
@@ -226,6 +227,15 @@ class LifecycleGitHub:
         self.comments: dict[str, str] = {}
         self.releases: dict[str, ReleaseState] = {}
         self.dispatches: list[tuple[str, dict[str, object]]] = []
+
+    def repository(self) -> RepositoryState:
+        return RepositoryState(
+            full_name="owner/repository",
+            public=True,
+            archived=False,
+            default_branch="main",
+            permission="admin",
+        )
 
     def collaborator_permission(self, login: str) -> str:
         assert login == "maintainer"

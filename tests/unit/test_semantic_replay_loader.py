@@ -241,7 +241,9 @@ def test_loader_ignores_matching_manifest_when_quality_tree_is_wholly_absent() -
         "tampered_validation",
         "invalid_manifest_utf8",
         "decision_source_mismatch",
+        "decision_report_source_mismatch",
         "validation_source_mismatch",
+        "verified_not_publishable",
     ],
 )
 def test_loader_rejects_untrusted_matching_history(mutation: str) -> None:
@@ -271,6 +273,16 @@ def test_loader_rejects_untrusted_matching_history(mutation: str) -> None:
             payload=_json_bytes(report),
             generated=False,
         )
+    elif mutation == "decision_report_source_mismatch":
+        _replace_hashed_payload(
+            files,
+            product_key="current",
+            name="decision-report.json",
+            payload=_json_bytes(
+                _decision_report().model_copy(update={"source_hash": OTHER_SOURCE_HASH})
+            ),
+            generated=False,
+        )
     elif mutation == "validation_source_mismatch":
         _replace_hashed_payload(
             files,
@@ -279,6 +291,14 @@ def test_loader_rejects_untrusted_matching_history(mutation: str) -> None:
             payload=_json_bytes(
                 _validation().model_copy(update={"source_hash": OTHER_SOURCE_HASH})
             ),
+            generated=False,
+        )
+    elif mutation == "verified_not_publishable":
+        _replace_hashed_payload(
+            files,
+            product_key="current",
+            name="validation-report.json",
+            payload=_json_bytes(_validation().model_copy(update={"publishable": False})),
             generated=False,
         )
 

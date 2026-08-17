@@ -202,6 +202,7 @@ def process_product(
     trusted_semantic_fidelity: dict[str, object] | None = None,
     trusted_semantic_decisions: dict[str, object] | None = None,
     trusted_semantic_replay_catalog: SemanticReplayCatalog | None = None,
+    source_manifest: SourceManifest | None = None,
     require_semantic_visual_correction: bool = True,
     propagate_provider_errors: bool = False,
     semantic_pipeline_mode: SemanticPipelineMode | str = SemanticPipelineMode.SHADOW,
@@ -212,7 +213,7 @@ def process_product(
     registry_initially_exists, registry_snapshot = _snapshot_registry(registry_path)
     registry = _load_registry_snapshot(registry_snapshot)
     config = _load_config(root / "product.yaml")
-    manifest = scan_sources(root / "sources")
+    manifest = source_manifest or scan_sources(root / "sources")
     active_parser = _processing_parser(
         provider=provider,
         parser=parser,

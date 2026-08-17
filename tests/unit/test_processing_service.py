@@ -30,6 +30,7 @@ from ard_ossie.application.processing import (
     ProcessingService,
     _trusted_semantic_repair,
 )
+from ard_ossie.ingestion import SourceRole
 from ard_ossie.pipeline import (
     ProcessResult,
     ProviderExecutionError,
@@ -39,7 +40,7 @@ from ard_ossie.pipeline import (
     QualityStatus,
 )
 from ard_ossie.ports.git import ChangedPaths, CommitResult, GitConflict, GitTransientError
-from ard_ossie.ports.github import GitHubTransientError, PullRequestState
+from ard_ossie.ports.github import GitHubTransientError, PullRequestState, RepositoryState
 from ard_ossie.semantic.replay import SemanticReplayCatalog
 from tests.integration.test_cli_process import create_product_fixture
 
@@ -133,6 +134,7 @@ class FakeGitHub:
     def __init__(self, git: FakeGit) -> None:
         self.git = git
         self.head_branch = "ard/example"
+        self.base_branch = "main"
         self.statuses: list[tuple[str, str, str]] = []
         self.dispatched = 0
         self.fail_status = False
@@ -142,11 +144,20 @@ class FakeGitHub:
             number=number,
             head_branch=self.head_branch,
             head_sha=self.git.remote_sha,
-            base_branch="main",
+            base_branch=self.base_branch,
             draft=True,
             merged_at=None,
             merge_sha=None,
             url="https://example.invalid/pull/7",
+        )
+
+    def repository(self) -> RepositoryState:
+        return RepositoryState(
+            full_name="owner/repository",
+            public=True,
+            archived=False,
+            default_branch="main",
+            permission="admin",
         )
 
     def set_status(
@@ -470,7 +481,47 @@ def test_processing_passes_matching_base_replay_catalog_to_processor(
     assert len(catalog.baselines) == 1
     assert catalog.baselines[0].product_key == "base-product"
     assert catalog.baselines[0].identity.source_hash == SEMANTIC_SOURCE_HASH
+    assert captured["source_manifest"].by_role(SourceRole.SEMANTIC_DOCUMENT).sha256 == (
+        SEMANTIC_SOURCE_HASH
+    )
     assert all(revision == NEW_SHA for revision, _path in git.revision_reads)
+
+
+def test_processing_replay_trust_failure_stops_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    files = replay_revision_files()
+    markdown_path = "products/base-product/generated/data-semantic.md"
+    files[markdown_path] = bytes(files[markdown_path]) + b"tampered"
+    git = FakeGit.with_revision_files(base_sha=NEW_SHA, files=files)
+    repository(tmp_path)
+    github = FakeGitHub(git)
+    provider_loaded = False
+    processor_called = False
+
+    def provider_factory():
+        nonlocal provider_loaded
+        provider_loaded = True
+
+    def processor(*_args, **_kwargs):
+        nonlocal processor_called
+        processor_called = True
+        raise AssertionError("untrusted replay must stop before processing")
+
+    with pytest.raises(WorkflowSecurityError) as captured:
+        ProcessingService(
+            RepositoryPaths(tmp_path),
+            git,
+            github,
+            processor=processor,
+            provider_factory=provider_factory,
+        ).run(request(tmp_path))
+
+    assert captured.value.code == "SEMANTIC_REPLAY_TRUST_MISMATCH"
+    assert provider_loaded is False
+    assert processor_called is False
+    assert github.statuses == []
+    assert git.pushes == []
 
 
 def test_processing_passes_none_when_base_quality_has_no_repair_hash_or_file(
@@ -882,6 +933,56 @@ def test_processing_rejects_stale_head_before_loading_provider(tmp_path: Path) -
         ).run(request(tmp_path))
 
     assert provider_loaded is False
+
+
+def test_processing_rejects_pr_retargeted_away_from_default_branch(
+    tmp_path: Path,
+) -> None:
+    repository(tmp_path)
+    git = FakeGit()
+    github = FakeGitHub(git)
+    github.base_branch = "attacker-base"
+    provider_loaded = False
+
+    def provider_factory():
+        nonlocal provider_loaded
+        provider_loaded = True
+
+    with pytest.raises(WorkflowSecurityError, match="PROCESSING_BASE_BRANCH_MISMATCH"):
+        ProcessingService(
+            RepositoryPaths(tmp_path),
+            git,
+            github,
+            processor=successful_processor,
+            provider_factory=provider_factory,
+        ).run(request(tmp_path))
+
+    assert git.revision_reads == []
+    assert provider_loaded is False
+    assert github.statuses == []
+
+
+def test_processing_rejects_pr_retargeted_while_processor_runs(tmp_path: Path) -> None:
+    repository(tmp_path)
+    git = FakeGit()
+    github = FakeGitHub(git)
+
+    def processor(product_path: Path, **kwargs) -> ProcessResult:
+        result = successful_processor(product_path, **kwargs)
+        github.base_branch = "attacker-base"
+        return result
+
+    with pytest.raises(WorkflowSecurityError, match="PROCESSING_BASE_BRANCH_MISMATCH"):
+        ProcessingService(
+            RepositoryPaths(tmp_path),
+            git,
+            github,
+            processor=processor,
+            provider_factory=lambda: None,
+        ).run(request(tmp_path))
+
+    assert git.pushes == []
+    assert github.statuses == []
 
 
 def test_processing_accepts_historical_changeset_marker_without_active_binding(
