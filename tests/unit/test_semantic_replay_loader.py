@@ -19,6 +19,7 @@ from ard_ossie.semantic.canonical import (
     SemanticValidationReport,
     ValidationFinding,
 )
+from ard_ossie.semantic.diagnostics import DIAGNOSTIC_REPORT_NAMES
 
 BASE_SHA = "1" * 40
 SOURCE_HASH = "a" * 64
@@ -138,6 +139,14 @@ def _verified_tree(
         )
         decisions = _json_bytes(_decision_report(source_hash))
         validation = _json_bytes(_validation(source_hash))
+        diagnostic_reports = {
+            "application-report.json": b"{}\n",
+            "candidate-report.json": b"{}\n",
+            "decision-report.json": decisions,
+            "evidence-summary.json": b"{}\n",
+            "failure-report.json": b"{}\n",
+            "validation-report.json": validation,
+        }
         diagnostics_manifest = _json_bytes(
             {
                 "schema_version": "semantic-diagnostics-v1",
@@ -146,8 +155,8 @@ def _verified_tree(
                 "mode": "candidate",
                 "publication_status": "verified",
                 "reports": {
-                    "decision-report.json": hashlib.sha256(decisions).hexdigest(),
-                    "validation-report.json": hashlib.sha256(validation).hexdigest(),
+                    name: hashlib.sha256(payload).hexdigest()
+                    for name, payload in diagnostic_reports.items()
                 },
             }
         )
@@ -163,9 +172,11 @@ def _verified_tree(
                 "data-semantic.md": hashlib.sha256(CANONICAL_BYTES).hexdigest(),
             },
             quality_artifact_hashes={
-                "decision-report.json": hashlib.sha256(decisions).hexdigest(),
+                **{
+                    name: hashlib.sha256(payload).hexdigest()
+                    for name, payload in diagnostic_reports.items()
+                },
                 "manifest.json": hashlib.sha256(diagnostics_manifest).hexdigest(),
-                "validation-report.json": hashlib.sha256(validation).hexdigest(),
             },
         )
         root = f"products/{key}"
@@ -174,9 +185,11 @@ def _verified_tree(
                 f"{root}/generated/source-manifest.json": manifest,
                 f"{root}/generated/data-semantic.md": CANONICAL_BYTES,
                 f"{root}/quality/quality-report.json": _json_bytes(quality),
-                f"{root}/quality/decision-report.json": decisions,
                 f"{root}/quality/manifest.json": diagnostics_manifest,
-                f"{root}/quality/validation-report.json": validation,
+                **{
+                    f"{root}/quality/{name}": payload
+                    for name, payload in diagnostic_reports.items()
+                },
             }
         )
     return files
@@ -280,6 +293,18 @@ def test_loader_ignores_matching_manifest_when_quality_tree_is_wholly_absent() -
 
 def test_loader_ignores_non_candidate_history_with_normal_quality_output() -> None:
     files = _verified_tree("current")
+    quality_path = "products/current/quality/quality-report.json"
+    quality = json.loads(files[quality_path])
+    for name in DIAGNOSTIC_REPORT_NAMES:
+        del files[f"products/current/quality/{name}"]
+        quality["quality_artifact_hashes"].pop(name)
+    files[quality_path] = _json_bytes(quality)
+
+    assert _load(FakeGit(files)).baselines == ()
+
+
+def test_loader_rejects_candidate_marker_without_diagnostics_manifest() -> None:
+    files = _verified_tree("current")
     del files["products/current/quality/manifest.json"]
     del files["products/current/quality/decision-report.json"]
     del files["products/current/quality/validation-report.json"]
@@ -290,7 +315,10 @@ def test_loader_ignores_non_candidate_history_with_normal_quality_output() -> No
     quality["quality_artifact_hashes"].pop("validation-report.json")
     files[quality_path] = _json_bytes(quality)
 
-    assert _load(FakeGit(files)).baselines == ()
+    with pytest.raises(WorkflowSecurityError) as captured:
+        _load(FakeGit(files))
+
+    assert captured.value.code == "SEMANTIC_REPLAY_TRUST_MISMATCH"
 
 
 def test_loader_ignores_hash_verified_shadow_history() -> None:
@@ -313,6 +341,7 @@ def test_loader_ignores_hash_verified_shadow_history() -> None:
     "mutation",
     [
         "missing_decisions",
+        "missing_candidate_report",
         "tampered_markdown",
         "tampered_validation",
         "invalid_manifest_utf8",
@@ -329,6 +358,8 @@ def test_loader_rejects_untrusted_matching_history(mutation: str) -> None:
     root = "products/current"
     if mutation == "missing_decisions":
         del files[f"{root}/quality/decision-report.json"]
+    elif mutation == "missing_candidate_report":
+        del files[f"{root}/quality/candidate-report.json"]
     elif mutation == "tampered_markdown":
         files[f"{root}/generated/data-semantic.md"] += b" "
     elif mutation == "tampered_validation":

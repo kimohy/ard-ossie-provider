@@ -41,6 +41,7 @@ from ard_ossie.pipeline import (
 )
 from ard_ossie.ports.git import ChangedPaths, CommitResult, GitConflict, GitTransientError
 from ard_ossie.ports.github import GitHubTransientError, PullRequestState, RepositoryState
+from ard_ossie.semantic.diagnostics import DIAGNOSTIC_REPORT_NAMES
 from ard_ossie.semantic.replay import SemanticReplayCatalog
 from tests.integration.test_cli_process import create_product_fixture
 
@@ -351,6 +352,14 @@ def replay_revision_files(product_key: str = "base-product") -> dict[str, str | 
         )
         + "\n"
     ).encode()
+    diagnostic_reports = {
+        "application-report.json": b"{}\n",
+        "candidate-report.json": b"{}\n",
+        "decision-report.json": decisions,
+        "evidence-summary.json": b"{}\n",
+        "failure-report.json": b"{}\n",
+        "validation-report.json": validation,
+    }
     diagnostics_manifest = (
         json.dumps(
             {
@@ -360,8 +369,8 @@ def replay_revision_files(product_key: str = "base-product") -> dict[str, str | 
                 "mode": "candidate",
                 "publication_status": "verified",
                 "reports": {
-                    "decision-report.json": hashlib.sha256(decisions).hexdigest(),
-                    "validation-report.json": hashlib.sha256(validation).hexdigest(),
+                    name: hashlib.sha256(payload).hexdigest()
+                    for name, payload in diagnostic_reports.items()
                 },
             },
             sort_keys=True,
@@ -382,9 +391,11 @@ def replay_revision_files(product_key: str = "base-product") -> dict[str, str | 
                     "data-semantic.md": hashlib.sha256(markdown).hexdigest(),
                 },
                 "quality_artifact_hashes": {
-                    "decision-report.json": hashlib.sha256(decisions).hexdigest(),
+                    **{
+                        name: hashlib.sha256(payload).hexdigest()
+                        for name, payload in diagnostic_reports.items()
+                    },
                     "manifest.json": hashlib.sha256(diagnostics_manifest).hexdigest(),
-                    "validation-report.json": hashlib.sha256(validation).hexdigest(),
                 },
             },
             sort_keys=True,
@@ -397,9 +408,8 @@ def replay_revision_files(product_key: str = "base-product") -> dict[str, str | 
         f"{root}/generated/source-manifest.json": manifest,
         f"{root}/generated/data-semantic.md": markdown,
         f"{root}/quality/quality-report.json": quality,
-        f"{root}/quality/decision-report.json": decisions,
         f"{root}/quality/manifest.json": diagnostics_manifest,
-        f"{root}/quality/validation-report.json": validation,
+        **{f"{root}/quality/{name}": payload for name, payload in diagnostic_reports.items()},
     }
 
 
@@ -509,12 +519,11 @@ def test_processing_passes_matching_base_replay_catalog_to_processor(
 def test_processing_ignores_matching_non_candidate_history(tmp_path: Path) -> None:
     files = replay_revision_files()
     root = "products/base-product"
-    del files[f"{root}/quality/manifest.json"]
-    del files[f"{root}/quality/decision-report.json"]
-    del files[f"{root}/quality/validation-report.json"]
     quality_path = f"{root}/quality/quality-report.json"
     quality = json.loads(files[quality_path])
-    quality["quality_artifact_hashes"] = {}
+    for name in DIAGNOSTIC_REPORT_NAMES:
+        del files[f"{root}/quality/{name}"]
+        quality["quality_artifact_hashes"].pop(name)
     files[quality_path] = json.dumps(quality, sort_keys=True) + "\n"
     git = FakeGit.with_revision_files(base_sha=NEW_SHA, files=files)
     service, captured = capturing_processing_service(tmp_path, git=git)
