@@ -18,7 +18,7 @@
 | immutable release와 dispatch | 완료 | [Marketing Insight v1](https://github.com/kimohy/ard-ossie-provider/releases/tag/product/prd_019ff10c-8be8-79d0-af07-21450abedf9e/v1), linkage success |
 | fresh-runner annotated tag identity | 완료 | [PR #39](https://github.com/kimohy/ard-ossie-provider/pull/39), merge `28f943d` |
 | 직접 브랜치 제품 v2 | 완료 | [검증 기록](acceptance/direct-branch-v2-verification.md), [제품 PR #43](https://github.com/kimohy/ard-ossie-provider/pull/43), merge `ba83203` |
-| 공개 Issue attachment 인증 경로 | 완료 | [정책 PR #48](https://github.com/kimohy/ard-ossie-provider/pull/48), merge `e285a6aa`, [Issue #46 성공 run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31977762165), [Draft 제품 PR #49](https://github.com/kimohy/ard-ossie-provider/pull/49) |
+| Issue #46 공개 intake·same-source replay·v1 release | 완료 | [검증 기록](acceptance/issue-46-same-source-replay-release.md), [fix PR #51](https://github.com/kimohy/ard-ossie-provider/pull/51), [재처리 run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31991352055), [제품 PR #49](https://github.com/kimohy/ard-ossie-provider/pull/49), [Release](https://github.com/kimohy/ard-ossie-provider/releases/tag/product/prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d/v1) |
 
 ## Issue #3 acceptance 결과
 
@@ -39,7 +39,7 @@ Issue #3은 조직 정책을 준수하는 합성 Marketing Insight 제품으로 
 
 Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니다. 처리 실패나 Draft PR 생성 시점에 닫는 것은 완료 조건이 아닙니다.
 
-## Issue #46 공개 attachment-auth acceptance 결과
+## Issue #46 공개 intake, same-source replay, v1 release 결과
 
 현재 GitHub.com 저장소를 공개 상태로 복원하면서, 향후 private GitHub Enterprise 이전에 재검증할 격리된 attachment 인증 경로를 실제 합성 Issue로 확인했습니다.
 
@@ -49,8 +49,15 @@ Issue는 제품 PR의 `Closes #3`가 병합된 뒤 정상적으로 닫혔습니�
 - `ard-private-intake`, `ard-llm`, `production-linkage` Environment는 각각 정확한 `main` branch policy 하나만 가집니다. `ard-private-intake`에는 reviewer가 없고, `ard-llm`과 `production-linkage`에는 `kimohy` required reviewer가 있습니다.
 - `main` protection은 strict `ard/changeset`·`ard/quality-gate`, admin enforcement, PR 필수, conversation resolution 필수이며 force push와 deletion은 비활성화되어 있습니다. 현재 required approving review count는 `0`입니다.
 - Issue #46은 공개 게시 동의가 체크된 합성 Campaign Governance Monitor 입력이며 실제 고객, 계정, 플랫폼, 조직 또는 운영 수치를 포함하지 않습니다.
-- `ard:approved`를 재적용한 [acceptance run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31977762165)은 merge SHA `e285a6aa83e0c16b9ed50b02a54a3989667dbcca`에서 authorization, routing, authenticated intake, protected LLM validation, processing, finalization을 모두 통과했습니다.
-- 결과 [Draft 제품 PR #49](https://github.com/kimohy/ard-ossie-provider/pull/49)는 branch `ard/issue-46-500138302`, exact head `6dd313c18eb3cc2944815613f030f83e82599f95`에서 생성됐고 `ard/changeset`과 `ard/quality-gate`가 모두 통과했습니다. Issue #46 최종 라벨은 `ard:submission`, `ard:approved`, `ard:pr-created`이며 과거 `ard:failed`는 제거됐습니다.
+- 최초 [attachment-auth run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31977762165)은 authorization부터 finalization까지 통과했지만, 이후 동일 PDF의 한글 단어 경계가 `정의 서이며`로 달라지는 source-fidelity 결함을 발견했습니다. 이 실행은 인증 경로 증거로만 보존하고 최종 제품 acceptance로 사용하지 않습니다.
+- [same-source replay fix PR #51](https://github.com/kimohy/ard-ossie-provider/pull/51)은 exact head `33dbe6cb1062d43d77523cef316f5b90eaabb742`에서 repository gate, model/schema, pytest, wheel, finalizer와 두 required status를 통과한 뒤 `51989c1e67b2f024e3cab6cfc1d7c61cff1e2018`로 병합됐습니다.
+- `ard:approved`를 재적용한 최종 [재처리 run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31991352055)은 fix merge SHA에서 base sync, protected validation, processing, finalization을 모두 통과했습니다.
+- [제품 PR #49](https://github.com/kimohy/ard-ossie-provider/pull/49)의 refreshed exact head는 `721a143a2ffc0183bab418dd9448543b82e912b8`입니다. `ard/changeset`과 `ard/quality-gate`는 이 SHA에 대해 success이며, 생성 문서는 `정의서이며`를 포함하고 `정의 서이며`는 포함하지 않습니다.
+- 제품 `500138301`과 `500138302`의 semantic PDF Git blob은 모두 `d2a5bff166760671d23bb167d5e8e1779c804345`, 생성된 canonical Markdown Git blob은 모두 `1a3fd5f2f0d85d41ada7ed75c0e4d4acbb143deb`입니다. 최종 validation의 model call은 `0`회입니다.
+- PR #49는 `282228635a36e8709ef8cb01fc0bfba4259ed01b`로 병합됐고 Issue #46도 닫혔습니다. [numeric release run](https://github.com/kimohy/ard-ossie-provider/actions/runs/31992478728)은 detect, release, downstream linkage를 모두 통과했습니다.
+- 제품 ID는 `prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d`이며 tag `product/prd_01a00ccd-9a0d-7683-95c1-1ed6bdb43c0d/v1`은 merge SHA를 가리킵니다. Actions artifact에서 추출한 release ZIP과 GitHub Release asset은 byte-identical이고 SHA-256은 `192c3d3db7999f865ecc2708773c03fd83481f23b7ef868e8e81afeaf9970387`입니다.
+- 최종 품질은 `PASS`, validation은 `verified`, `publishable=true`, coverage `1.0`이며 hard error, warning, finding, missing/duplicate/degraded block은 모두 `0`입니다. 18개 bundle 파일의 개별 SHA-256도 release result와 일치하고 exact dispatch status가 success입니다.
+- 전체 명령과 증적 값은 [Issue #46 검증 기록](acceptance/issue-46-same-source-replay-release.md)에 보존했습니다.
 - intake가 고정한 source SHA-256은 다음과 같습니다.
   - `dictionary/dictionary.xlsx`: `10310e99c8a76b4b030935c432e6f879ac4c56361ee4a6d52d6a17b2726c306a`
   - `product-info/product.html`: `b39248654c0cd9b6f3f28111a6c44036d86a2440a1d7dc2c9bfd7bd40281d7f9`
@@ -109,6 +116,7 @@ Enterprise 이전 시에는 현재 성공을 그대로 전제하지 않고 priva
 - [x] LLM 저신뢰·공백·heading·unsafe optional metric의 감사 가능한 처리
 - [x] 직접 브랜치 `v2` 업데이트
 - [x] 공개 Issue attachment 인증과 Enterprise 이전 경계 검증
+- [x] 동일 semantic source의 canonical replay와 Issue #46 conflict-protected v1 release
 - [ ] shared-table changeset E2E
 - [ ] 1인 review protection과 운영 장애 훈련
 - [ ] representative PDF 안정화 표본과 운영 지표
